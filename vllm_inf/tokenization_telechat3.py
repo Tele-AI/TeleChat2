@@ -114,6 +114,7 @@ class TelechatTokenizer(PreTrainedTokenizer):
         user_token_id = 4
         bot_token_id = 5
         eos_token_id = 2
+        i = 0
         while i < len(tokens):
             res.append(self._convert_token_to_id_with_added_voc(tokens[i]))
             i += 1
