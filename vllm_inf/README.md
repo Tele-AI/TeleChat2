@@ -2,7 +2,7 @@
 
 ## 下载vllm
 ```
-pip install vllm   #推荐 0.5.1 版本
+pip install vllm   #推荐 0.6.1.post2 版本
 ```
 
 ## vllm 添加telechat
@@ -31,8 +31,6 @@ cd ./vllm/model_executor/models/
 >>>     "TeleChatForCausalLM"
 >>>     ]
 ```
-### 替换tokenization 文件
-将模型文件里的tokenization_telecaht3.py 替换成此路径下的tokenization_telechat3.py
 
 
 ## 启动
