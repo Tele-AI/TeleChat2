@@ -1,0 +1,10 @@
+accelerate>=0.34.2
+deepspeed==0.15.1
+datasets>=3.0.0
+flash-attn
+jsonlines
+safetensors>=0.4.5
+torch==2.4.0
+transformers==4.45.0
+fastapi>=0.112.4
+uvicorn==0.30.6
