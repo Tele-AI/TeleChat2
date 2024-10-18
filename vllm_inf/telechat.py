@@ -51,7 +51,8 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 from vllm.model_executor.model_loader.weight_utils import (
     default_weight_loader, kv_cache_scales_loader)
 from vllm.model_executor.sampling_metadata import SamplingMetadata
-from vllm.sequence import IntermediateTensors, SamplerOutput
+from vllm.sequence import IntermediateTensors
+from vllm.model_executor.layers.sampler import SamplerOutput
 from vllm.utils import is_hip, print_warning_once
 
 from .interfaces import SupportsLoRA
