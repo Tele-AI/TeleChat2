@@ -106,7 +106,7 @@ self.rope_scaling = rope_scaling
 >>> import torch
 >>> llm = LLM(model="模型路径", trust_remote_code=True, tensor_parallel_size=4)
 >>> prompts = ['你好']
->>> sampling_params = SamplingParams(max_tokens=100, temperature=0.0, repetition_penalty=1.03) #推荐repetition_penalty为1.03
+>>> sampling_params = SamplingParams(max_tokens=2048, temperature=0.0, repetition_penalty=1.03) #推荐repetition_penalty为1.03
 >>> outputs = llm.generate(prompts, sampling_params)
 >>> for output in outputs:
 >>>     generated_text = output.outputs[0].text
