@@ -32,7 +32,7 @@ cd ./vllm/model_executor/models/
 >>>     ]
 ```
 
-## 外推
+## 外推(只在文本长度在8k-16k使用 对于文本长度低于8k使用外推会有精度上的损失)
 如有外推需求在模型文件中的config.json 中添加
 ```
 >>> "rope_scaling": {
