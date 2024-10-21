@@ -37,8 +37,8 @@ cd ./vllm/model_executor/models/
 如有外推需求在模型文件中的config.json 中添加
 ```
 >>> "rope_scaling": {
->>>     "factor": 4.0,
->>>     "original_max_position_embeddings": 16384,
+>>>     "factor": 2.0,
+>>>     "original_max_position_embeddings": 8192,
 >>>     "rope_type": "dynamic"
 >>> }
 ```
