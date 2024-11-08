@@ -1,0 +1,5 @@
+{
+    "./dummy_data/sft//multi_turn_example.jsonl": 1.6,
+    "./dummy_data/sft/single_turn_example.jsonl": 2.15,
+    "./dummy_data/sft/tools_example.jsonl": 1.0
+}
