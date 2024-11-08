@@ -225,7 +225,7 @@ deepspeed --master_port 29500 --hostfile=my_hostfile main.py \
 	说明：建议采用8台一组进行训练
 
 - TeleChat支持昇腾Atlas 800T A2训练服务器，可基于昇思MindSpore框架进行模型训练，训练所需的modeling、README、
-  脚本已发布：[TeleChat-MindSpore](https://gitee.com/mindspore/mindformers/tree/dev/research/telechat)
+  脚本已发布：[TeleChat-MindSpore](./MindSpore-telechat)
 
 # 声明、协议、引用
 
