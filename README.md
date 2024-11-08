@@ -18,7 +18,7 @@
 - [声明、协议、引用](#声明协议引用)
 
 # 最新动态
-
+- 2024.11.08 开源适配工具调用功能的TeleChat2(**3B,7B,35B**)模型
 - 2024.10.18 开源TeleChat2-35B模型。
 - 2024.9.20 开源TeleChat2-115B模型，该模型是**首个完全国产算力训练并开源的千亿参数模型**。
 
@@ -27,7 +27,8 @@
 ### 星辰语义大模型-TeleChat2
 
 - 星辰语义大模型**TeleChat2**是由中国电信人工智能研究院研发训练的大语言模型，该系列模型**完全基于国产算力**训练。
-- 本次开源**TeleChat2-115B**模型采用10万亿 Tokens中英文高质量语料进行训练，同步开源对话模型**TeleChat2-115B**的多格式、多平台权重文件。
+- 本次开源的 **TeleChat2**模型已支持**工具调用**功能。
+- **TeleChat2-115B**模型采用10万亿 Tokens中英文高质量语料进行训练，同步开源对话模型**TeleChat2-115B**的多格式、多平台权重文件。
 - **TeleChat2**在训练数据、训练方法等方面进行了改进，在通用问答和知识类、代码类、数学类榜单上相比**TeleChat1**均有大幅提升。
     - **TeleChat2**完全基于国产算力和国产深度学习框架进行训练，算力和算法框架更自主可控。优化MP、PP、SP实现方式提升模型性能，优化算子来提升训练速度。
     - 我们使用大量小模型实验来验证scaling law规律，在不同模型结构、不同数据配比和数据清洗方式中寻找最优设计。
@@ -46,7 +47,9 @@ head层参数分开，有助于增强训练稳定性和收敛性。我们选择�
 
 |      | layer_num | hidden_size | ffn_hidden_size | head_num | tie_word_embeddings | GQA  |
 | ---- | --------- | ----------- | --------------- | -------- | ------------------- | ---- |
-| 35B  | 64        | 6144        | 20480           | 48       | 否                  | 否   |
+| 35B | 64        | 8192        | 40960           | 48       | 否                  | 否   |
+| 7B | 30        | 8192        | 40960           | 32       | 否                  | 否   |
+| 3B | 24        | 8192        | 40960           | 24       | 否                  | 否   |
 | 115B | 96        | 8192        | 40960           | 64       | 否                  | 是   |
 
 
@@ -59,8 +62,11 @@ head层参数分开，有助于增强训练稳定性和收敛性。我们选择�
 
 | 模型版本       | 下载链接 |
 | -------------- | -------- |
-| telechat2-35B-FP16 |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-35B)|
-| telechat2-115B-FP32 |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-115B)|
+| telechat2-3B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-3B/summary)|
+| telechat2-7B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-7B/summary)|
+| telechat2-35B-Nov |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-35B-Nov/files)|
+| telechat2-35B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-35B)|
+| telechat2-115B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-115B)|
 
 
 # 效果评测
@@ -123,17 +129,28 @@ GSM8K、MATH、HumanEval、BBH等数据集，评测能力包括了指令遵循�
 **模型推理方法示范**
 
 ```python
->> > import os
->> > import torch
->> > from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
->> > tokenizer = AutoTokenizer.from_pretrained('../models/115B', trust_remote_code=True)
->> > model = AutoModelForCausalLM.from_pretrained('../models/115B', trust_remote_code=True, device_map="auto",
+>>> import os
+>>> import torch
+>>> from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+>>> tokenizer = AutoTokenizer.from_pretrained('TeleChat2/Telechat2-7B', trust_remote_code=True)
+>>> model = AutoModelForCausalLM.from_pretrained('TeleChat2/Telechat2-7B', trust_remote_code=True, device_map="auto",
                                                   torch_dtype=torch.float16)
->> > generate_config = GenerationConfig.from_pretrained('../models/115B')
->> > question = "生抽与老抽的区别？"
->> > answer, history = model.chat(tokenizer=tokenizer, question=question, history=[], generation_config=generate_config,
-                                  stream=False)
->> > print(answer)
+>>> prompt = "生抽与老抽的区别？"
+>>> messages = [{"role": "user", "content": prompt}]
+>>> text = tokenizer.apply_chat_template(messages,
+>>>		tokenize=False,
+>>>    		add_generation_prompt=True
+>>>	)
+>>> model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+>>> generated_ids = model.generate(
+>>>     **model_inputs,
+>>>     max_new_tokens=512
+>>> )
+>>> generated_ids = [
+>>>     output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+>>> ]
+
+>>> response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
 生抽和老抽是两种不同的酱油，它们在风味、色泽和用途上都有所区别。
 
 1.颜色：生抽的颜色比较淡，而老抽的颜色较深。生抽的颜色呈红褐色或棕红色，而老抽的颜色则呈棕黑色。
