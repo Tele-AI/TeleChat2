@@ -170,11 +170,11 @@ Web: 支持流式生成、多轮对话
 
 ### 模型工具调用能力
 
-TeleChat2 目前已支持工具调用功能，具体使用方式参考文档(TeleChat2工具调用文档)[]。
+TeleChat2 目前已支持工具调用功能，具体使用方式参考文档[TeleChat2工具调用文档](../tutorial/函数调用.md)。
 
 # 模型微调
 
-TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档(TeleChat2微调文档)[]。
+TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[TeleChat2微调文档](../tutorial/telechat_deepspeed.md)。
 
 # 国产化适配
 
