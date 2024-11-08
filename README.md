@@ -18,7 +18,7 @@
 - [声明、协议、引用](#声明协议引用)
 
 # 最新动态
-- 2024.11.08 开源适配工具调用功能的TeleChat2(**3B,7B,35B**)模型
+- 2024.11.08 开源 **TeleChat2-3B**、**TeleChat2-7B**、**TeleChat2-35B**，该版本模型均具备 **Function Call** 功能。
 - 2024.10.18 开源TeleChat2-35B模型。
 - 2024.9.20 开源TeleChat2-115B模型，该模型是**首个完全国产算力训练并开源的千亿参数模型**。
 
@@ -27,7 +27,7 @@
 ### 星辰语义大模型-TeleChat2
 
 - 星辰语义大模型**TeleChat2**是由中国电信人工智能研究院研发训练的大语言模型，该系列模型**完全基于国产算力**训练。
-- 本次开源的 **TeleChat2**模型已支持**工具调用**功能。
+- 本次开源的 **TeleChat2-3B**、**TeleChat2-7B**、**TeleChat2-35B** 模型已支持**工具调用**功能。在 **Function Call** 方面，我们针对性进行了效果优化，在相关榜单评测上相比同尺寸模型均有较好表现。
 - **TeleChat2-115B**模型采用10万亿 Tokens中英文高质量语料进行训练，同步开源对话模型**TeleChat2-115B**的多格式、多平台权重文件。
 - **TeleChat2**在训练数据、训练方法等方面进行了改进，在通用问答和知识类、代码类、数学类榜单上相比**TeleChat1**均有大幅提升。
     - **TeleChat2**完全基于国产算力和国产深度学习框架进行训练，算力和算法框架更自主可控。优化MP、PP、SP实现方式提升模型性能，优化算子来提升训练速度。
@@ -47,13 +47,13 @@ head层参数分开，有助于增强训练稳定性和收敛性。我们选择�
 
 |      | layer_num | hidden_size | ffn_hidden_size | head_num | tie_word_embeddings | GQA  |
 | ---- | --------- | ----------- | --------------- | -------- | ------------------- | ---- |
-| 35B | 64        | 8192        | 40960           | 48       | 否                  | 否   |
-| 7B | 30        | 8192        | 40960           | 32       | 否                  | 否   |
-| 3B | 24        | 8192        | 40960           | 24       | 否                  | 否   |
+| 3B   | 24          | 3072      |     6144        | 24       | 否                  | 否   |
+| 7B   | 30          | 4096      | 12288           | 32       | 否                  | 否   |
+| 35B  | 64         | 6144       | 20480           | 48       | 否                  | 否   |
 | 115B | 96        | 8192        | 40960           | 64       | 否                  | 是   |
 
 
-我们开源的TeleChat模型：
+我们开源的 **TeleChat2** 模型：
 
 - 支持deepspeed微调，开源了基于deepspeed的训练代码，支持Zero并行显存优化，同时集成了FlashAttention2
 - 多轮能力支持。开源了多轮数据构建方式，针对多轮模型训练集成了针对多轮的mask loss训练方式，更好的聚焦多轮答案，提升问答效果。
@@ -62,16 +62,15 @@ head层参数分开，有助于增强训练稳定性和收敛性。我们选择�
 
 | 模型版本       | 下载链接 |
 | -------------- | -------- |
-| telechat2-3B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-3B/summary)|
-| telechat2-7B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-7B/summary)|
-| telechat2-35B-Nov |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-35B-Nov/files)|
-| telechat2-35B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-35B)|
+| telechat2-3B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-3B)|
+| telechat2-7B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-7B)|
+| telechat2-35B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-35B-Nov)|
 | telechat2-115B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-115B)|
 
 
 # 效果评测
 
-TeleChat模型相比同规模模型在评测效果方面也有较好的表现，我们的评测集涵盖了包括MMLU、C-Eval、CMMLU、
+**TeleChat2** 模型相比同规模模型在评测效果方面也有较好的表现，我们的评测集涵盖了包括MMLU、C-Eval、CMMLU、
 GSM8K、MATH、HumanEval、BBH等数据集，评测能力包括了指令遵循、考试能力、数学计算和推理、代码生成等
 
 ## 评测集介绍
@@ -107,7 +106,7 @@ GSM8K、MATH、HumanEval、BBH等数据集，评测能力包括了指令遵循�
 
 ## 评测结果如下
 
- | Dataset    | Llama-3.1-70B | Qwen1.5-110B | Qwen2-72-instruct | DeepSeek-v2 | TeleChat2-115B |TeleChat2-35B-Nov |TeleChat2-7B    |TeleChat2-3B    |
+ | Dataset    | Llama-3.1-70B | Qwen1.5-110B | Qwen2-72-instruct | DeepSeek-v2 | TeleChat2-115B |TeleChat2-35B |TeleChat2-7B    |TeleChat2-3B    |
 |:----------:|:-------------:|:------------:|:-----------------:|:-----------:|:--------------:|:--------------:|:--------------:|:----------------:|
 | C-Eval     | -             | -            | 83.8              | 78          | **86.9**       |  85            |  82            |    75            | 
 | MMLU       | **86**        | 80.4         | 82.3              | 77.8        | 80.9           |  82            |  79.6          |    72.9          |  
@@ -170,11 +169,11 @@ Web: 支持流式生成、多轮对话
 
 ### 模型工具调用能力
 
-TeleChat2 目前已支持工具调用功能，具体使用方式参考文档[TeleChat2工具调用文档](../tutorial/函数调用.md)。
+TeleChat2 目前已支持工具调用功能，具体使用方式参考文档[TeleChat2工具调用文档](./tutorial/函数调用.md)。
 
 # 模型微调
 
-TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[TeleChat2微调文档](../tutorial/telechat_deepspeed.md)。
+TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[TeleChat2微调文档](./tutorial/telechat_deepspeed.md)。
 
 # 国产化适配
 
