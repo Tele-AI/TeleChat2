@@ -168,63 +168,13 @@ Web: 支持流式生成、多轮对话
 
 [现已支持vllm推理](./vllm_inf)
 
+### 模型工具调用能力
+
+TeleChat2 目前已支持工具调用功能，具体使用方式参考文档(TeleChat2工具调用文档)[]。
+
 # 模型微调
 
-## 数据处理
-
-为了方便数据配比，解耦了数据处理和模型训练，数据权重配比文件如**data.json**所示，json字典中key为读取数据的路径，value为训练时数据的权重。单轮、多轮数据格式如样例数据所示
-
-```shell
-{
-  "datas/single_turn_example.jsonl": 2.0,
-  "datas/multi_turn_example.jsonl": 1.0
-}
-```
-
-运行**process_data.py**即可将文件处理成tokens，并保存。其中**data_output_path/train_data_{i}.pt**保存处理后的文件，**i的范围是0~num_workers**
-。训练时会加载路径下所有**train_data_{i}.pt**文件
-
-* 数据通过**data_path**读取，最终拼接生成**num_samples**个**max_seq_len**长度的sample进行训练。如样例所示，假设**datas/single_turn_example.jsonl**和**
-  datas/multi_turn_example.jsonl**
-	  各有1000条samples，配比过后数据池中则总共包含3000条samples。在数据拼接过程中，程序会不断遍历数据池，尽可能将数据拼接到4096长度（不够就左padding），直至生成到num_samples的个数。因此，每个sample中会包含多条拼接而成的数据。
-* process_method选择**single**或**multiple**单进程或多进程处理数据。
-
-```python
-python3 -u process_data.py \
-   --data_path data.json \ # 数据配比文件路径
-   --tokenizer_path ../../models/12B \ # 模型/tokenzier路径
-   --data_output_path $DATA_OUTPUT_PATH \ # 处理后数据保存地址
-   --max_seq_len $MAX_LEN \ # 数据长度
-   --num_samples $NUM_SAMPLES \ # 最终生成拼接后的数据数量
-   --num_workers 10 \ # 多进程个数
-   --process_method multiple \ # 多进程&单进程处理
-   --seed 42
-```
-
-## 全参训练
-
-```shell
-deepspeed --master_port 29500 --hostfile=my_hostfile main.py \
-   --data_path $DATA_OUTPUT_PATH \ # tokenzie后的数据文件存放地址
-   --model_name_or_path $model_path \
-   --with_loss_mask \
-   --per_device_train_batch_size 1 \
-   --max_seq_len 4096 \
-   --learning_rate 3e-5 \
-   --weight_decay 0.0001 \
-   --num_train_epochs 1 \
-   --gradient_accumulation_steps 4 \
-   --lr_scheduler_type cosine \
-   --precision fp16 \ # 训练精度，fp16或bf16
-   --warmup_proportion 0.1 \ 
-   --gradient_checkpointing \
-   --offload \
-   --seed 1233 \
-   --zero_stage $ZERO_STAGE \ 
-   --save_steps 10 \
-   --deepspeed \ 
-   --output_dir $OUTPUT # 输出路径 
-```
+TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档(TeleChat2微调文档)[]。
 
 # 国产化适配
 
