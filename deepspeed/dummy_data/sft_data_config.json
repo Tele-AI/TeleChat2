@@ -1,5 +1,8 @@
 {
-    "./dummy_data/sft//multi_turn_example.jsonl": 1.6,
-    "./dummy_data/sft/single_turn_example.jsonl": 2.15,
-    "./dummy_data/sft/tools_example.jsonl": 1.0
+    "./dummy_data/sft/demo_tool.jsonl": 1.01,
+    "./dummy_data/sft/demo_role.jsonl": 1.24,
+    "./dummy_data/sft/demo_math.jsonl": 1.78,
+    "./dummy_data/sft/demo_single.jsonl": 1.42,
+    "./dummy_data/sft/demo_multi.jsonl": 1.2,
+    "./dummy_data/sft/demo_code.jsonl": 1.0
 }
