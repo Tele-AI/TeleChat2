@@ -8,9 +8,11 @@ import json
 import torch
 import random
 import shutil
+import hashlib
 import datasets
 import deepspeed
 import transformers
+import pandas as pd
 import torch.nn as nn
 import multiprocessing
 import torch.nn.functional as F
@@ -57,39 +59,10 @@ DEFAULT_BOC_TOKEN = "<tool_call>"
 DEFAULT_EOC_TOKEN = "</tool_call>"
 DEFAULT_BOR_TOKEN = "<tool_response>"
 DEFAULT_EOR_TOKEN = "</tool_response>"
-DEFAULT_SPECICAL_TOKENS = [
-    DEFAULT_PAD_TOKEN,
-    DEFAULT_BOS_TOKEN,
-    DEFAULT_EOS_TOKEN,
-    DEFAULT_UNK_TOKEN,
-    DEFAULT_USR_TOKEN,
-    DEFAULT_BOT_TOKEN,
-    DEFAULT_SYS_TOKEN,
-    DEFAULT_BOC_TOKEN,
-    DEFAULT_EOC_TOKEN,
-    DEFAULT_BOR_TOKEN,
-    DEFAULT_EOR_TOKEN
-]
 LOCAL_RANK = None
 NUM_CPU_CORES = min(multiprocessing.cpu_count(), 16) # 可根据训练环境适当更改并发数量
 
 SYSTEM_TEMPLATE = "你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。\n"
-TOOLS_SYSTEM_TEMPLATE = Template("""你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。
-
-# 可用工具
-你可以调用<tools></tools>标签中包含的一个或多个工具来辅助你回答问题,以下是可用工具详情：
-<tools>
-${tools_template}
-</tools>
-
-# 调用方法
-你需要遵循工具的要求，使用json格式返回工具名称及参数，并用<tool_call></tool_call>包含。下方是一个调用模板：
-<tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
-</tool_call>
-
-""")
-
 
 # ================
 #    arguments
@@ -196,11 +169,191 @@ def sample_data_by_weights(dataset, weight):
     return dataset
 
 
-def load_train_dataset(data_args, training_args, tokenizer):
+def load_sft_dataset(data_args, training_args, tokenizer):
     """
-    多线程处理数据为 token，并缓存下来
+    加载 sft 数据集
+    """
+    # special tokens
+    sys_token_id = tokenizer(DEFAULT_SYS_TOKEN).input_ids
+    eos_token_id = tokenizer(DEFAULT_EOS_TOKEN).input_ids
+    usr_token_id = tokenizer(DEFAULT_USR_TOKEN).input_ids
+    bot_token_id = tokenizer(DEFAULT_BOT_TOKEN).input_ids
+
+    def _process_packing_dataset(all_messages, system=None):
+        if system is None:
+            system = SYSTEM_TEMPLATE
+        else:
+            system = system[0]
     
-    This function is modified from https://github.com/yangjianxin1/Firefly 
+        outputs = []
+        output = sys_token_id + tokenizer(system).input_ids + tokenizer("\n").input_ids
+        length = len(output)
+        for messages in all_messages:
+            temp_output = []
+            for message in messages:
+                role = message["role"]
+                content = message["content"]
+                if role == "user":
+                    temp_output += usr_token_id + tokenizer(content).input_ids
+                elif role == "bot":
+                    temp_output += bot_token_id + tokenizer(content).input_ids \
+                        + eos_token_id + tokenizer("\n").input_ids
+            temp_length = len(temp_output)
+
+            if length + temp_length > training_args.max_seq_length:
+                outputs.append(output[:-len(tokenizer("\n").input_ids)])
+                # 重新积累数据
+                output = sys_token_id + tokenizer(system).input_ids + tokenizer("\n").input_ids
+                length = len(output)
+            else:
+                output += temp_output
+                length += temp_length
+        # 处理末尾数据
+        if len(output) != 0:
+            outputs.append(output)
+        return {"input_ids": outputs}
+
+    def _process_unpacking_dataset(all_messages, system=None):
+        if system is None:
+            system = [SYSTEM_TEMPLATE for _ in range(len(all_messages))]
+
+        outputs = []
+        for system_content, messages in zip(system, all_messages):
+            input_ids = _transfer_chat_messages_into_tokens(messages, system_content)
+            outputs.append(input_ids)
+        return {"input_ids": outputs}
+
+    def _transfer_chat_messages_into_tokens(messages, system):
+        # 将 chat messages 处理成 token
+        if hasattr(tokenizer, "apply_chat_template") \
+            and tokenizer.chat_template is not None:
+            messages = [{"role": "system", "content": system}] + messages
+            prompt_token = tokenizer.apply_chat_template(
+                conversation=messages,
+                add_generation_prompt=False
+            )
+        else:
+            # 拼装 prompt tokens
+            prompt_token = sys_token_id + tokenizer(system).input_ids + tokenizer("\n").input_ids
+            for m_idx, message in enumerate(messages, start=1):
+                role = message["role"]
+                content = message["content"]
+                if role == "user":
+                    prompt_token += usr_token_id + tokenizer(content).input_ids
+                elif role == "bot":
+                    if m_idx < len(messages):
+                        prompt_token += bot_token_id + tokenizer(content).input_ids \
+                            + eos_token_id + tokenizer("\n").input_ids
+                    else:
+                        prompt_token += bot_token_id + tokenizer(content).input_ids \
+                            + eos_token_id
+        return prompt_token
+
+    # 加载数据配置文件
+    data_config = read_json(data_args.data_config_file)
+    # 创建数据缓存路径
+    cache_dir = os.path.join(training_args.output_dir, "data_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # 扫描数据，保留可以正确加载的数据
+    with training_args.main_process_first("processing data"):
+        loaded_dataset = [] # 所有数据
+        # 加载数据
+        loading_pipeline = tqdm(data_config.items())
+        for idx, (data_path, data_weight) in enumerate(loading_pipeline):
+            if not data_path.endswith("jsonl"):
+                # 非jsonl文件，跳过处理
+                continue
+
+            file_name = os.path.basename(data_path).replace(".jsonl", "")
+            loading_pipeline.set_description(f"Loading: {file_name}.jsonl")
+            # 加载单个jsonl文件，并按照data_weight进行数据采样
+            dataset = datasets.load_dataset(
+                "json",
+                data_files=data_path,
+                cache_dir=os.path.join(cache_dir, "raw_data", file_name),
+                keep_in_memory=False
+            )
+            dataset = dataset["train"].to_pandas()
+            dataset = dataset.sample(frac=data_weight, replace=True)
+
+            if idx == 0:
+                loaded_dataset = dataset
+            else:
+                assert (loaded_dataset.columns == dataset.columns).all()
+                loaded_dataset = pd.concat([loaded_dataset, dataset])
+
+        # 微调数据拼接
+        # 非工具调用且非多论文对话数据进行拼接
+        rank0_logging("Start processing data!")
+        loaded_dataset = loaded_dataset.reset_index(drop=True)
+        packing_dataset = loaded_dataset[loaded_dataset["tool"] == False]
+        packing_dataset = packing_dataset[packing_dataset["multiturn"] == False]
+        unpacking_dataset = loaded_dataset[~loaded_dataset.index.isin(packing_dataset.index)]
+        
+        # 处理需要拼接的数据
+        train_dataset = []
+        for idx, (system, grouped_dataset) in enumerate(packing_dataset.groupby("system")):
+            if len(grouped_dataset) > 0:
+                grouped_dataset = datasets.Dataset.from_dict({
+                    "messages": grouped_dataset["dialog"].values,
+                    "system": [system for _ in range(len(grouped_dataset))]
+                })
+                packing_cache_path = os.path.join(cache_dir, "packing_data", get_md5(system))
+                os.makedirs(packing_cache_path, exist_ok=True)
+                grouped_dataset = grouped_dataset.map(
+                    function=_process_packing_dataset,
+                    input_columns=["messages", "system"],
+                    remove_columns=["messages", "system"],
+                    batched=True,
+                    num_proc=NUM_CPU_CORES,
+                    load_from_cache_file=True,
+                    cache_file_name=os.path.join(packing_cache_path, "tokenized.arrow"),
+                    keep_in_memory=False
+                )
+                # 拼接数据
+                if idx == 0:
+                    train_dataset = grouped_dataset
+                else:
+                    assert train_dataset.features.type == grouped_dataset.features.type
+                    train_dataset = datasets.concatenate_datasets([
+                        train_dataset,
+                        grouped_dataset
+                    ])
+
+        # 处理不需要拼接的数据
+        if len(unpacking_dataset) > 0:
+            unpacking_dataset = datasets.Dataset.from_dict({
+                    "messages": unpacking_dataset["dialog"].values,
+                    "system": unpacking_dataset["system"].values
+                })
+            unpacking_cache_path = os.path.join(cache_dir, "unpacking_data")
+            os.makedirs(unpacking_cache_path, exist_ok=True)
+            unpacking_dataset = unpacking_dataset.map(
+                function=_process_unpacking_dataset,
+                input_columns=["messages", "system"],
+                remove_columns=["messages", "system"],
+                batched=True,
+                num_proc=NUM_CPU_CORES,
+                load_from_cache_file=True,
+                cache_file_name=os.path.join(unpacking_cache_path, "tokenized.arrow"),
+                keep_in_memory=False
+            )
+            if type(train_dataset) == list:
+                train_dataset = unpacking_dataset
+            else:
+                assert train_dataset.features.type == unpacking_dataset.features.type
+                train_dataset = datasets.concatenate_datasets([
+                    train_dataset,
+                    unpacking_dataset
+                ])
+
+    return train_dataset
+
+
+def load_pretrain_dataset(data_args, training_args, tokenizer):
+    """
+    加载 pretrain / continue-train 数据集
     """
 
     def group_texts(examples):
@@ -218,132 +371,12 @@ def load_train_dataset(data_args, training_args, tokenizer):
         }
         return result
 
-    def group_sft_datas(group_messages, group_tools=None):
-        # batch of messages
-        outputs = []
-        output, length = [], 0
-        if group_tools is not None:
-            iterations = zip(group_messages, group_tools)
-        else:
-            iterations = zip(group_messages, [None for _ in range(len(group_messages))])
-        # 转换成 tokens
-        for messages, tools in iterations:
-            tokens = _transfer_chat_messages_into_tokens(messages, tools)
-            len_tokens = len(tokens)
-            # 拼接后数据为：
-            # <_system>[<_user>xxx<_bot><_end>]...<_system>[<_user>xxx<_bot><_end>]
-            if length + len_tokens > training_args.max_seq_length:
-                # output = [bos_token_id] + output
-                outputs.append(output)
-                # 重新积累数据
-                output, length = [], 0
-            else:
-                output = output + tokens
-                length += len_tokens
-        # 处理末尾数据
-        if len(output) != 0:
-            outputs.append(output)
-        return {"input_ids": outputs}
-
-    def _transfer_chat_messages_into_tokens(messages, tools=None):
-        # 将 chat messages 处理成 token
-        if tools is not None:
-            tools = json.loads(tools)
-        # 由于 Dataset 在读取数据时，会补齐 dict 中的所有字段，并用 None 填充
-        # 而 chat_template 中无法处理 None，因此剔除值为 None 的字段
-        _messages = []
-        for message in messages:
-            _temp = {}
-            for key, value in message.items():
-                if value is not None:
-                    if key == "tool_calls":
-                        _temp[key] = json.loads(value)
-                    else:
-                        _temp[key] = value
-            _messages.append(_temp)
-
-        if hasattr(tokenizer, "apply_chat_template") \
-            and tokenizer.chat_template is not None:
-            if tools is None:
-                prompt_token = tokenizer.apply_chat_template(
-                    conversation=_messages,
-                    add_generation_prompt=False
-                )
-            else:
-                prompt_token = tokenizer.apply_chat_template(
-                    conversation=_messages,
-                    tools=tools,
-                    add_generation_prompt=False
-                )
-        else:
-            if not hasattr(tokenizer, "apply_chat_template"):
-                rank0_warning("It seems that Tokenizer does not have the apply_chat_template function. Please check the version of transformers!")
-
-            # special tokens
-            sys_token_id = tokenizer(DEFAULT_SYS_TOKEN).input_ids
-            eos_token_id = tokenizer(DEFAULT_EOS_TOKEN).input_ids
-            usr_token_id = tokenizer(DEFAULT_USR_TOKEN).input_ids
-            bot_token_id = tokenizer(DEFAULT_BOT_TOKEN).input_ids
-            sys_token_id = tokenizer(DEFAULT_SYS_TOKEN).input_ids
-            boc_token_id = tokenizer(DEFAULT_BOC_TOKEN).input_ids
-            eoc_token_id = tokenizer(DEFAULT_EOC_TOKEN).input_ids
-            bor_token_id = tokenizer(DEFAULT_BOR_TOKEN).input_ids
-            eor_token_id = tokenizer(DEFAULT_EOR_TOKEN).input_ids
-
-            # 处理 system 部分
-            if len(_messages) % 2 != 0 and _messages[0]["role"] == "system":
-                system = _messages[0]["content"]
-                _messages = _messages[1:]
-            else:
-                if tools is None:
-                    system = SYSTEM_TEMPLATE
-                else:
-                    _tools = [json.dumps(tool, ensure_ascii=False) for tool in tools]
-                    system = TOOLS_SYSTEM_TEMPLATE.safe_substitute({"tools_template": "\n".join(_tools)})
-            # 拼装 prompt tokens
-            prompt_token = sys_token_id + tokenizer(system).input_ids
-            for m_idx, message in enumerate(_messages):
-                role = message["role"]
-                content = message["content"]
-                tool_calls = message.get("tool_calls", None)
-
-                if role == "user":
-                    prompt_token += usr_token_id + tokenizer(content).input_ids
-                elif role == "bot":
-                    prompt_token += bot_token_id + tokenizer(content).input_ids
-                    tool_calls_token = []
-                    if tool_calls is not None:
-                        for idx, tool_call in enumerate(tool_calls, start=1):
-                            tool_call_str = '\n{"name": "' \
-                                + tool_call["name"] \
-                                + '", "arguments": ' \
-                                + json.dumps(tool_call["arguments"], ensure_ascii=False) \
-                                + '}\n'
-                            if idx != 1:
-                                tool_calls_token += tokenizer("\n").input_ids + boc_token_id + tokenizer(tool_call_str).input_ids + eoc_token_id
-                            else:
-                                tool_calls_token += boc_token_id + tokenizer(tool_call_str).input_ids + eoc_token_id
-                    if m_idx + 1 == len(_messages):
-                        prompt_token += tool_calls_token + eos_token_id
-                    else:
-                        prompt_token += tool_calls_token + eos_token_id + tokenizer("\n").input_ids
-                elif role == "tool":
-                    if m_idx == 0 or _messages[m_idx - 1]["role"] != "tool":
-                        prompt_token += usr_token_id + bor_token_id \
-                            + tokenizer("\n" + content + "\n").input_ids \
-                            + eor_token_id
-                    else:
-                        prompt_token += bor_token_id \
-                            + tokenizer("\n" + content + "\n").input_ids \
-                            + eor_token_id
-        return prompt_token
-
     def _transfer_pretrain_prompt_into_tokens(samples):
         # 将 text 处理成 token
         outputs = []
-        eos_token_id = tokenizer(DEFAULT_EOS_TOKEN).input_ids[0]
+        eos_token_id = tokenizer(DEFAULT_EOS_TOKEN).input_ids
         for sample in samples:
-            prompt_token = tokenizer(sample).input_ids + [eos_token_id]
+            prompt_token = tokenizer(sample).input_ids + eos_token_id
             outputs.append(prompt_token)
         # print(prompt_token)
         return {"input_ids": outputs}
@@ -352,12 +385,6 @@ def load_train_dataset(data_args, training_args, tokenizer):
     # 创建数据缓存路径
     cache_dir = os.path.join(training_args.output_dir, "data_cache")
     os.makedirs(cache_dir, exist_ok=True)
-    rank0_logging("Start loading data!")
-    rank0_logging(
-        "If there are no cached data,"
-        " then data processing will be start"
-        f" and all processed data will be cached in {cache_dir}"
-    )
 
     # 扫描数据，保留可以正确加载的数据
     with training_args.main_process_first("processing data"):
@@ -390,53 +417,36 @@ def load_train_dataset(data_args, training_args, tokenizer):
                 )
 
                 # 把文本处理成 token
-                if training_args.task_type == "sft":
-                    # 将微调数据处理成 token
-                    feature_columns = list(prompt_dataset["train"].features.keys())
-                    dataset = prompt_dataset.map(
-                        function=group_sft_datas,
-                        input_columns=feature_columns,
-                        remove_columns=feature_columns,
+                # 预训练、继续训练数据 处理成 token
+                # 启用 batched=True 来处理数据
+                # 数据将被分成 NUM_CPU_CORES 批进行处理
+                # 随后可在每一个线程中将数据拼接到 max_seq_length
+                # 但仍然可能出现拼接不足 max_seq_length 的情况
+                dataset = prompt_dataset.map(
+                    function=_transfer_pretrain_prompt_into_tokens,
+                    batched=True,
+                    input_columns="text",
+                    remove_columns="text",
+                    num_proc=NUM_CPU_CORES,
+                    load_from_cache_file=True,
+                    cache_file_names={
+                        k: os.path.join(temp_cache_path, "tokenized.arrow") \
+                            for k in prompt_dataset
+                    },
+                    keep_in_memory=False
+                )
+                # 将数据 group 到 max_seq_length
+                if training_args.group_pretrain_data:
+                    dataset = dataset.map(
+                        function=group_texts,
                         batched=True,
                         num_proc=NUM_CPU_CORES,
                         load_from_cache_file=True,
                         cache_file_names={
-                            k: os.path.join(temp_cache_path, "tokenized.arrow") \
-                                for k in prompt_dataset
-                        },
+                            k: os.path.join(temp_cache_path, 'grouped.arrow') \
+                                for k in dataset},
                         keep_in_memory=False
                     )
-                else:
-                    # 预训练、继续训练数据 处理成 token
-                    # 启用 batched=True 来处理数据
-                    # 数据将被分成 NUM_CPU_CORES 批进行处理
-                    # 随后可在每一个线程中将数据拼接到 max_seq_length
-                    # 但仍然可能出现拼接不足 max_seq_length 的情况
-                    dataset = prompt_dataset.map(
-                        function=_transfer_pretrain_prompt_into_tokens,
-                        batched=True,
-                        input_columns="text",
-                        remove_columns="text",
-                        num_proc=NUM_CPU_CORES,
-                        load_from_cache_file=True,
-                        cache_file_names={
-                            k: os.path.join(temp_cache_path, "tokenized.arrow") \
-                                for k in prompt_dataset
-                        },
-                        keep_in_memory=False
-                    )
-                    # 将数据 group 到 max_seq_length
-                    if training_args.group_pretrain_data:
-                        dataset = dataset.map(
-                            function=group_texts,
-                            batched=True,
-                            num_proc=NUM_CPU_CORES,
-                            load_from_cache_file=True,
-                            cache_file_names={
-                                k: os.path.join(temp_cache_path, 'grouped.arrow') \
-                                    for k in dataset},
-                            keep_in_memory=False
-                        )
 
                 # 按照权重采样数据
                 dataset = sample_data_by_weights(dataset, data_weight)
@@ -453,6 +463,18 @@ def load_train_dataset(data_args, training_args, tokenizer):
                     dataset["train"]
                 ])
     
+    return train_dataset
+
+
+def load_train_dataset(data_args, training_args, tokenizer):
+    """
+    多线程处理数据为 token，并缓存下来
+    """
+    if training_args.task_type == "sft":
+        train_dataset = load_sft_dataset(data_args, training_args, tokenizer)
+    else:
+        train_dataset = load_pretrain_dataset(data_args, training_args, tokenizer)
+
     rank0_logging(f"All data loaded! Total training number: {len(train_dataset)}")
     return train_dataset
 
@@ -681,6 +703,10 @@ def rank0_warning(*args):
         logger.warning(*args)
 
 
+def get_md5(context):
+    return hashlib.md5(context.encode(encoding='UTF-8')).hexdigest()
+
+
 def read_json(path):
     with open(path, "r", encoding="utf_8_sig") as file:
         return json.load(file)
@@ -840,14 +866,6 @@ def train():
 
     # 加载 Tokenizer
     tokenizer = load_tokenizer(model_args)
-    special_tokens = [str(token) for token in tokenizer.added_tokens_decoder.values()]
-    missing_tokens = list(set(DEFAULT_SPECICAL_TOKENS) - set(special_tokens))
-    if len(missing_tokens) > 0:
-        rank0_warning(
-            "There are some special tokens missing! "
-            f"Including: `{", ".join(missing_tokens)}`!"
-            " This may cause incorrect prompt tokenization!"
-        )
     
     # 加载训练数据
     train_dataset = load_train_dataset(data_args, training_args, tokenizer)

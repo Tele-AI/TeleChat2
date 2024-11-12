@@ -74,20 +74,25 @@ deepspeed/
 
 以单机多卡监督微调举例：
 
-1. 收集训练数据，并组织成指定格式（见 [dummy_data/sft/single_turn_example.jsonl](dummy_data/sft/single_turn_example.jsonl)）：
+1. 收集训练数据，并组织成指定格式（如 [dummy_data/sft/demo_single.jsonl](dummy_data/sft/demo_single.jsonl)）：
 
    ```Json
-   {"conversation": [{"role": "user", "content": "请描述一下如何正确规划个人理财。"}, {"role": "bot", "content": "正确规划个人理财需要以下几个步骤：\n1.了解自己的财务状况。这包括收入、支出、资产和负债等信息。了解自己的财务状况可以帮助人们更好地制定财务计划。\n2.设定财务目标。需要考虑短期目标和长期目标，例如以年为单位设定的支出计划、购房、购车等的长期目标。\n3.制定预算计划。在了解自己的财务状况并设定财务目标后，需要制定一个预算计划。这可以帮助人们控制支出、节省开支并达到财务目标。\n4.理性投资和储蓄。人们可以投资于股票、基金、房产或其他投资渠道以实现财务目标。但在投资前需了解相关知识并进行风险评估。同时还应储蓄一定金额，以应对突发事件或为达成某些目标做准备。\n5.审时度势，合理调整。财务计划需要不断地审时度势，根据实际情况做出调整，以达到最终的财务目标。需要注意财务状况的变化、投资的收益和风险等因素。\n通过以上五个步骤，人们可以做到合理规划个人理财，掌握自己的财务命运，更好地实现自己的财务目标。"}]}
+   {"system": "你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。\n", "dialog": [{"role": "user", "content": "Create a programming algorithm that identifies the maximum value in a list of numbers.\n[2, 5, 8, 10, 20, 15]"}, {"role": "bot", "content": "One possible algorithm to find the maximum value in a list of numbers, written in pseudocode, is:\n\n```\nlist = [2, 5, 8, 10, 20, 15]     // Initialize a list of numbers\nmax_value = list[0]              // Set the first element in the list as the maximum value\n\nfor number in list               // Iterate over the list of numbers\n    if number > max_value        // If the current number is greater than the maximum value\n        max_value = number       // Update the maximum value with the current number\n\nprint(\"Maximum value: \", max_value)  // After the iteration, print the maximum value\n```\n\n### Output:\nMaximum value: 20"}], "multiturn": false, "tool": false}
    ```
+
 2. 指定训练数据集之间的配比，用于数据采样（见 [dummy_data/sft_data_config.json](dummy_data/sft_data_config.json)）：
 
    ```json
    {
-        "./dummy_data/sft//multi_turn_example.jsonl": 1.6,
-        "./dummy_data/sft/single_turn_example.jsonl": 2.15,
-        "./dummy_data/sft/tools_example.jsonl": 1.0
+        "./dummy_data/sft/demo_tool.jsonl": 1.01,
+        "./dummy_data/sft/demo_role.jsonl": 1.24,
+        "./dummy_data/sft/demo_math.jsonl": 1.78,
+        "./dummy_data/sft/demo_single.jsonl": 1.42,
+        "./dummy_data/sft/demo_multi.jsonl": 1.2,
+        "./dummy_data/sft/demo_code.jsonl": 1.0
     }
    ```
+
 3. 在 train_scripts 下找到 [sft_single_node.sh](deepspeed/train_scripts/sft_single_node.sh) 并修改对应参数：
 
    ```bash
@@ -152,18 +157,24 @@ deepspeed/
 
 ### 监督微调
 
-请将 监督微调 的数据组成成如下 **jsonl** 格式，见（[dummy_data/sft/single_turn_example.jsonl](dummy_data/sft/single_turn_example.jsonl) 、 [dummy_data/sft/multi_turn_example.jsonl](dummy_data/sft/multi_turn_example.jsonl)） 、 [dummy_data/sft/tools_example.jsonl](dummy_data/sft/tools_example.jsonl)）：
+请将 监督微调 的数据组成成如下 **jsonl** 格式，样例数据见 dummy_data/sft 文件夹 ：
 
 ```json
-{"conversation": [{"role": "user", "content": "请描述一下如何正确规划个人理财。"}, {"role": "bot", "content": "正确规划个人理财需要以下几个步骤：\n1.了解自己的财务状况。这包括收入、支出、资产和负债等信息。了解自己的财务状况可以帮助人们更好地制定财务计划。\n2.设定财务目标。需要考虑短期目标和长期目标，例如以年为单位设定的支出计划、购房、购车等的长期目标。\n3.制定预算计划。在了解自己的财务状况并设定财务目标后，需要制定一个预算计划。这可以帮助人们控制支出、节省开支并达到财务目标。\n4.理性投资和储蓄。人们可以投资于股票、基金、房产或其他投资渠道以实现财务目标。但在投资前需了解相关知识并进行风险评估。同时还应储蓄一定金额，以应对突发事件或为达成某些目标做准备。\n5.审时度势，合理调整。财务计划需要不断地审时度势，根据实际情况做出调整，以达到最终的财务目标。需要注意财务状况的变化、投资的收益和风险等因素。\n通过以上五个步骤，人们可以做到合理规划个人理财，掌握自己的财务命运，更好地实现自己的财务目标。"}]}
-{"conversation": [{"role": "user", "content": "你喜欢哪种类型的电影？"}, {"role": "bot", "content": "作为AI，我不能喜欢电影。 但是，根据人们的兴趣，有许多类型的电影包括恐怖、喜剧、爱情、动作、科幻等等。 具体喜欢哪种电影类型还要根据个人口味来决定。"}, {"role": "user", "content": "你有哪些好看的电影推荐吗？"}, {"role": "bot", "content": "以下是几部我认为很好看的电影推荐给你：\n\n1. 《阿甘正传》：一部感人至深的电影，讲述了一个智商低下的男孩在生活中的奋斗和成长。\n\n2. 《辛德勒的名单》：一部关于二战纳粹大屠杀的电影，讲述了工厂老板辛德勒如何通过雇佣犹太人来帮助他们躲避屠杀的故事。\n\n3. 《楚门的世界》：一部关于虚拟现实和真实生活的电影，讲述了一个人在接受了虚假生活的洗脑后如何追求真实的故事。\n\n4. 《肖申克的救赎》：一部经典的励志电影，讲述了银行家安迪·杜弗雷因被冤枉入狱，在狱中与朋友们一起奋斗逐步实现自由的故事。\n\n5. 《星际穿越》：一部科幻电影，讲述了一群宇航员穿越虫洞去寻找新家园的故事，影片通过很多物理概念和哲学思考，使人感悟深刻。\n\n希望这些电影能给你带来愉悦和启示。"}, {"role": "user", "content": "你觉得这些电影中哪一部最好看？"}, {"role": "bot", "content": "作为AI，我没有感受和喜好，所以不能说哪一部电影更好看。但是，这些电影都有着不同的魅力和吸引力，可以根据不同个人的口味来选择自己喜欢的电影。无论哪一部电影，只要它能让你感受到一些东西，就是一部好的电影。"}]}
-{"conversation": [{"role": "user", "content": "你好，我需要帮助来计算我的抵押贷款支付。我有一笔20万美元的贷款，每年的利率为3.5%，贷款期限为30年。"}, {"role": "bot", "content": "", "tool_calls": "[{\"name\": \"calculate_mortgage\", \"arguments\": {\"loan_amount\": 200000, \"interest_rate\": 3.5, \"loan_term\": 30}}]"}, {"role": "tool", "content": "{\"monthly_payment\": 898.09}"}, {"role": "bot", "content": "根据您提供的信息，您的月度抵押贷款支付大约为898.09美元。"}, {"role": "user", "content": "太好了！谢谢你的帮助。"}, {"role": "bot", "content": "不客气！如果你还有其他问题，随时提问。"}], "tools": "[{\"type\": \"function\", \"function\": {\"name\": \"calculate_mortgage\", \"description\": \"计算每月抵押贷款支付\", \"parameters\": {\"type\": \"object\", \"properties\": {\"loan_amount\": {\"type\": \"number\", \"description\": \"贷款金额\"}, \"interest_rate\": {\"type\": \"number\", \"description\": \"年利率\"}, \"loan_term\": {\"type\": \"integer\", \"description\": \"贷款期限（年）\"}}, \"required\": [\"loan_amount\", \"interest_rate\", \"loan_term\"]}}}]"}
+{
+	    "system": "你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。\n",
+    "dialog": [
+        {"role": "user", "content": "Create a programming algorithm that identifies the maximum value in a list of numbers.\n[2, 5, 8, 10, 20, 15]"},
+        {"role": "bot", "content": "One possible algorithm to find the maximum value in a list of numbers, written in pseudocode, is:\n\n```\nlist = [2, 5, 8, 10, 20, 15]     // Initialize a list of numbers\nmax_value = list[0]              // Set the first element in the list as the maximum value\n\nfor number in list               // Iterate over the list of numbers\n    if number > max_value        // If the current number is greater than the maximum value\n        max_value = number       // Update the maximum value with the current number\n\nprint(\"Maximum value: \", max_value)  // After the iteration, print the maximum value\n```\n\n### Output:\nMaximum value: 20"}
+    ],
+    "multiturn": false,
+    "tool": false}
 ```
 
-每一行为一条数据。非工具调用微调数据仅包含 conversation 字段，由多轮对话组成的 List。而工具调用数据除 conversation 外，还包含 tools 字段。
-***注意！在工具调用数据中，bot 回复中的 tool_calls、单条数据的 tools 字段，必须是 Json 格式的字符串！***
-***注意！在工具调用数据中，bot 回复中的 tool_calls、单条数据的 tools 字段，必须是 Json 格式的字符串！***
-***注意！在工具调用数据中，bot 回复中的 tool_calls、单条数据的 tools 字段，必须是 Json 格式的字符串！***
+以下字段均为**必填**字段：
+	  - system：对话时的 system prompt；
+	  - dialog：对话数据，每一条为一个 dict，包含 role、content 两个字段，分别为角色和对应的回复；
+	  - multiturn：是否为多轮对话数据；
+	  - tool：是否为工具调用数据。
 
 ### 数据配比文件
 
@@ -171,13 +182,16 @@ deepspeed/
 
 ```json
 {
-    "./dummy_data/sft//multi_turn_example.jsonl": 1.6,
-    "./dummy_data/sft/single_turn_example.jsonl": 2.15,
-    "./dummy_data/sft/tools_example.jsonl": 1.0
+    "./dummy_data/sft/demo_tool.jsonl": 1.01,
+    "./dummy_data/sft/demo_role.jsonl": 1.24,
+    "./dummy_data/sft/demo_math.jsonl": 1.78,
+    "./dummy_data/sft/demo_single.jsonl": 1.42,
+    "./dummy_data/sft/demo_multi.jsonl": 1.2,
+    "./dummy_data/sft/demo_code.jsonl": 1.0
 }
 ```
 
-例如，该文件指明，对于数据文件 dummy_data/sft//multi_turn_example.jsonl 中的数据，将会被随机采样 1.6 次，假设数据总共 1000 条，则采样后训练数据为 1000 * 1.6 = 1600 条。
+例如，该文件指明，对于数据文件 dummy_data/sft//demo_math.jsonl 中的数据，将会被随机采样 1.42 次，假设数据总共 1000 条，则采样后训练数据为 1000 * 1.42 = 1420 条。
 
 **注意，在启动训练时，脚本会根据该文件，首先对数据进行采样、tokenization 处理，并在输出文件夹下，保存 data_cache 文件。**
 
