@@ -3,7 +3,6 @@
 
 # 配置可用GPU
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES
 
 # 模型文件路径、输出路径、DeepSpeed配置路径、训练数据路径
 MODEL_PATH=$1
@@ -30,8 +29,7 @@ GRADIENT_CHECKPOINTING=true
 SEED=42
 FP16=true
 BF16=false
-OPTIM=adamw_apex_fused
-
+OPTIM=adamw_hf
 deepspeed --include localhost:$CUDA_VISIBLE_DEVICES ./train.py \
     --model_name_or_path $MODEL_PATH \
     --output_dir $OUTPUT_DIR \
