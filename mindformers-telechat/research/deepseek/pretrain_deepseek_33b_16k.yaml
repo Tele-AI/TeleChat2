@@ -1,0 +1,223 @@
+seed: 1234
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+run_mode: 'train'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'deepseek_33b'
+# if True, do evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+
+# runner config
+runner_config:
+  epochs: 5
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+
+# optimizer
+optimizer:
+  type: FP32StateAdamWeightDecay
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1.e-8
+  weight_decay: 0.0
+
+# lr schedule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 3.e-6
+  lr_end: 3.e-6
+  warmup_steps: 0
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: "/{path}/AdvertiseGenTrain_text.mindrecord"
+    shuffle: False
+  input_columns: ["input_ids"]  # "input_ids", "labels" , labels are used in instruction finetune.
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+
+# eval dataset
+eval_dataset: &eval_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: False
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+eval_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *eval_dataset
+
+use_parallel: True
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+# default parallel of device num = 16 for Atlas 800T A2
+parallel_config:
+  data_parallel: 1
+  model_parallel: 8
+  pipeline_stage: 2
+  use_seq_parallel: True
+  micro_batch_num: 16
+  vocab_emb_dp: False
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# recompute config
+recompute_config:
+  recompute: True
+  select_recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+    per_print_times: 1
+  - type: CheckpointMonitor
+    prefix: "deepseek_33b"
+    save_checkpoint_steps: 10000
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "58GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  jit_config:
+    jit_level: "O1"
+  memory_optimize_level: "O0"
+
+# model config
+model:
+  model_config:
+    type: LlamaConfig
+    batch_size: 1 # add for increase predict
+    seq_length: 16384
+    hidden_size: 7168
+    num_layers: 62
+    num_heads: 56
+    n_kv_heads: 8
+    vocab_size: 32256
+    multiple_of: 256
+    initializer_range: 0.02
+    intermediate_size: 19200
+    max_position_embedding: 16384
+    block_size: 128
+    num_block: 1024
+    rms_norm_eps: 1.0e-6
+    bos_token_id: 32013
+    eos_token_id: 32021
+    pad_token_id: 32014
+    ignore_token_id: -100
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    is_dynamic: False
+    softmax_compute_type: "float32"
+    rotary_dtype: "float32"
+    param_init_type: "float32"
+    use_past: False
+    pretrain_seqlen: 4096
+    extend_method: "PI" # support "None", "PI", "NTK"
+    theta: 100000.0
+    scaling_factor: 4
+    use_flash_attention: True
+    offset: 0
+    use_past_shard: False
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1
+    max_decode_length: 512
+    top_k: 3
+    top_p: 1
+    do_sample: False
+  arch:
+    type: LlamaForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    unk_token: None
+    bos_token: '<｜begin▁of▁sentence｜>'
+    eos_token: '<|EOT|>'
+    pad_token: '<｜end▁of▁sentence｜>'
+    vocab_file: None
+    tokenizer_file: ""  # tokenizer.json
+    type: LlamaTokenizerFast
+  type: LlamaProcessor
+
+# metric
+metric:
+  type: PerplexityMetric
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    loss_scale_value: 65536
+    scale_factor: 2
+    scale_window: 1000
+  use_clip_grad: True
+
+eval_callbacks:
+  - type: ObsMonitor
+
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+layer_scale: False
+layer_decay: 0.65
+lr_scale_factor: 256
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."

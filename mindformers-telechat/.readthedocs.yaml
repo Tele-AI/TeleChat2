@@ -1,0 +1,22 @@
+# .readthedocs.yaml
+# Read the Docs configuration file
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+
+# Required
+version: 2
+
+build:
+  os: ubuntu-22.04
+  tools:
+    python: "3.9"
+
+sphinx:
+   configuration: docs/readthedocs/source_zh_cn/conf.py
+
+# Optionally declare the Python requirements required to build your docs
+python:
+  install:
+    - requirements: requirements.txt
+    - requirements: docs/readthedocs/requirements.txt
+    - method: setuptools
+      path: .

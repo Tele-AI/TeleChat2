@@ -1,0 +1,131 @@
+seed: 0
+run_mode: 'train'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+
+# context
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  save_graphs: False
+  device_id: 0
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+
+# runner
+runner_config:
+  epochs: 2
+  batch_size: 2
+  sink_mode: True
+  sink_size: 2
+runner_wrapper:
+  type: TrainOneStepCell
+  sens: 1024
+
+# parallel
+use_parallel: False
+parallel:
+  parallel_mode: 0 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: True
+  enable_alltoall: False
+  full_batch: False
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+parallel_config:
+  data_parallel: 1
+  model_parallel: 1
+  expert_parallel: 1
+  pipeline_stage: 1
+  micro_batch_num: 1
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# moe
+moe_config:
+  expert_num: 1
+  capacity_factor: 1.05
+  aux_loss_factor: 0.05
+  num_experts_chosen: 1
+
+# recompute
+recompute_config:
+  recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: False
+
+# autotune
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+# profile
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+
+# Trainer
+trainer:
+  type: general
+  model_name: 'general'
+
+# please edit by hand.
+train_dataset:
+train_dataset_task:
+eval_dataset:
+eval_dataset_task:
+
+# please edit by hand.
+model:
+  model_config:
+    checkpoint_name_or_path:
+  arch:
+
+# lr schedule
+lr_schedule:
+  type: cosine
+  learning_rate: 0.00015
+  lr_end: 0.
+  warmup_lr_init: 0.
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+layer_scale: False
+layer_decay: 0.65
+
+# optimizer
+optimizer:
+  type: adamw
+  beta1: 0.9
+  beta2: 0.95
+  eps: 0.00000001 # 1e-8
+  weight_decay: 0.05
+lr_scale: False
+lr_scale_factor: 256
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "mindformers"
+    save_checkpoint_steps: 100
+    integrated_save: True
+    async_save: False
+  - type: ObsMonitor
+eval_callbacks:
+  - type: ObsMonitor
+
+# please edit by hand.
+processor:
+  tokenizer:
+  image_processor:
+  audio_processor:

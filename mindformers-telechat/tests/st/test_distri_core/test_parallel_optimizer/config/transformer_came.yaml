@@ -1,0 +1,40 @@
+training_config:
+  seed: 2024
+
+parallel_config:
+  tensor_model_parallel_size: 2
+  pipeline_model_parallel_size: 1
+  context_parallel_size: 1
+  expert_model_parallel_size: 1
+  sequence_parallel: True
+  zero_level: z2
+
+model_config:
+  num_layers: 1
+  num_attention_heads: 32
+  vocab_size: 50304
+  hidden_size: 2560
+  attn_type: 'self_attn'
+  qkv_has_bias: True
+  out_proj_has_bias: False
+  params_dtype: float32
+  compute_dtype: float32
+  softmax_compute_dtype: float32
+  hidden_dropout: 0.0
+  attention_dropout: 0.0
+  mask_func_type: "attn_mask_add"
+  mlp_has_bias: True
+  ffn_hidden_size: 7680
+  hidden_act: 'gelu'
+  apply_residual_connection_post_norm: False
+  normalization: 'FusedRMSNorm'
+  norm_epsilon: 1.e-5
+
+dataset_config:
+  batch_size: 1
+  dataset_size: 2
+  seq_length: 1024
+
+optimizer_config:
+  optimizer_type: "Came"
+  learning_rate: 1.e-3

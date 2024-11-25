@@ -1,0 +1,169 @@
+seed: 0
+run_mode: 'predict'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: '/path/to/ckpt'
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+
+# ==== context config ====
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "59GB" # 59GB for Atlas 800T A2
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  memory_optimize_level: "O1"
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+
+# ==== model config ====
+model:
+  model_config:
+    type: ChatGLM2Config
+    batch_size: 1  # only for incremental infer
+    num_layers: 40
+    padded_vocab_size: 151552
+    hidden_size: 4096
+    ffn_hidden_size: 13696
+    kv_channels: 128
+    num_attention_heads: 32
+    seq_length: 8192
+    hidden_dropout: 0.0
+    attention_dropout: 0.0
+    layernorm_epsilon: 1.5625e-07
+    rope_ratio: 500
+    rmsnorm: True
+    apply_residual_connection_post_layernorm: False
+    post_layer_norm: True
+    add_bias_linear: False
+    add_qkv_bias: True
+    bias_dropout_fusion: True
+    multi_query_attention: True
+    multi_query_group_num: 2
+    apply_query_key_layer_scaling: True
+    attention_softmax_in_fp32: True
+    fp32_residual_connection: False
+    quantization_bit: 0
+    pre_seq_len: None
+    prefix_projection: False
+    param_init_type: "bfloat16"
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    use_past: True
+    is_dynamic: True
+    block_size: 16
+    num_blocks: 4096
+    use_flash_attention: True # when use FlashAttention, seq_length should be multiple of 16
+    eos_token_id: [151329, 151336, 151338]
+    pad_token_id: 151329
+    repetition_penalty: 1.0
+    max_length: 8192
+    max_decode_length: 512
+    checkpoint_name_or_path: "/path/to/ckpt"
+    top_k: 1
+    top_p: 1
+    do_sample: False
+    auto_map:
+      AutoTokenizer: [glm4_tokenizer.ChatGLM4Tokenizer, null]
+  arch:
+    type: ChatGLM2ForConditionalGeneration
+
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'glm4_9b'
+# if True do, evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+eval_step_interval: 500
+eval_epoch_interval: -1
+
+metric:
+  type: ADGENMetric
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    type: ChatGLM4Tokenizer
+    eos_token: '<|endoftext|>'
+    pad_token: '<|endoftext|>'
+    vocab_file: '/path/to/tokenizer.model'
+    chat_template: "[gMASK]<sop>{% for item in messages %}{% if item['tools'] is defined %}<|system|>\n你是一个名为 ChatGLM 的人工智能助手。你是基于智谱AI训练的语言模型 GLM-4 模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。\n\n# 可用工具{% set tools = item['tools'] %}{% for tool in tools %}{% if tool['type'] == 'function' %}\n\n## {{ tool['function']['name'] }}\n\n{{ tool['function'] | tojson(indent=4) }}\n在调用上述函数时，请使用 Json 格式表示调用的参数。{% elif tool['type'] == 'python' %}\n\n## python\n\n当你向 `python` 发送包含 Python 代码的消息时，该代码将会在一个有状态的 Jupyter notebook 环境中执行。\n`python` 返回代码执行的输出，或在执行 60 秒后返回超时。\n`/mnt/data` 将会持久化存储你的文件。在此会话中，`python` 无法访问互联网。不要使用 `python` 进行任何网络请求或者在线 API 调用，这些在线内容的访问将不会成功。{% elif tool['type'] == 'simple_browser' %}\n\n## simple_browser\n\n你可以使用 `simple_browser` 工具。该工具支持以下函数：\n`search(query: str, recency_days: int)`：使用搜索引擎进行查询并显示结果，可以使用 `recency_days` 参数控制搜索内容的时效性。\n`mclick(ids: list[int])`：获取一系列指定 id 的页面内容。每次调用时，须选择3-10个页面。选择多个角度的页面，同时尽可能选择可信任的信息来源。考虑到部分页面是无法加载的，你也可以多打开一些可能有用的页面而不用担心内容过多。\n`open_url(url: str)`：打开指定的 URL。\n\n使用 `【{引用 id}†{引用文本}】` 来引用内容。\n\n操作步骤：1. 使用 `search` 来获得信息列表; 2. 使用 `mclick` 来获取指定 ID 页面的内容; 3. 根据获得的内容进行回复。在回复中应当引用信息来源。\n 如果用户提供了 URL，也可以用 `open_url` 直接打开页面。\n如果初次搜索结果没有找到合适的信息，也可以再次使用 `search` 进行搜索。{% elif tool['type'] == 'cogview' %}\n\n## cogview\n\n如果用户的请求中包含了对图像的描述，你可以使用 `cogview` 来生成图像并展示给用户。你需要向 `cogview` 发送图像描述，规则：\n- 发送给 `cogview` 的消息必须使用英语。用户的中文描述必须完全翻译为英语。\n- 应当尽可能详细地描述图像生成的需求，需求描述约 100 英文单词。\n- 保持用户原始描述的意图。不要虚构内容或者没见过的人物。\n- 如无特殊说明，所在地为中国，持有中国立场并遵循中国社会主义价值观。{% endif %}{% endfor %}{% endif %}{% if item['content'] %}<|{{ item['role'] }}|>{{ item['metadata'] }}\n{{ item['content'] }}{% endif %}{% endfor %}{% if add_generation_prompt %}<|assistant|>{% endif %}"
+  type: GLMProcessor
+
+# parallel config
+use_parallel: False
+parallel:
+  parallel_mode: 1 # 0-dataset, 1-semi, 2-auto, 3-hybrid
+  gradients_mean: False  # 默认为False, 数据并行模式下为True
+  loss_repeated_mean: True
+  enable_alltoall: False
+  full_batch: True   # 默认为True, 数据并行模式必须设置为False
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False  # optimizer shard, 等价于zero2
+  strategy_ckpt_config:
+    save_file: "./ckpt_strategy.ckpt"
+parallel_config:
+  data_parallel: 1
+  model_parallel: 2
+  pipeline_stage: 1
+  expert_parallel: 1
+  micro_batch_num: 16
+  vocab_emb_dp: True
+  use_seq_parallel: False
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# moe
+moe_config:
+  expert_num: 1
+  capacity_factor: 1.05
+  aux_loss_factor: 0.05
+  num_experts_chosen: 1
+
+# recompute
+recompute_config:
+  recompute: True
+  select_recompute: True
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+# autotune
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+# profile
+profile: False
+profile_start_step: 5
+profile_stop_step: 7
+init_start_profile: True
+profile_communication: True
+profile_memory: True
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "glm4"
+    save_checkpoint_steps: 1000
+    keep_checkpoint_max: 1
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor
+    keep_last: False
+eval_callbacks:
+  - type: ObsMonitor
+    keep_last: False
+
+# ==== runner config ====
+runner_config:
+  epochs: 1
+  batch_size: 8
+  sink_mode: True
+  sink_size: 4

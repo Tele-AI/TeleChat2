@@ -1,0 +1,187 @@
+seed: 42
+run_mode: 'finetune'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+
+# ==== context config ====
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "58GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  jit_config:
+   jit_level: "O1"
+  memory_optimize_level: "O0"
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+
+# ==== model config ====
+model:
+  model_config:
+    type: ChatGLM2Config
+    batch_size: 1  # only for incremental infer
+    num_layers: 40
+    padded_vocab_size: 151552
+    hidden_size: 4096
+    ffn_hidden_size: 13696
+    kv_channels: 128
+    num_attention_heads: 32
+    seq_length: 8192
+    hidden_dropout: 0.0
+    attention_dropout: 0.0
+    layernorm_epsilon: 1.5625e-07
+    rope_ratio: 1
+    rmsnorm: True
+    apply_residual_connection_post_layernorm: False
+    post_layer_norm: True
+    add_bias_linear: False
+    add_qkv_bias: True
+    bias_dropout_fusion: True
+    multi_query_attention: True
+    multi_query_group_num: 2
+    apply_query_key_layer_scaling: True
+    attention_softmax_in_fp32: True
+    fp32_residual_connection: False
+    quantization_bit: 0
+    pre_seq_len: None
+    prefix_projection: False
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    param_init_type: "float32"
+    rotary_dtype: "float32"
+    use_past: False
+    use_flash_attention: True # when use FlashAttention, seq_length should be multiple of 16
+    eos_token_id: [151329, 151336, 151338]
+    pad_token_id: 151329
+    repetition_penalty: 1.0
+    max_decode_length: 512
+    checkpoint_name_or_path: ""
+    top_k: 1
+    top_p: 1
+    do_sample: False
+    offset: [-1, 0, 1, 0]
+  arch:
+    type: ChatGLM2ForConditionalGeneration
+
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'glm4_9b'
+# if True do, evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+eval_step_interval: 500
+eval_epoch_interval: -1
+
+metric:
+  type: ADGENMetric
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    type: ChatGLM4Tokenizer
+    bos_token: '<sop>'
+    eos_token: '<eop>'
+    end_token: '</s>'
+    mask_token: '[MASK]'
+    gmask_token: '[gMASK]'
+    pad_token: '<pad>'
+    unk_token: '<unk>'
+    vocab_file: '/path/to/tokenizer.model'
+  type: GLMProcessor
+
+# ==== dataset config ====
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids", "labels"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+
+# ==== runner config ====
+runner_config:
+  epochs: 5
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  sink_mode: True
+  sink_size: 1
+
+runner_wrapper:
+  type: MFTrainOneStepCell
+  use_clip_grad: True
+
+# lr schedule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 1.e-6
+  lr_end: 1.e-6
+  warmup_ratio: 0
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9, 0.999]
+  eps: 1.e-8
+  learning_rate: 1.e-6
+  weight_decay: 0.01
+
+# parallel config
+use_parallel: True
+parallel:
+  parallel_mode: 1 # 0-dataset, 1-semi, 2-auto, 3-hybrid
+  gradients_mean: False  # 默认为False, 数据并行模式下为True
+  loss_repeated_mean: True
+  enable_alltoall: False
+  full_batch: True   # 默认为True, 数据并行模式必须设置为False
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True  # optimizer shard
+  strategy_ckpt_config:
+    save_file: "./ckpt_strategy.ckpt"
+parallel_config:
+  data_parallel: 2
+  model_parallel: 1
+  pipeline_stage: 4
+  micro_batch_num: 64
+  vocab_emb_dp: False
+  use_seq_parallel: True
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# recompute
+recompute_config:
+  recompute: [6, 3, 2, 3]
+  select_recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "glm4"
+    save_checkpoint_steps: 1000
+    keep_checkpoint_max: 1
+    integrated_save: False
+    async_save: False
+eval_callbacks:
+  - type: ObsMonitor
+    keep_last: False

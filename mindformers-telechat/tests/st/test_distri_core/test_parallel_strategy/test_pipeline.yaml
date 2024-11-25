@@ -1,0 +1,25 @@
+seed: 0
+output_dir: "./output"
+
+training:
+  epochs: 1
+  batch_size: 2
+
+parallel_config:
+  tensor_model_parallel_size: 1
+  pipeline_model_parallel_size: 4
+  context_parallel_size: 1
+  expert_model_parallel_size: 1
+  micro_batch_num: 8
+  pipeline_dtype: "float32"
+  reduction: "mean"
+  sequence_parallel: False
+  model_customize_staged: False
+
+model_config:
+  seq_length: 64
+  vocab_size: 256
+  num_layers: 8
+  hidden_size: 128
+  pad_token_id: -100
+  share_embedding_weight: False

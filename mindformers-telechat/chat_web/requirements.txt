@@ -1,0 +1,5 @@
+fastapi[all]
+sse_starlette
+gradio==3.34.0
+gradio_client==0.2.7
+pydantic==1.10.11

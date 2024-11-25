@@ -1,0 +1,94 @@
+llama:
+  input_path:
+  output_path:
+  dtype:
+  model_class: LlamaForCausalLM
+
+glm:
+  input_path:
+  output_path:
+  dtype:
+  model_class: AutoModel
+
+qwen:
+  input_path:
+  output_path:
+  dtype:
+  model_class: AutoModelForCausalLM
+
+internlm:
+  input_path:
+  output_path:
+  dtype:
+  model_class: AutoModelForCausalLM
+
+baichuan:
+  input_path:
+  output_path:
+  dtype:
+  model_class: AutoModelForCausalLM
+
+gpt:
+  input_path:
+  output_path:
+  dtype:
+  layers:
+
+
+bloom:
+  input_path:
+  output_path:
+  dtype:
+  n_head: 16 # 16 for bloom_560m or 32 for bloom_7.1b
+  hidden_size: 1024 # 1024 for bloom_560m or 4096 for bloom_7.1b
+
+blip:
+  input_path:
+  output_path:
+  dtype:
+
+wizardcoder:
+  input_path:
+  output_path:
+  dtype:
+  layers:
+  model_class: GPTBigCodeForCausalLM
+
+skywork:
+  input_path:
+  output_path:
+  dtype:
+  model_class: LlamaForCausalLM
+
+glm2:
+  input_path:
+  output_path:
+  dtype:
+  model_class: AutoModel
+
+mae:
+  input_path:
+  output_path:
+  dtype:
+
+vit:
+  input_path:
+  output_path:
+  dtype:
+
+swin:
+  input_path:
+  output_path:
+  dtype:
+
+codegeex2:
+  input_path:
+  output_path:
+  model_class: AutoModel
+  dtype:
+
+knowlm:
+  input_path:
+  output_path:
+  dtype:
+  model_class: LlamaForCausalLM

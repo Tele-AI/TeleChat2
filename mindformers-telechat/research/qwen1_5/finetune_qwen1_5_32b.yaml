@@ -1,0 +1,208 @@
+seed: 42
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: '' # can set in run_command --load_checkpoint
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+run_mode: 'finetune'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'qwen1_5_32b'
+
+# if True, do evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+eval_step_interval: -1        # num of step intervals between each eval, -1 means no step end eval.
+eval_epoch_interval: 50        # num of epoch intervals between each eval, 1 means eval on every epoch end.
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 1
+  sink_mode: True
+  sink_size: 2
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    loss_scale_value: 4096
+    scale_factor: 2
+    scale_window: 1000
+  use_clip_grad: True
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9, 0.95]
+  eps: 1.e-8
+  learning_rate: 1.25e-6
+  weight_decay: 0.1
+
+# lr sechdule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 1.25e-6
+  lr_end: 1.25e-7
+  warmup_ratio: 0.01
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids", "target_ids", "attention_mask"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+
+# eval dataset
+eval_dataset: &eval_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids", "target_ids", "attention_mask"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: False
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+eval_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *eval_dataset
+
+use_parallel: True
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+# default parallel of device num = 32 910B
+parallel_config:
+  data_parallel: 1
+  model_parallel: 8
+  pipeline_stage: 4
+  use_seq_parallel: True
+  optimizer_shard: True  # optimizer_shard == enable_parallel_optimizer
+  micro_batch_num: 512
+  vocab_emb_dp: False
+  gradient_aggregation_group: 8
+# The size of micro_batch must be greater than or equal to stage_num(pipeline_stage).
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# recompute config
+recompute_config:
+  recompute: False
+  select_recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: False
+  recompute_slice_activation: False
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "qwen2"
+    save_checkpoint_steps: 500
+    keep_checkpoint_max: 1
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor
+
+# mindspore context init config
+context:
+  jit_config:
+    jit_level: "O1"
+  memory_optimize_level: "O0"
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "57GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  ascend_config:
+    precision_mode: "must_keep_origin_dtype"
+
+# model config
+model:
+  model_config:
+    type: LlamaConfig
+    batch_size: 1
+    seq_length: 8192
+    hidden_size: 5120
+    num_layers: 64
+    num_heads: 40
+    n_kv_heads: 8
+    vocab_size: 152064
+    intermediate_size: 27392
+    qkv_has_bias: True
+    rms_norm_eps: 1.0e-6
+    theta: 1000000.0
+    max_position_embedding: 8192
+    emb_dropout_prob: 0.0
+    eos_token_id: 151643
+    pad_token_id: 151643
+    bos_token_id: 151643
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float16"
+    param_init_type: "float32"
+    use_flash_attention: True
+    use_past: False
+    fine_grain_interleave: 2
+    offset: 0
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1
+    max_decode_length: 2048
+    top_k: 0
+    top_p: 0.8
+    do_sample: False
+    compute_in_2d: True
+    is_dynamic: False
+    # configuration items copied from Qwen
+    rotary_pct: 1.0
+    rotary_emb_base: 1000000
+    kv_channels: 128
+
+  arch:
+    type: LlamaForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    model_max_length: 32768
+    vocab_file: "path/vocab.json" # can set in run_command --vocab_file
+    merges_file: "path/merges.txt" # can set in run_command --merges_file
+    unk_token: "<|endoftext|>"
+    eos_token: "<|endoftext|>"
+    pad_token: "<|endoftext|>"
+    type: Qwen2Tokenizer
+  type: Qwen2Processor
+

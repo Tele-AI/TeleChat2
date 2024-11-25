@@ -1,0 +1,71 @@
+training_config:
+  seed: 1921
+  output_dir: './output'
+  training_iters: 10
+  log_interval: 1
+  eval_interval: null
+  save_interval: null
+  loss_scale: 1
+
+  loss_reduction: "mean"
+  loss_func_kwargs:
+    loss_func_type: "CrossEntropyLoss"
+  checkpoint_dir: "./data/golden_mixtral.pt"
+
+dataset_config:
+  batch_size: 1
+  micro_batch_num: 1
+  dataset_dir: 'data'
+  shuffle: False
+  drop_remainder: True
+  pad_token: 0
+  dataset_dir: "./data/golden_mixtral_input_and_loss.npy"
+
+parallel_config:
+  tensor_model_parallel_size: 2
+  pipeline_model_parallel_size: 1
+  context_parallel_size: 1
+  expert_model_parallel_size: 2
+  sequence_parallel: True
+
+model_config:
+  num_layers: 2
+  seq_length: 4
+  num_attention_heads: 16
+  hidden_size: 32
+  ffn_hidden_size: 128
+  vocab_size: 64
+  group_query_attention: True
+  num_query_groups: 8
+  attention_type: 'self_attn'
+  qkv_has_bias: False
+  out_proj_has_bias: False
+  params_dtype: "float32"
+  init_method: 'normal'
+  compute_dtype: "float32"
+  softmax_compute_dtype: "float32"
+  hidden_dropout: 0.0
+  attention_dropout: 0.0
+  mask_func_type: "attn_mask_fill"
+  mlp_has_bias: False
+  gated_linear_unit: True
+  hidden_act: 'swiglu'
+  apply_residual_connection_post_norm: False
+  normalization: 'FusedRMSNorm'
+  norm_epsilon: 1.e-5
+  untie_embeddings_and_output_weights: True
+  position_embedding_type: 'rope'
+  add_bias_linear: False
+
+moe_config:
+  num_experts: 4
+  moe_router_topk: 2
+  moe_token_dispatcher_type: 'alltoall'
+  moe_z_loss_coeff: 1.e-3
+  moe_aux_loss_coeff: 1.e-2
+  moe_router_load_balancing_type: 'aux_loss' # ['none', 'aux_loss']
+  moe_input_noise_eps: null
+  moe_expert_capacity_factor: -1
+  moe_token_drop_policy: null
+  moe_pad_expert_input_to_capacity: False
+  use_self_defined_alltoall: False

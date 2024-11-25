@@ -1,0 +1,154 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+run_mode: 'predict'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'llama3_70b'
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 1
+  sink_mode: True
+  sink_size: 2
+
+# eval dataset
+eval_dataset: &eval_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: False
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+eval_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *eval_dataset
+
+use_parallel: True
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+# default parallel of device num = 8 for Atlas 800T A2
+parallel_config:
+  data_parallel: 1
+  model_parallel: 4
+  pipeline_stage: 1
+  use_seq_parallel: False
+  micro_batch_num: 1
+  vocab_emb_dp: True
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "58GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+
+# model config
+model:
+  model_config:
+    type: LlamaConfig
+    batch_size: 1 # add for increase predict
+    seq_length: 8192
+    hidden_size: 8192
+    num_layers: 80
+    num_heads: 64
+    n_kv_heads: 8
+    ffn_dim_multiplier: 1.3
+    multiple_of: 256
+    vocab_size: 128256
+    rms_norm_eps: 1.0e-5
+    bos_token_id: 128000
+    eos_token_id: 128001
+    pad_token_id: 128002
+    ignore_token_id: -100
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "bfloat16"
+    param_init_type: "bfloat16"
+    is_dynamic: True
+    use_past: True
+    scaling_factor: 1.0
+    theta: 500000
+    extend_method: "None" # support "None", "PI", "NTK"
+    use_flash_attention: True # FA can accelerate training or finetune
+    offset: 0
+    fine_grain_interleave: 1
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1
+    max_decode_length: 512
+    block_size: 16
+    num_blocks: 512
+    top_k: 3
+    top_p: 1
+    do_sample: False
+  arch:
+    type: LlamaForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    model_max_length: 8192
+    vocab_file: "/path/tokenizer.model"
+    pad_token: "<|reserved_special_token_0|>"
+    type: Llama3Tokenizer
+  type: LlamaProcessor
+
+# metric
+metric:
+  type: PerplexityMetric
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense: 1.0
+  use_clip_grad: True
+
+eval_callbacks:
+  - type: ObsMonitor
+
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+profile: False
+profile_start_step: 4
+profile_stop_step: 8
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+layer_scale: False
+layer_decay: 0.65
+lr_scale_factor: 256
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."

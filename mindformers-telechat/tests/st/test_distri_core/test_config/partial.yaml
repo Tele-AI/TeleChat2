@@ -1,0 +1,48 @@
+training_config:
+  seed: 42
+  output_dir: './output'
+  training_iters: 10
+  log_interval: 1
+  eval_interval: 5
+  save_interval: null
+  loss_scale_value: 4096
+  loss_scale_factor: 2
+  loss_scale_window: 1000
+  grad_clip_kwargs:
+    grad_clip_type: "GradClipByValue"
+    clip_value: 1.0
+  loss_func_kwargs:
+    loss_func_type: "CrossEntropyLoss"
+    reduction: "mean"
+  eval_metric: "perplexity"
+
+parallel_config:
+  tensor_model_parallel_size: 1
+  pipeline_model_parallel_size: 1
+  context_parallel_size: 1
+  expert_model_parallel_size: 1
+  sequence_parallel: False
+
+dataset_config:
+  batch_size: 1
+  micro_batch_num: 1
+  dataset_dir: 'dataset'
+  shuffle: False
+  drop_remainder: True
+  eod_id: 50256
+
+optimizer_config:
+  optimizer_type: "AdamWeightDecay"
+  beta1: 0.9
+  beta2: 0.95
+  eps: 1.e-8
+  learning_rate: 1.e-4
+  weight_decay: 1.e-1
+  learning_rate_scheduler_kwargs:
+    warmup_steps: 200
+    decay_steps: 2000
+    use_cosine: True
+    end_learning_rate: 1.e-6
+
+extra_config:
+  foo: 1

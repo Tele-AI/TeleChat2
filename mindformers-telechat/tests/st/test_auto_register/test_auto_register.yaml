@@ -1,0 +1,48 @@
+model:
+  model_config:
+    type: TestCommonAPI
+    auto_register: register_module_file.TestCommonAPI
+  arch:
+    type: TestCommonAPI
+    auto_register: register_module_file.TestCommonAPI
+
+
+metric:
+  type: TestCommonAPI
+  auto_register: register_module_file.TestCommonAPI
+
+
+runner_wrapper:
+  type: TestCommonAPI
+  auto_register: register_module_file.TestCommonAPI
+
+# optimizer
+optimizer:
+  type: TestCommonAPI
+  auto_register: register_module_file.TestCommonAPI
+
+# lr schedule
+lr_schedule:
+  type: TestCommonAPI
+  auto_register: register_module_file.TestCommonAPI
+
+
+callbacks:
+  - type: TestCommonAPI
+    auto_register: register_module_file.TestCommonAPI
+
+trainer:
+  type: TestCommonAPI
+  auto_register: register_module_file.TestCommonAPI
+
+
+pipeline:
+  type: TestCommonAPI
+  auto_register: register_module_file.TestCommonAPI
+
+processor:
+  type: TestProcessor
+  auto_register: register_module_file.TestProcessor
+  tokenizer:
+    type: TestTokenizer
+    auto_register: register_module_file.TestTokenizer

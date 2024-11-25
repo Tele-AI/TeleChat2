@@ -1,0 +1,227 @@
+seed: 0
+output_dir: './output'
+load_checkpoint: ""
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False
+only_save_strategy: False
+resume_training: False
+run_mode: 'finetune'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'qwen2-57b-a14b'
+
+do_eval: false
+eval_step_interval: -1
+eval_epoch_interval: 1
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9,0.95]
+  eps: 1.e-8
+  weight_decay: 0.01
+
+# moe
+moe_config:
+  expert_num: 64
+  capacity_factor: 1.1
+  aux_loss_factor: 0.001
+  num_experts_chosen: 8
+  routing_policy: "TopkRouterV2"
+  enable_sdrop: True
+  router_dense_type: "float32"
+  shared_expert_num: 8.0
+  use_shared_expert_gating: True
+  use_fused_ops_topkrouter: True
+  norm_topk_prob: False
+
+# lr sechdule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 1.e-5
+  lr_end: 1.e-5
+  warmup_ratio: 0.0
+  total_steps: -1
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids", "target_ids", "attention_mask"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 4
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+
+
+# eval dataset
+eval_dataset: &eval_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: False
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+eval_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *eval_dataset
+
+use_parallel: True
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: True
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+# default parallel of device num = 8 910A
+parallel_config:
+  data_parallel: 4
+  expert_parallel: 4
+  model_parallel: 4
+  pipeline_stage: 2
+  use_seq_parallel: True
+  micro_batch_num: 8
+  vocab_emb_dp: False
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# recompute config
+recompute_config:
+  recompute: True
+  select_recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+# callbacks
+callbacks:
+ - type: MFLossMonitor
+ - type: ObsMonitor
+
+context:
+  jit_config:
+    jit_level: "O1"
+  memory_optimize_level: "O1"
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "58GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+
+# model config
+model:
+  model_config:
+    type: LlamaConfig
+    batch_size: 1 # add for increase predict
+    seq_length: 32768
+    max_position_embedding: 32768
+    hidden_size: 3584
+    intermediate_size: 2560
+    theta: 1000000
+    num_layers: 28
+    num_heads: 28
+    vocab_size: 151936
+    n_kv_heads: 4
+    rms_norm_eps: 1.0e-6
+    bos_token_id: 151643
+    pad_token_id: 151643
+    eos_token_id: [151645, 151643]
+    ignore_token_id: -100
+    qkv_has_bias: True
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float16"
+    rotary_dtype: "float32"
+    param_init_type: "float32"
+    use_past: False
+    extend_method: "None" # support "None", "PI", "NTK"
+    use_flash_attention: True
+    use_past_shard: False
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1
+    max_decode_length: 512
+    top_k: 3
+    top_p: 1
+    do_sample: False
+    is_dynamic: False
+    use_attn_mask_compression: True
+  arch:
+    type: LlamaForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    model_max_length: 32768
+    vocab_file: ""
+    merges_file: ""
+    unk_token: "<|endoftext|>"
+    eos_token: "<|endoftext|>"
+    pad_token: "<|endoftext|>"
+    type: Qwen2Tokenizer
+  type: Qwen2Processor
+
+# metric
+metric:
+  type: PerplexityMetric
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    loss_scale_value: 4096
+    scale_factor: 2
+    scale_window: 1000
+  use_clip_grad: True
+
+eval_callbacks:
+  - type: ObsMonitor
+
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+profile: False
+profile_start_step: 2
+profile_stop_step: 4
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+layer_scale: False
+layer_decay: 0.65
+lr_scale_factor: 256
+
+# aicc
+remote_save_url: ""

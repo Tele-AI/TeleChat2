@@ -1,0 +1,231 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ""
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+use_parallel: False
+run_mode: 'finetune'
+
+# trainer config
+trainer:
+  type: MultiModalToTextGenerationTrainer
+  model_name: 'cogvlm2-video-llama3-chat'
+
+# runner config
+runner_config:
+  epochs: 3
+  batch_size: 1
+  sink_mode: False
+  sink_size: 2
+  gradient_accumulation_steps: 1
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "cogvlm2-video-llama3-chat"
+    save_checkpoint_steps: 2000
+    keep_checkpoint_max: 3
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor
+
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    loss_scale_value: 1
+    scale_factor: 2
+    scale_window: 2000
+  use_clip_grad: True
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas:
+    - 0.9
+    - 0.95
+  eps: 1.e-8
+  weight_decay: 0.1
+
+# lr schedule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  warmup_ratio: 0.05
+  learning_rate: 1.e-4
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+
+# default parallel of device num = 8 for Atlas 800T A2
+parallel_config:
+  data_parallel: 8
+  model_parallel: 1
+  pipeline_stage: 1
+  micro_batch_num: 1
+  vocab_emb_dp: False
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# recompute config
+recompute_config:
+  recompute: False
+  select_recompute: False
+  parallel_optimizer_comm_recompute: True
+  mp_comm_recompute: False
+  recompute_slice_activation: True
+
+model:
+  model_config:
+    type: CogVLM2Config
+    use_past: False
+    is_dynamic: False
+    block_size: 16
+    num_blocks: 512
+    freeze_vision: True
+    freeze_adapter: True
+    freeze_llm: False
+
+    vision_model:
+      arch:
+        type: EVAModel
+      model_config:
+        type: EVA02Config
+        image_size: 224
+        patch_size: 14
+        hidden_size: 1792
+        num_hidden_layers: 63
+        num_attention_heads: 16
+        intermediate_size: 15360
+        layer_norm_eps: 1e-6
+        use_abs_pos_emb: True
+        use_rot_pos_emb: False
+        use_qkv_fused: True
+        use_qkv_simple: True
+        use_swiglu: False
+        use_scale_mlp: False
+        use_post_norm: True
+        use_attn_norm: False
+        post_norm: True
+        class_token: True
+        with_cls_token: False
+        compute_dtype: "bfloat16"
+        layer_norm_type: "float32"
+        rotary_emb_type: "float32"
+        param_init_type: "float16"
+
+    llm_model:
+      arch:
+        type: CogVLM2VideoLM
+      model_config:
+        type: LlamaConfig
+        batch_size: 1 # add for increase predict
+        seq_length: &seq_length 2048
+        hidden_size: 4096
+        num_layers: 32
+        num_heads: 32
+        n_kv_heads: 8
+        vocab_size: 128256
+        intermediate_size: 14336
+        rms_norm_eps: 1.0e-5
+        bos_token_id: 128000
+        eos_token_id: 128001
+        pad_token_id: 128002
+        ignore_token_id: -100
+        compute_dtype: "bfloat16"
+        layernorm_compute_type: "float32"
+        softmax_compute_type: "float32"
+        rotary_dtype: "float32"
+        param_init_type: "float16"
+        embedding_init_type: "float32"
+        scaling_factor: 1.0
+        theta: 500000
+        extend_method: "None" # support "None", "PI", "NTK"
+        use_flash_attention: True # FA can accelerate training or finetune
+        offset: 0
+        fine_grain_interleave: 1
+        repetition_penalty: 1
+        max_decode_length: 2048
+        top_k: 3
+        top_p: 1
+        do_sample: False
+        pet_config:
+          pet_type: lora
+          lora_rank: 8
+          lora_alpha: 32
+          lora_dropout: 0.05
+          param_init_type: "float32"
+          target_modules: '.*wq|.*wk|.*wv|.*wo|.*w1|.*w2|.*w3'
+  arch:
+    type: CogVLM2ForCausalLM
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: BaseMultiModalDataLoader
+    annotation_file: "RWF-2000/train.json"
+    shuffle: True
+  num_parallel_workers: 1
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+  seed: 2022
+  modal_to_text_transform:
+    type: BaseXModalToTextTransform
+    max_length: *seq_length
+    model_transform_template:
+      type: CogVLM2ContentTransformTemplate
+      output_columns: [ "input_ids", "images", "video_context_pos", "position_ids", "labels" ]
+      signal_type: "chat"
+      mode: 'train'
+  tokenizer:
+    add_bos_token: False
+    add_eos_token: False
+    max_length: 2048
+    pad_token: "<|reserved_special_token_0|>"
+    vocab_file: "/{path}/tokenizer.model"
+    type: CogVLM2Tokenizer
+train_dataset_task:
+  type: ModalToTextSFTDataset
+  dataset_config: *train_dataset
+
+# mindspore context init config
+context:
+  mode: 0 # 0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  ascend_config:
+    precision_mode: "must_keep_origin_dtype"
+  max_call_depth: 10000
+  max_device_memory: "58GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  jit_level: 'O1'
+  infer_boost: 'off'
+
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True
+  strategy_ckpt_config:
+    save_file: "./ckpt_strategy.ckpt"
+    only_trainable_params: False
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+profile: False
+profile_start_step: 5
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True

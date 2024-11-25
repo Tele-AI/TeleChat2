@@ -1,0 +1,51 @@
+training_config:
+  epochs: 1
+  training_iters: 2
+  log_interval: 1
+  loss_scale_value: 1
+  loss_scale_factor: 2
+  loss_scale_window: 1000
+  loss_reduction: "mean"
+
+parallel_config:
+  tensor_model_parallel_size: 1
+  pipeline_model_parallel_size: 1
+  context_parallel_size: 1
+  expert_model_parallel_size: 1
+  sequence_parallel: False
+  recv_dtype: "float32"
+  model_customize_staged: False
+
+model_config:
+  seq_length: 32
+  vocab_size: 128
+  num_layers: 4
+  num_attention_heads: 4
+  hidden_size: 64
+  ffn_hidden_size: 256
+  params_dtype: "float32"
+  compute_dtype: "float32"
+  softmax_compute_dtype: "float32"
+  hidden_dropout: 0.0
+  attention_dropout: 0.0
+  init_method: 'normal'
+  position_embedding_type: 'rope'
+  use_final_norm: False
+  use_query_layer: False
+  use_visual_encoder: False
+  fp16_lm_cross_entropy: False
+  untie_embeddings_and_output_weights: False
+  apply_residual_connection_post_norm: False
+  qkv_has_bias: True
+  out_proj_has_bias: False
+  mask_func_type: "attn_mask_add"
+  attention_type: 'self_attn'
+  normalization: "FusedRMSNorm"
+  norm_epsilon: 0.00001
+  hidden_act: "gelu"
+  mlp_has_bias: True
+
+dataset_config:
+  eod_id: -100
+  batch_size: 8
+  micro_batch_num: 1

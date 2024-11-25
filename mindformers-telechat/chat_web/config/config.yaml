@@ -1,0 +1,25 @@
+server:
+  host: "0.0.0.0"
+  port: 11111  # the port that server is listening
+  uvicorn_level: 'info'
+  access_log: True  # whether open server logging
+
+web_demo:
+  host: "0.0.0.0"
+  port: 7860
+
+model:
+  config: ""
+  device_num: 1
+  device_id: 0
+  device_range: [0,8]
+  rank_table_file: ""
+  hccl_connect_time: "3600"
+
+default_generation_args:
+  do_sample: False
+  top_p: 1
+  top_k: 1
+  temperature: 1
+  repetition_penalty: 1
+  max_length: 512

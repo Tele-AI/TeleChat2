@@ -1,0 +1,230 @@
+seed: 0
+output_dir: './output'
+run_mode: 'finetune'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'qwen2_05b'
+# if True, do evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+eval_step_interval: -1        # num of step intervals between each eval, -1 means no step end eval.
+eval_epoch_interval: 50        # num of epoch intervals between each eval, 1 means eval on every epoch end.
+
+# runner config
+runner_config:
+  epochs: 1
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+  gradient_accumulation_steps: 32
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    loss_scale_value: 4096
+    scale_factor: 1
+    scale_window: 100000
+  use_clip_grad: True
+  max_grad_norm: 1.0
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9, 0.95]
+  eps: 1.e-8
+  learning_rate: 1.e-6
+  weight_decay: 0.01
+
+# lr schedule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 1.e-6
+  lr_end: 1.e-6
+  warmup_ratio: 0
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids", "target_ids", "attention_mask"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+
+# eval dataset
+eval_dataset: &eval_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids", "target_ids", "attention_mask"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: False
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+eval_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *eval_dataset
+
+use_parallel: True
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  enable_parallel_optimizer: True
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+# default parallel of device num = 8 910B
+parallel_config:
+  data_parallel: 4
+  model_parallel: 2
+  pipeline_stage: 1
+  context_parallel: 1
+  use_seq_parallel: True
+  micro_batch_num: 32
+  vocab_emb_dp: False
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# recompute config
+recompute_config:
+  recompute: False
+  select_recompute: True
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: False
+  recompute_slice_activation: False
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "qwen2"
+    save_checkpoint_steps: 5000
+    keep_checkpoint_max: 1
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "58GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  memory_optimize_level: "O0"
+  jit_config:
+    jit_level: "O1"
+  ascend_config:
+    precision_mode: "must_keep_origin_dtype"
+
+# model config
+model:
+  model_config:
+    use_attn_mask_compression: True
+    type: LlamaConfig
+    batch_size: 1
+    seq_length: 32768
+    hidden_size: 896
+    num_layers: 24
+    num_heads: 14
+    n_kv_heads: 2
+    vocab_size: 151936
+    initializer_range: 0.02
+    intermediate_size: 4864
+    qkv_has_bias: True
+    rms_norm_eps: 1.0e-6
+    theta: 1000000.0
+    max_position_embedding: 131072
+    emb_dropout_prob: 0.0
+    eos_token_id: 151643
+    pad_token_id: 151643
+    bos_token_id: 151643
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float32"
+    param_init_type: "float32"
+    use_past: False
+    use_flash_attention: True
+    use_past_shard: False
+    offset: 0
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1.05
+    max_decode_length: 1024
+    top_k: 0
+    top_p: 0.8
+    do_sample: False
+    extend_method: "None" # support "None", "PI", "NTK"
+    fine_grain_interleave: 2
+    qkv_concat: false
+    # configuration items copied from Qwen
+    rotary_pct: 1.0
+    rotary_emb_base: 1000000
+    tie_word_embeddings: True
+
+  arch:
+    type: LlamaForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    model_max_length: 131072
+    vocab_file: "path/vocab.json"
+    merges_file: "path/merges.txt"
+    unk_token: None
+    pad_token: "<|endoftext|>"
+    eos_token: "<|endoftext|>"
+    type: Qwen2Tokenizer
+  type: Qwen2Processor
+
+# metric
+metric:
+  type: PerplexityMetric
+
+eval_callbacks:
+  - type: ObsMonitor
+
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+layer_scale: False
+layer_decay: 0.65
+lr_scale_factor: 256
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+

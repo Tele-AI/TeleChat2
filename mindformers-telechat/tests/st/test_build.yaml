@@ -1,0 +1,95 @@
+model:
+  model_config:
+    type: TestModelConfig
+    text_config:
+      type: TestTextConfig
+    vision_config:
+      type: TestVisionConfig
+  arch:
+    type: TestModel
+
+loss:
+  type: TestL1Loss
+  reduction: 'mean'
+
+metric:
+  type: TestAccuracy
+  eval_type: 'classification'
+
+
+train_dataset: &train_dataset
+  data_loader:
+    type: TestDataLoader
+    dataset_dir: "/dataset/imageNet-1k/train"
+  transforms:
+    - type: TestTransforms1
+    - type: TestTransforms1
+  sampler:
+    type: TestSampler
+  mask_policy:
+    type: TestModelMask
+  input_columns: ["image"]
+  output_columns: [ "image", "mask"]
+  column_order: [ "image", "mask"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 128
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 30
+
+train_dataset_task:
+  type: TestDataset
+  dataset_config: *train_dataset
+
+runner_wrapper:
+  type: TestTrainOneStepWithLossScaleCell
+  scale_sense: 1024
+
+# optimizer
+optimizer:
+  type: TestAdamWeightDecay
+  beta1: 0.9
+  beta2: 0.999
+  eps: 0.00000001 # 1e-8
+  weight_decay: 0.05
+
+# lr schedule
+lr_schedule:
+  type: TestCosineDecayLR
+  max_lr: 0.00015
+  min_lr: 0.
+  decay_steps: 100
+
+runner_config:
+  epoch: 800
+  batch_size: 64
+  image_size: 224
+  sink_mode: True
+  sink_size: 1
+  initial_epoch: 0
+  has_trained_epoches: 0
+  has_trained_steps: 0
+  load_checkpoint:
+
+callbacks:
+  - type: TestLLossMonitor
+    per_print_times: 10
+  - type: TestTimeMonitor
+    data_size: 100
+
+
+do_train: True
+do_eval: False
+do_predict: False
+
+trainer:
+  type: TestTaskTrainer
+  model_name: 'mae'
+
+pipeline:
+  type: TestPipeline
+
+processor:
+  type: TestProcessor

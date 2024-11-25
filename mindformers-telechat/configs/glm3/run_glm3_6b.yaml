@@ -1,0 +1,249 @@
+seed: 0
+run_mode: 'train'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+
+# ==== context config ====
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "59GB" # 59GB for Atlas 800T A2
+  save_graphs: False
+  device_id: 0
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+
+# ==== model config ====
+model:
+  model_config:
+    type: ChatGLM2Config
+    batch_size: 1   # only for incremental infer
+    num_layers: 28
+    padded_vocab_size: 65024
+    hidden_size: 4096
+    ffn_hidden_size: 13696
+    kv_channels: 128
+    num_attention_heads: 32
+    seq_length: 193
+    hidden_dropout: 0.0
+    attention_dropout: 0.0
+    layernorm_epsilon: 1e-5
+    rmsnorm: True
+    apply_residual_connection_post_layernorm: False
+    post_layer_norm: True
+    add_bias_linear: False
+    add_qkv_bias: True
+    bias_dropout_fusion: True
+    multi_query_attention: True
+    multi_query_group_num: 2
+    apply_query_key_layer_scaling: True
+    attention_softmax_in_fp32: True
+    fp32_residual_connection: False
+    quantization_bit: 0
+    pre_seq_len: None
+    prefix_projection: False
+    param_init_type: "bfloat16"
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    use_past: False
+    use_flash_attention: False # when use FlashAttention, seq_length should be multiple of 16
+    eos_token_id: 2
+    pad_token_id: 0
+    repetition_penalty: 1.0
+    max_decode_length: 256
+    checkpoint_name_or_path: "glm3_6b"
+    top_k: 1
+    top_p: 1
+    do_sample: True
+  arch:
+    type: ChatGLM2ForConditionalGeneration
+
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'glm3_6b'
+# if True do, evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+eval_step_interval: 500
+eval_epoch_interval: -1
+
+metric:
+  type: ADGENMetric
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    type: ChatGLM3Tokenizer
+    bos_token: '<sop>'
+    eos_token: '<eop>'
+    end_token: '</s>'
+    mask_token: '[MASK]'
+    gmask_token: '[gMASK]'
+    pad_token: '<pad>'
+    unk_token: '<unk>'
+    # vocab_file: "/path/to/tokenizer.model"
+  type: GLMProcessor
+
+# ==== dataset config ====
+train_dataset: &train_dataset
+  data_loader:
+    type: ADGenDataLoader
+    dataset_dir: "/path/to/AdvertiseGen/train.json"
+    phase: "train"
+    version: 2
+    shuffle: True
+    origin_columns: ["content", "summary"]
+  tokenizer:
+    type: ChatGLM3Tokenizer
+    vocab_file: "/path/to/tokenizer.model"
+  input_columns: ["input_ids", "labels"]
+  max_source_length: 64
+  max_target_length: 128
+  ignore_pad_token_for_loss: True
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+  seed: 0
+
+train_dataset_task:
+  type: KeyWordGenDataset
+  dataset_config: *train_dataset
+
+eval_dataset: &eval_dataset
+  data_loader:
+    type: ADGenDataLoader
+    dataset_dir: "/path/to/AdvertiseGen/dev.json"
+    shuffle: False
+    phase: "eval"
+    version: 2
+    origin_columns: ["content", "summary"]
+  tokenizer:
+    type: ChatGLM3Tokenizer
+    vocab_file: "/path/to/tokenizer.model"
+  max_source_length: 256
+  max_target_length: 256
+  ignore_pad_token_for_loss: True
+  input_columns: ["input_ids", "labels"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+  seed: 0
+
+eval_dataset_task:
+  type: KeyWordGenDataset
+  dataset_config: *eval_dataset
+
+# ==== runner config ====
+runner_config:
+  epochs: 1
+  batch_size: 8
+  sink_mode: True
+  sink_size: 4
+
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    loss_scale_value: 65536
+    scale_factor: 2
+    scale_window: 1000
+  use_clip_grad: True
+
+# lr schedule
+lr_schedule:
+  type: polynomial
+  learning_rate: 5.e-5
+  lr_end: 1.e-6
+  warmup_steps: 0
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+layer_scale: False
+layer_decay: 0.65
+
+# optimizer
+optimizer:
+  type: FP32StateAdamWeightDecay
+  beta1: 0.9
+  beta2: 0.95
+  eps: 1.e-8
+  weight_decay: 0.1
+lr_scale: False
+lr_scale_factor: 256
+
+# parallel config
+use_parallel: False
+parallel:
+  parallel_mode: 1 # 0-dataset, 1-semi, 2-auto, 3-hybrid
+  gradients_mean: False
+  loss_repeated_mean: True
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True  # optimizer shard
+  strategy_ckpt_config:
+    save_file: "./ckpt_strategy.ckpt"
+parallel_config:
+  data_parallel: 8
+  model_parallel: 1
+  pipeline_stage: 1
+  expert_parallel: 1
+  micro_batch_num: 1
+  vocab_emb_dp: True
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# moe
+moe_config:
+  expert_num: 1
+  capacity_factor: 1.05
+  aux_loss_factor: 0.05
+  num_experts_chosen: 1
+
+# recompute
+recompute_config:
+  recompute: True
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: False
+
+# autotune
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+# profile
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: True
+profile_communication: True
+profile_memory: True
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "glm3-6b"
+    save_checkpoint_steps: 1000
+    keep_checkpoint_max: 2
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor
+    keep_last: False
+eval_callbacks:
+  - type: ObsMonitor
+    keep_last: False

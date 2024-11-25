@@ -1,0 +1,241 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+use_parallel: True
+run_mode: 'train'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'deepseekV2'
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 1
+  sink_mode: True
+  sink_size: 2
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9, 0.95]
+  eps: 1.e-8
+  learning_rate: 3.e-4
+
+# lr schedule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 2.e-5
+  lr_end: 2.e-5
+  warmup_ratio: 0.0
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: "./dataset"
+    shuffle: False
+  input_columns: ["input_ids", "labels"]  # "input_ids" , labels are used in instruction finetune.
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+# if True, do evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+eval_step_interval: -1        # num of step intervals between each eval, -1 means no step end eval.
+eval_epoch_interval: 50        # num of epoch intervals between each eval, 1 means eval on every epoch end.
+
+# eval dataset
+eval_dataset: &eval_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False
+  input_columns: ["input_ids"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: False
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+eval_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *eval_dataset
+
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+    per_print_times: 1
+  - type: CheckpointMonitor
+    prefix: "deepseekv2"
+    save_checkpoint_steps: 1000
+    keep_checkpoint_max: 5
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  enable_graph_kernel: False
+  max_call_depth: 10000
+  max_device_memory: "59GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  jit_config:
+    jit_level: "O1"
+
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: True
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+# default parallel of device num = 16 for Atlas 800
+parallel_config:
+  data_parallel: 4
+  model_parallel: 8
+  pipeline_stage: 2
+  expert_parallel: 4
+  micro_batch_num: 20
+  vocab_emb_dp: True
+  use_seq_parallel: False
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# recompute config
+recompute_config:
+  recompute: True
+  select_recompute: False
+  parallel_optimizer_comm_recompute: True
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+# model config
+model:
+  model_config:
+    type: DeepseekV2Config
+    batch_size: 1 # add for increase predict
+    seq_length: 4096
+    hidden_size: 5120
+    num_layers: 60
+    num_heads: 128
+    max_position_embeddings: 163840
+    intermediate_size: 12288
+    kv_lora_rank: 512
+    q_lora_rank: 1536
+    qk_rope_head_dim: 64
+    v_head_dim: 128
+    qk_nope_head_dim: 128
+    vocab_size: 102400
+    multiple_of: 256
+    rms_norm_eps: 1.0e-6
+    bos_token_id: 100000
+    eos_token_id: 100001
+    pad_token_id: 100001
+    ignore_token_id: -100
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float32"
+    router_dense_type: "float32"
+    param_init_type: "bfloat16"
+    use_past: False
+    extend_method: "None"
+    use_flash_attention: False
+    offset: 0
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1
+    max_decode_length: 1024
+    top_k: 5
+    top_p: 1
+    theta: 10000.0
+    do_sample: False
+  arch:
+    type: DeepseekV2ForCausalLM
+
+#moe
+moe_config:
+  expert_num: 160
+  expert_group_size: 8
+  capacity_factor: 2.0
+  aux_loss_factor: 0.05
+  num_experts_chosen: 6
+  topk_method: "group_limited_greedy"
+  routing_policy: "TopkRouterV2"
+  enable_sdrop: True
+  use_fused_ops_topkrouter: True
+  shared_expert_num: 2
+  routed_scaling_factor: 16.0
+  norm_topk_prob: False
+  first_k_dense_replace: 1
+  moe_intermediate_size: 1536
+  # greedy_group_limited strategy, select topk_group from n_group
+  topk_group: 3
+  n_group: 8
+  aux_loss_factors: [0.003, 0.005, 0.002]
+  aux_loss_types: ["expert", "device", "comm"]
+  z_loss_factor: 0.0
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    unk_token: '<unk>'
+    bos_token: '<｜begin▁of▁sentence｜>'
+    eos_token: '<｜end▁of▁sentence｜>'
+    pad_token: '<｜end▁of▁sentence｜>'
+    type: LlamaTokenizerFast
+    tokenizer_file: './tokenizer.json'
+  type: LlamaProcessor
+
+# metric
+metric:
+  type: PerplexityMetric
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense: 1.0
+  use_clip_grad: True
+
+eval_callbacks:
+  - type: ObsMonitor
+
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+layer_scale: False
+layer_decay: 0.65
+lr_scale_factor: 256
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."

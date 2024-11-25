@@ -1,0 +1,55 @@
+training_config:
+  epochs: 10
+  log_interval: 1
+  loss_scale_value: 1
+  loss_scale_factor: 2
+  loss_scale_window: 1000
+  loss_reduction: "mean"
+
+parallel_config:
+  tensor_model_parallel_size: 1
+  pipeline_model_parallel_size: 4
+  context_parallel_size: 1
+  expert_model_parallel_size: 1
+  virtual_pipeline_model_parallel_size: null
+  sequence_parallel: False
+  recv_dtype: "float32"
+  model_customize_staged: False
+  overlap_grad_reduce: False
+
+model_config:
+  seq_length: 64
+  vocab_size: 256
+  num_layers: 8
+  hidden_size: 128
+  pad_token_id: -100
+  compute_dtype: "float32"
+  flatten_labels_and_input_mask: True
+  untie_embeddings_and_output_weights: True
+  num_attention_heads: 1
+  ffn_hidden_size: 1
+
+dataset_config:
+  batch_size: 2
+  micro_batch_num: 8
+  train_samples: 10000
+
+
+optimizer_config:
+  learning_rate: 0.0009
+  lr_decay_iters: 7000
+  lr_wsd_decay_iters: 7000
+  lr_warmup_fraction: 0.0005
+  lr_warmup_iters: 10000
+  lr_decay_samples: 7000
+  lr_wsd_decay_samples: 7000
+  lr_warmup_samples: 10000
+  lr_warmup_init: 0.0009
+  min_lr: 0.00001
+  lr_decay_style: "WSD"
+  start_weight_decay: 0.00001
+  end_weight_decay: 0.0009
+  weight_decay_incr_style: "cosine"
+  use_checkpoint_opt_param_scheduler: False
+  override_opt_param_scheduler: True
+  lr_wsd_decay_style: "exponential"
