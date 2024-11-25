@@ -1,0 +1,33 @@
+FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/ascend-mindspore:24.0.RC1-A2-openeuler20.03
+USER root
+
+RUN mkdir -p ~/miniconda3 && \
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh -O ~/miniconda3/miniconda.sh && \
+    bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
+
+RUN yum install -y hostname vim openssh-server git && \
+    mkdir /workspace && cd /workspace && \
+    wget https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%208.0.RC3/Ascend-cann-kernels-910b_8.0.RC3_linux-aarch64.run?response-content-type=application/octet-stream -O Ascend-cann-kernels-910b_8.0.RC3_linux-aarch64.run && \
+    wget https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%208.0.RC3/Ascend-cann-toolkit_8.0.RC3_linux-aarch64.run?response-content-type=application/octet-stream -O Ascend-cann-toolkit_8.0.RC3_linux-aarch64.run && \
+    git clone https://github.com/Tele-AI/TeleChat2.git
+
+RUN source ~/miniconda3/bin/activate && \
+    ~/miniconda3/bin/conda init bash && \
+    ~/miniconda3/bin/conda init zsh && \
+    conda create -y -n telechat python=3.10 && \
+    conda activate telechat && \
+    rm -rf /usr/local/Ascend/ascend-toolkit && \
+    chmod +x /workspace/Ascend-cann-toolkit_8.0.RC3_linux-aarch64.run && \
+    chmod +x /workspace/Ascend-cann-kernels-910b_8.0.RC3_linux-aarch64.run && \
+    /workspace/Ascend-cann-toolkit_8.0.RC3_linux-aarch64.run --quiet --install --install-for-all  && \
+    /workspace/Ascend-cann-kernels-910b_8.0.RC3_linux-aarch64.run --quiet --install --install-for-all && \
+    source /usr/local/Ascend/ascend-toolkit/set_env.sh && \
+    pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip install --no-cache-dir -r /workspace/TeleChat2/mindformers-telechat/requirements.txt && \
+    pip install --no-cache-dir https://ms-release.obs.cn-north-4.myhuaweicloud.com/2.4.0/MindSpore/unified/aarch64/mindspore-2.4.0-cp310-cp310-linux_aarch64.whl --trusted-host ms-release.obs.cn-north-4.myhuaweicloud.com && \
+    pip install --no-cache-dir sympy  jsonlines mindspore_gs  && \
+    pip install /usr/local/Ascend/ascend-toolkit/latest/lib64/te-*-py3-none-any.whl /usr/local/Ascend/ascend-toolkit/latest/lib64/hccl-*-py3-none-any.whl && \
+    mv /workspace/TeleChat2/mindformers-telechat /workspace/TeleChat2/mindformers && \
+    rm -rf /workspace/Ascend-cann-toolkit_8.0.RC3_linux-aarch64.run /workspace/Ascend-cann-kernels-910b_8.0.RC3_linux-aarch64.run  ~/miniconda3/miniconda.sh
+
+RUN echo 'conda activate telechat' >> ~/.bashrc
