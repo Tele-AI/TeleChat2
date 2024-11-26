@@ -69,7 +69,6 @@ try:
 except ImportError:
     rearrange = None
 
-use_flash_attn = True
 try:
     from flash_attn.flash_attn_interface import flash_attn_unpadded_func
 except ImportError:
@@ -361,9 +360,10 @@ class TelechatAttention(nn.Module):
         self.attention_dropout = nn.Dropout(config.attention_dropout)
         self.rotary_emb = RotaryEmbedding(self.head_dim, config=config)
 
-        self.core_attention_flash = FlashSelfAttention(
-            causal=True, attention_dropout=config.attention_dropout
-        )
+        if config.flash_attn:
+            self.core_attention_flash = FlashSelfAttention(
+                causal=True, attention_dropout=config.attention_dropout
+            )
 
         self.last_key_layer = None
         # logn_list = [math.log(i, 4096) if i > 4096 else 1 for i in range(1, 32768)]
