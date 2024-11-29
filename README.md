@@ -181,17 +181,17 @@ TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[Tel
 
 当前星辰语义大模型TeleChat2支持昇腾Atlas 800T A2训练服务器，可基于昇思MindSpore框架进行模型训练和评测。
 
-- 性能方面，具体对比如下：
--
+- 115B模型性能方面，具体对比如下：
+
 | NAME                 | performance(samples/p/s) | Epochs | AMP_Type |
   |--------------------------| ---------------------: | ------ | -------: |
 | 115B  |  0.0192            | 1      |        O1 |
 | 115B           | 0.0174                | 1      |       O2 |
 
-	说明：建议采用8台一组进行训练
+说明：建议采用8台一组进行训练
 
-- TeleChat支持昇腾Atlas 800T A2训练服务器，可基于昇思MindSpore框架进行模型训练，训练所需的modeling、README、
-  脚本已发布：[TeleChat-MindSpore](./MindSpore-telechat)
+- 我们提供了详细的运行指引，在 [telechat国产化](./tutorial/telechat_国产化运行.md)。
+- 如果您对mindsformers相关特性有疑问，也可以查看[mindformers](https://gitee.com/mindspore/mindformers/tree/dev/)
 
 # 声明、协议、引用
 
