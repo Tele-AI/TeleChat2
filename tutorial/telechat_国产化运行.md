@@ -184,3 +184,4 @@ python telechat_preprocess.py --input_dataset_file /workspace/TeleChat2/datas/de
 bash msrun_launcher.sh "python run_telechat.py  --config finetune_telechat_7b.yaml  --train_dataset ./mindrecords   --load_checkpoint /mnt/model/TeleChat2-7B_ms.ckpt  --use_parallel True --auto_trans_ckpt True"  8 8 127.0.0.1 8118 0 output/msrun_log False 300
 ```
 
+![微调](../images/微调.png)
