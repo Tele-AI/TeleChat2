@@ -55,7 +55,7 @@ head层参数分开，有助于增强训练稳定性和收敛性。我们选择�
 
 我们开源的 **TeleChat2** 模型：
 
-- 支持deepspeed微调，开源了基于deepspeed的训练代码，支持Zero并行显存优化，同时集成了FlashAttention2
+- 支持deepspeed微调，开源了基于deepspeed的训练代码，支持Zero并行显存优化，同时集成了FlashAttention2。
 - 多轮能力支持。开源了多轮数据构建方式，针对多轮模型训练集成了针对多轮的mask loss训练方式，更好的聚焦多轮答案，提升问答效果。
 
 本次发布版本和下载链接见下表
