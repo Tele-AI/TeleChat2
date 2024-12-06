@@ -13,39 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Copyright (c) 2023, NVIDIA CORPORATION.  All rights reserved.
+"""PyTorch TELECHAT model implementation similar to that in transformers."""
 
-# Copyright (c) 2021 EleutherAI
-# This file is based on code by the authors denoted below and has been modified from its original version.
-#
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
-"""PyTorch TELECHAT model."""
-
-import warnings
 from typing import Optional, Tuple, Union, List, Dict
 from threading import Thread
-
-import torch
 import math
 import copy
-from torch import nn
+
+import torch
 import torch.utils.checkpoint
+from torch import nn
 from torch.nn import functional as F
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, LayerNorm, MSELoss
+from torch.nn import CrossEntropyLoss
+
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions
@@ -69,7 +49,6 @@ try:
 except ImportError:
     rearrange = None
 
-use_flash_attn = True
 try:
     from flash_attn.flash_attn_interface import flash_attn_unpadded_func
 except ImportError:
@@ -79,8 +58,20 @@ except ImportError:
         flash_attn_unpadded_func = None
 
 
-class RotaryEmbedding(torch.nn.Module):
-    # Extracted from: https://github.com/EleutherAI/gpt-neox
+class RotaryEmbedding(nn.Module):
+    r"""
+    Rotary positional embeddings used in the TELECHAT model.
+
+    This implements the rotary position embeddings as described in:
+    "Rotary Positional Embeddings" (Su et al. 2021).
+
+    Args:
+        dim (`int`): The dimension of the rotary embeddings.
+        config (`TelechatConfig`): The model config.
+        base (`int`, *optional*, defaults to 10000): Base for computing rotary frequencies.
+        precision (`torch.dtype`, *optional*, defaults to `torch.half`): The precision used for computation.
+
+    """
     def __init__(self, dim, config, base=10000, precision=torch.half):
         super().__init__()
         self.config = config
@@ -98,8 +89,8 @@ class RotaryEmbedding(torch.nn.Module):
         return 0.1 * math.log(scale) + 1.0
 
     def get_ntk_alpha(self, true_seq_len):
+        # Compute ntk_alpha to handle sequence context growth
         context_value = math.log(true_seq_len / self.config.base_seqlen, 2) + 1
-        # ntk_alpha = 2 ** context_value - 1
         ntk_alpha = 2 ** math.ceil(context_value) - 1
         ntk_alpha = max(ntk_alpha, 1)
         return ntk_alpha
@@ -110,38 +101,40 @@ class RotaryEmbedding(torch.nn.Module):
         seq_len = max(seq_len, self.config.training_seqlen)
         ntk_alpha = self.get_ntk_alpha(seq_len)
         self.mscale = float(self.get_mscale(seq_len / self.config.training_seqlen))
-        if True:
-            base = self.base * ntk_alpha ** (self.dim / (self.dim - 2))
-            self.inv_freq = 1.0 / (base ** (torch.arange(0, self.dim, 2, device=x.device).float() / self.dim))
-            self.max_seq_len_cached = seq_len
-            t = torch.arange(self.max_seq_len_cached, device=x.device, dtype=self.inv_freq.dtype)
-            freqs = torch.einsum('i,j->ij', t, self.inv_freq)
-            # Different from paper, but it uses a different permutation in order to obtain the same calculation
-            emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-            if self.precision == torch.bfloat16:
-                emb = emb.float()
-            # [sx, 1 (b * np), hn]
-            self.cos_cached = self.mscale * emb.cos()[:, None, :].half()
-            self.sin_cached = self.mscale * emb.sin()[:, None, :].half()
-            if self.precision == torch.bfloat16:
-                self.cos_cached = self.cos_cached.bfloat16()
-                self.sin_cached = self.sin_cached.bfloat16()
+        base = self.base * ntk_alpha ** (self.dim / (self.dim - 2))
+        self.inv_freq = 1.0 / (base ** (torch.arange(0, self.dim, 2, device=x.device).float() / self.dim))
+        self.max_seq_len_cached = seq_len
+        t = torch.arange(self.max_seq_len_cached, device=x.device, dtype=self.inv_freq.dtype)
+        freqs = torch.einsum('i,j->ij', t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
+        if self.precision == torch.bfloat16:
+            emb = emb.float()
+        self.cos_cached = self.mscale * emb.cos()[:, None, :].half()
+        self.sin_cached = self.mscale * emb.sin()[:, None, :].half()
+        if self.precision == torch.bfloat16:
+            self.cos_cached = self.cos_cached.bfloat16()
+            self.sin_cached = self.sin_cached.bfloat16()
         return self.cos_cached[:seq_len, ...], self.sin_cached[:seq_len, ...]
 
 
-# rotary pos emb helpers:
 def rotate_half(x):
+    # Helper function for rotary embeddings
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
-    return torch.cat((-x2, x1), dim=x1.ndim - 1)  # dim=-1 triggers a bug in earlier torch versions
+    return torch.cat((-x2, x1), dim=x1.ndim - 1)
 
 
-def apply_rotary_pos_emb_torch(q, k, cos, sin, offset: int = 0):  # jitting fails with bf16
+def apply_rotary_pos_emb_torch(q, k, cos, sin, offset: int = 0):
+    """
+    Apply rotary position embeddings to query and key tensors.
+    """
     cos, sin = cos[offset:q.shape[0] + offset, ...], sin[offset:q.shape[0] + offset, ...]
     return (q * cos) + (rotate_half(q) * sin), (k * cos) + (rotate_half(k) * sin)
 
 
 class MixedFusedRMSNorm(nn.Module):
-    # Extracted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py
+    r"""
+    Mixed precision fused RMSNorm layer used by TELECHAT.
+    """
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
@@ -155,33 +148,25 @@ class MixedFusedRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
-class FlashSelfAttention(torch.nn.Module):
-    # Extracted from https://github.com/microsoft/Megatron-DeepSpeed/blob/main/megatron/model/transformer.py
-    """Implement the scaled dot product attention with softmax.
-    Arguments
-    ---------
-        softmax_scale: The temperature to use for the softmax attention.
-                      (default: 1/sqrt(d_keys) where d_keys is computed at
-                      runtime)
-        attention_dropout: The dropout rate to apply to the attention
-                           (default: 0.0)
+class FlashSelfAttention(nn.Module):
+    r"""
+    A wrapper for FlashAttention implementation of scaled dot product attention.
+    Requires `flash_attn` and `einops` installed.
     """
-
     def __init__(self, causal=False, softmax_scale=None, attention_dropout=0.0,
                  device=None, dtype=None):
         super().__init__()
-        assert flash_attn_unpadded_func is not None, ('Please install FlashAttention first, '
-                                                      'e.g., with pip install flash-attn')
-        assert rearrange is not None, 'Please install einops first, e.g., with pip install einops'
+        assert flash_attn_unpadded_func is not None, (
+            'Please install FlashAttention first, e.g., with `pip install flash-attn`.'
+        )
+        assert rearrange is not None, 'Please install einops first, e.g., `pip install einops`.'
         self.causal = causal
         self.softmax_scale = softmax_scale
         self.dropout_p = attention_dropout
 
     def forward(self, q, k, v):
-        """Implements the multihead softmax attention.
-        Arguments
-        ---------
-            q, k, v: The tensor containing the query, key, and value. (B, S, H, D)
+        """
+        Forward pass of flash self-attention.
         """
         assert all((i.dtype in [torch.float16, torch.bfloat16] for i in (q, k, v)))
         assert all((i.is_cuda for i in (q, k, v)))
@@ -192,17 +177,15 @@ class FlashSelfAttention(torch.nn.Module):
         q, k, v = [rearrange(x, 'b s ... -> (b s) ...') for x in [q, k, v]]
         cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32,
                                     device=q.device)
-        # self.training = False
-        if self.training:
-            # during training q,k,v always have same seqlen
-            assert seqlen_k == seqlen_q
 
+        if self.training:
+            # In training, q/k/v have the same length.
+            assert seqlen_k == seqlen_q
             is_causal = self.causal
             cu_seqlens_k = cu_seqlens_q
             dropout_p = self.dropout_p
         else:
-            # turn off FA causal mask after first inference autoregressive iteration
-            # only on first autoregressive step q,k,v have same seqlen
+            # In inference, we may have causal= True only for the first token step.
             is_causal = seqlen_q == seqlen_k
             cu_seqlens_k = torch.arange(0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32,
                                         device=q.device)
@@ -210,23 +193,19 @@ class FlashSelfAttention(torch.nn.Module):
 
         output = flash_attn_unpadded_func(
             q, k, v, cu_seqlens_q, cu_seqlens_k, seqlen_q, seqlen_k,
-            dropout_p=dropout_p,
-            softmax_scale=self.softmax_scale, causal=is_causal
+            dropout_p=dropout_p, softmax_scale=self.softmax_scale, causal=is_causal
         )
 
         output = rearrange(output, '(b s) ... -> b s ...', b=batch_size)
         return output
 
 
-def _make_causal_mask(
-        input_ids_shape: torch.Size, device: torch.device, past_key_values_length: int
-) -> torch.BoolTensor:
+def _make_causal_mask(input_ids_shape: torch.Size, device: torch.device, past_key_values_length: int) -> torch.BoolTensor:
     """
-    Make causal mask used for self-attention.
+    Create a causal mask for self-attention.
     """
     batch_size, target_length = input_ids_shape
     mask = torch.empty((target_length, target_length + past_key_values_length), dtype=torch.bool, device=device)
-    # ONNX doesn't support `torch.Tensor.triu` properly, thus we use this workaround
     seq_ids = torch.arange(target_length, device=device)
     mask[:, past_key_values_length:] = seq_ids[:, None] < seq_ids[None, :]
 
@@ -243,24 +222,13 @@ def _expand_mask(mask: torch.Tensor, tgt_length: int) -> torch.BoolTensor:
     """
     batch_size, src_length = mask.shape
     tgt_length = tgt_length if tgt_length is not None else src_length
-
     expanded_mask = ~(mask[:, None, None, :].to(torch.bool))
     return expanded_mask.expand(batch_size, 1, tgt_length, src_length)
 
 
 def dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: bool) -> torch.Tensor:
     """
-    Dropout add function
-
-    Args:
-        x (`torch.tensor`, *required*):
-            input tensor
-        residual (`torch.tensor`, *required*):
-            residual tensor
-        prob (`float`, *required*):
-            dropout probability
-        training (`bool`, *required*):
-            training mode
+    Apply dropout to tensor x and then add to residual.
     """
     out = F.dropout(x, p=prob, training=training)
     out = residual + out
@@ -269,30 +237,17 @@ def dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: 
 
 def telechat_gelu_forward(x: torch.Tensor) -> torch.Tensor:
     """
-    Custom bias GELU function. Adapted from Megatron-DeepSpeed code. Here we use a simple implementation (inference) to
-    make the model jitable.
-
-    Args:
-        x (`torch.tensor`, *required*):
-            input hidden states
+    Forward part of the custom GELU used in TELECHAT.
     """
     return x * 0.5 * (1.0 + torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x)))
 
 
 def telechat_gelu_back(g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     """
-    gradient of tanh approximation of gelu gradient of actual gelu is: 0.5 * (1. + torch.erf(x * 0.70710678)) +
-    0.3989423 * x * torch.exp(-0.5 * x * x)
-
-    Args:
-        g (`torch.tensor`, *required*):
-            gradient output tensor
-        x (`torch.tensor`, *required*):
-            input tensor
+    Backward part of custom GELU approximation.
     """
-    x = x[0]  # x is a tuple of 1 element, needs to unpack it first
+    x = x[0]
     tanh_out = torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x))
-    # sqrt(2/pi) * 3 * 0.044715 -> 0.1070322243
     ff = 0.5 * x * ((1 - tanh_out * tanh_out) * (0.79788456 + 0.1070322243 * x * x)) + 0.5 * (1 + tanh_out)
     return ff * g
 
@@ -311,14 +266,9 @@ class GeLUFunction(torch.autograd.Function):
 
 
 class TelechatGelu(nn.Module):
+    r"""
+    TELECHAT-specific GELU activation function to handle training vs inference modes.
     """
-    TelechatBiasGelu wrapper function that make use of the simple function on inference mode to make the model
-    torchscriptable and use the autograd function in training mode to get the accurate results of the gradients Partly
-    copied from Megatron-DeepSpeed code and adapted for our needs
-
-    See here why autograd functions are not torchscriptable: https://github.com/pytorch/pytorch/issues/22329
-    """
-
     def __init__(self):
         super().__init__()
 
@@ -330,6 +280,9 @@ class TelechatGelu(nn.Module):
 
 
 class TelechatAttention(nn.Module):
+    r"""
+    Self-attention module used in TELECHAT model blocks.
+    """
     def __init__(self, config: TelechatConfig, layer_idx):
         super().__init__()
         self.kv_cache = None
@@ -348,10 +301,6 @@ class TelechatAttention(nn.Module):
                 f" {self.num_heads})."
             )
 
-        # Layer-wise attention scaling
-        self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
-        self.beta = 1.0
-
         self.num_key_value_heads = config.num_key_value_heads if config.num_key_value_heads else self.num_heads
         self.kv_projection_size = self.head_dim * self.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
@@ -365,36 +314,30 @@ class TelechatAttention(nn.Module):
             causal=True, attention_dropout=config.attention_dropout
         )
 
-        self.last_key_layer = None
-        # logn_list = [math.log(i, 4096) if i > 4096 else 1 for i in range(1, 32768)]
-        # self.logn_tensor = torch.tensor(logn_list)[None, :, None, None].half().cuda()
-
     def repeat_kv(self, hidden_states, n_rep):
+        # Repeat key/value tensors for multi-group heads
         slen, batch, num_key_value_heads_per_partition, head_dim = hidden_states.shape
         if n_rep == 1:
             return hidden_states
-        hidden_states = hidden_states[:, :, :, None, :].expand(slen, batch, num_key_value_heads_per_partition, n_rep,
-                                                               head_dim)
+        hidden_states = hidden_states[:, :, :, None, :].expand(
+            slen, batch, num_key_value_heads_per_partition, n_rep, head_dim
+        )
         return hidden_states.reshape(slen, batch, num_key_value_heads_per_partition * n_rep, head_dim)
 
     def split_tensor_along_last_dim(self,
                                     tensor: torch.Tensor,
                                     num_partitions: int,
-                                    contiguous_split_chunks: bool = False,
-                                    ):
-
-        # Get the size and dimension.
+                                    contiguous_split_chunks: bool = False):
+        # Helper function to split tensor
         last_dim = tensor.dim() - 1
         last_dim_size = tensor.size()[last_dim] // num_partitions
-        # Split.
         tensor_list = torch.split(tensor, last_dim_size, dim=last_dim)
-        # Note: torch.split does not create contiguous tensors by default.
         if contiguous_split_chunks:
             return tuple(chunk.contiguous() for chunk in tensor_list)
-
         return tensor_list
 
     def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # Merge attention heads back to [batch, seq_len, hidden_size]
         batch_size_and_num_heads, seq_length, _ = x.shape
         batch_size = batch_size_and_num_heads // self.num_heads
         x = x.view(batch_size, self.num_heads, seq_length, self.head_dim)
@@ -410,26 +353,24 @@ class TelechatAttention(nn.Module):
             use_cache: bool = False,
             output_attentions: bool = False,
     ):
+        # Transpose to shape [seq_len, batch, hidden_size]
         hidden_states = hidden_states.transpose(1, 0)
         query_layer = self.query(hidden_states)
-        new_tensor_shape = query_layer.size()[:-1] + \
-                           (self.num_heads,
-                            self.head_dim)
+        new_tensor_shape = query_layer.size()[:-1] + (self.num_heads, self.head_dim)
         query_layer = query_layer.view(*new_tensor_shape)
 
         mixed_kv_layer = self.key_value(hidden_states)
-        new_tensor_shape = mixed_kv_layer.size()[:-1] + \
-                           (self.num_key_value_heads,
-                            2 * self.head_dim)
+        new_tensor_shape = mixed_kv_layer.size()[:-1] + (self.num_key_value_heads, 2 * self.head_dim)
         mixed_kv_layer = mixed_kv_layer.view(*new_tensor_shape)
         (key_layer, value_layer) = self.split_tensor_along_last_dim(mixed_kv_layer, 2)
 
-        output_size = (query_layer.size(1),
-                       query_layer.size(2),
-                       query_layer.size(0),
-                       key_layer.size(0),
-                       key_layer.size(2)
-                       )
+        output_size = (
+            query_layer.size(1),
+            query_layer.size(2),
+            query_layer.size(0),
+            key_layer.size(0),
+            key_layer.size(2),
+        )
 
         query_layer = query_layer.view(output_size[2], output_size[0] * output_size[1], -1)
         key_layer = key_layer.view(output_size[3], output_size[0] * output_size[4], -1)
@@ -439,20 +380,21 @@ class TelechatAttention(nn.Module):
         seq_len = key_layer.shape[0]
         offset = 0
 
-        if use_cache and layer_past != None:
+        # Handle past key values if using cache
+        if use_cache and layer_past is not None:
             past_key, past_value = layer_past
             offset = past_key.shape[0]
             seq_len += offset
 
         cos, sin = self.rotary_emb(value_layer, seq_len=seq_len)
-
         query_layer, key_layer = apply_rotary_fn(query_layer, key_layer, cos, sin, offset=offset)
+
         if use_cache:
-            if layer_past != None:
+            if layer_past is not None:
                 past_key, past_value = layer_past
                 key_layer = torch.cat((past_key, key_layer[-1, ...].unsqueeze(0)), dim=0)
                 value_layer = torch.cat((past_value, value_layer[-1, ...].unsqueeze(0)), dim=0)
-            layer_past = key_layer, value_layer
+            layer_past = (key_layer, value_layer)
 
         s_value, bz, kv_head, dim = value_layer.shape
         s_key = key_layer.shape[0]
@@ -466,33 +408,37 @@ class TelechatAttention(nn.Module):
         value_layer = self.repeat_kv(value_layer, self.num_key_value_groups)
 
         if self.config.flash_attn:
+            # Use flash attention if configured
             q, k, v = [rearrange(x, 's b ... -> b s ...').contiguous() for x in
                        (query_layer, key_layer, value_layer)]
             context_layer = self.core_attention_flash(q, k, v)
             context_layer = rearrange(context_layer, 'b s h d -> b s (h d)').contiguous()
         else:
-            ##[sq, b, np, hn] -> [sq, b * np, hn]
+            # Fallback to normal attention if flash_attn is not used
             query_layer = query_layer.reshape(s_query, bz * self.num_heads, dim)
-            # [sk, b, np, hn] -> [sk, b * np, hn]
             key_layer = key_layer.reshape(s_key, bz * self.num_heads, dim)
-            matmul_result = self.inv_norm_factor * torch.einsum('bik,bkj->bij', query_layer.transpose(0, 1),
-                                                                key_layer.transpose(0, 1).transpose(1, 2))
+            matmul_result = (1.0 / math.sqrt(self.head_dim)) * torch.einsum(
+                'bik,bkj->bij',
+                query_layer.transpose(0, 1),
+                key_layer.transpose(0, 1).transpose(1, 2)
+            )
 
             attention_scores = matmul_result.view(bz, self.num_heads, s_query, s_key)
-
             input_dtype = attention_scores.dtype
             if input_dtype == torch.float16:
                 attention_scores = attention_scores.to(torch.float)
-            attn_weights = torch.masked_fill(attention_scores, attention_mask, torch.finfo(attention_scores.dtype).min)
-            attention_probs = F.softmax(attn_weights, dim=-1).to(input_dtype)  ##dtype = torch.float32
+            attn_weights = torch.masked_fill(
+                attention_scores, attention_mask, torch.finfo(attention_scores.dtype).min
+            )
+            attention_probs = F.softmax(attn_weights, dim=-1).to(input_dtype)
             attention_probs = self.attention_dropout(attention_probs)
             attention_probs_reshaped = attention_probs.view(bz * self.num_heads, s_query, s_key)
 
             value_layer = value_layer.reshape(s_key, bz * self.num_heads, dim)
             context_layer = torch.bmm(attention_probs_reshaped, value_layer.transpose(0, 1))
             context_layer = self._merge_heads(context_layer)
-        output_tensor = self.dense(context_layer)
 
+        output_tensor = self.dense(context_layer)
         output_tensor = dropout_add(output_tensor, residual, self.hidden_dropout, self.training)
         present = None
         outputs = (output_tensor, present)
@@ -503,6 +449,9 @@ class TelechatAttention(nn.Module):
 
 
 class TelechatMLP(nn.Module):
+    r"""
+    Telechat MLP module applied after attention.
+    """
     def __init__(self, config: TelechatConfig):
         super().__init__()
         hidden_size = config.hidden_size
@@ -512,12 +461,20 @@ class TelechatMLP(nn.Module):
         self.hidden_dropout = config.hidden_dropout
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
+        # Gated feed-forward network with SiLU
         intermediate_output = self.down_proj(F.silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
         output = dropout_add(intermediate_output, residual, self.hidden_dropout, self.training)
         return output
 
 
 class TelechatBlock(nn.Module):
+    r"""
+    Single Transformer block of TELECHAT model, consisting of:
+    - RMSNorm
+    - Self-Attention
+    - Post-Attention RMSNorm
+    - MLP
+    """
     def __init__(self, config: TelechatConfig, layer_idx):
         super().__init__()
         hidden_size = config.hidden_size
@@ -527,9 +484,7 @@ class TelechatBlock(nn.Module):
         self.layer_idx = layer_idx
         self.self_attention = TelechatAttention(config, layer_idx)
         self.post_attention_layernorm = MixedFusedRMSNorm(hidden_size, eps=config.layer_norm_epsilon)
-
         self.mlp = TelechatMLP(config)
-
         self.apply_residual_connection_post_layernorm = config.apply_residual_connection_post_layernorm
         self.hidden_dropout = config.hidden_dropout
 
@@ -541,12 +496,14 @@ class TelechatBlock(nn.Module):
             use_cache: bool = False,
             output_attentions: bool = False,
     ):
+        # Layer norm before attention
         layernorm_output = self.input_layernorm(hidden_states)
         if self.apply_residual_connection_post_layernorm:
             residual = layernorm_output
         else:
             residual = hidden_states
 
+        # Self-attention
         attn_outputs = self.self_attention(
             layernorm_output,
             residual,
@@ -558,12 +515,15 @@ class TelechatBlock(nn.Module):
 
         attention_output = attn_outputs[0]
         outputs = attn_outputs[1:]
+        # Layer norm after attention
         layernorm_output = self.post_attention_layernorm(attention_output)
 
         if self.apply_residual_connection_post_layernorm:
             residual = layernorm_output
         else:
             residual = attention_output
+
+        # MLP
         output = self.mlp(layernorm_output, residual)
 
         if use_cache:
@@ -575,6 +535,9 @@ class TelechatBlock(nn.Module):
 
 
 class TelechatPreTrainedModel(PreTrainedModel):
+    r"""
+    Base class for all Telechat models.
+    """
     config_class = TelechatConfig
     base_model_prefix = "transformer"
     supports_gradient_checkpointing = True
@@ -585,7 +548,7 @@ class TelechatPreTrainedModel(PreTrainedModel):
         super().__init__(*inputs, **kwargs)
 
     def _init_weights(self, module: nn.Module):
-        """Initialize the weights."""
+        """Initialize weights for linear layers and embeddings."""
         if isinstance(module, nn.Linear):
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
@@ -596,19 +559,17 @@ class TelechatPreTrainedModel(PreTrainedModel):
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
 
-        elif isinstance(module, LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
-
     def _set_gradient_checkpointing(self, module: nn.Module, value: bool = False):
         if isinstance(module, TelechatModel):
             module.gradient_checkpointing = value
 
 
 class TelechatModel(TelechatPreTrainedModel):
+    r"""
+    The bare Telechat Model outputting raw hidden-states without any specific head.
+    """
     def __init__(self, config: TelechatConfig):
         super().__init__(config)
-
         self.embed_dim = config.hidden_size
         self.num_heads = config.n_head
         self.config = config
@@ -616,7 +577,7 @@ class TelechatModel(TelechatPreTrainedModel):
         if self.config.embed_layernorm:
             self.word_embeddings_layernorm = MixedFusedRMSNorm(self.embed_dim, eps=config.layer_norm_epsilon)
 
-        self.h = nn.ModuleList([TelechatBlock(config, _) for _ in range(config.num_hidden_layers)])
+        self.h = nn.ModuleList([TelechatBlock(config, i) for i in range(config.num_hidden_layers)])
         self.ln_f = MixedFusedRMSNorm(self.embed_dim, eps=config.layer_norm_epsilon)
         self.gradient_checkpointing = False
         self.post_init()
@@ -627,6 +588,7 @@ class TelechatModel(TelechatPreTrainedModel):
     def _prepare_attn_mask(
             self, attention_mask: torch.Tensor, input_shape: Tuple[int, int], past_key_values_length: int
     ) -> torch.BoolTensor:
+        # Prepare combined attention mask for causal decoding
         combined_attention_mask = None
         device = attention_mask.device
         _, src_length = input_shape
@@ -657,7 +619,7 @@ class TelechatModel(TelechatPreTrainedModel):
             return_dict: Optional[bool] = None,
             **deprecated_arguments,
     ) -> Union[Tuple[torch.Tensor, ...], BaseModelOutputWithPastAndCrossAttentions]:
-
+        # Main forward pass for TelechatModel
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -672,11 +634,10 @@ class TelechatModel(TelechatPreTrainedModel):
 
         if past_key_values is None:
             past_key_values = tuple([None] * len(self.h))
-        # input_ids = torch.load("Megatron-LM-0624-3B/tensors/input_ids.pt").to(input_ids.device)
+
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
         hidden_states = inputs_embeds
-        # print(f"[INFO_Telechat]: inputs_embeds={inputs_embeds}")
         if self.config.embed_layernorm:
             hidden_states = self.word_embeddings_layernorm(inputs_embeds)
 
@@ -693,28 +654,26 @@ class TelechatModel(TelechatPreTrainedModel):
         if past_key_values[0] is not None:
             past_key_values_length = past_key_values[0][0].shape[2]
             seq_length_with_past = seq_length_with_past + past_key_values_length
+
         if attention_mask is None:
             attention_mask = torch.ones((batch_size, seq_length_with_past), device=hidden_states.device)
         else:
             attention_mask = attention_mask.to(hidden_states.device)
+
         causal_mask = self._prepare_attn_mask(
             attention_mask,
             input_shape=(batch_size, seq_length),
             past_key_values_length=past_key_values_length,
         )
 
-        # print(f"[INFO_Telechat]: word_embeddings_layernorm={hidden_states}")
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
             if self.gradient_checkpointing and self.training:
-
                 def create_custom_forward(module):
                     def custom_forward(*inputs):
-                        # None for past_key_value
                         return module(*inputs, use_cache=use_cache, output_attentions=output_attentions)
-
                     return custom_forward
 
                 outputs = torch.utils.checkpoint.checkpoint(
@@ -732,7 +691,6 @@ class TelechatModel(TelechatPreTrainedModel):
                     output_attentions=output_attentions,
                 )
 
-            # print(f"[INFO_Telechat]: outputs{i}={outputs}")
             hidden_states = outputs[0]
             if use_cache is True:
                 presents = presents + (outputs[1],)
@@ -740,15 +698,7 @@ class TelechatModel(TelechatPreTrainedModel):
             if output_attentions:
                 all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
         hidden_states = self.ln_f(hidden_states)
-        # print(f"[INFO_Telechat]: hidden_states={hidden_states}")
-        # ref = torch.load("Megatron-LM-0624-3B/tensors/final_layernorm.pt")
-        # print(hidden_states.squeeze()[2048:])
-        # print(ref.squeeze())
-        # print(torch.max(hidden_states.squeeze()[2048:] - ref.squeeze().to(hidden_states.device)))
-        # exit()
-        # print(ref.shape,hidden_states.shape)
-        # print(hidden_states)
-        # exit()
+
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
         if not return_dict:
@@ -762,7 +712,9 @@ class TelechatModel(TelechatPreTrainedModel):
 
 
 class TelechatForCausalLM(TelechatPreTrainedModel):
-    # _tied_weights_keys = ["lm_head.weight"]
+    r"""
+    Telechat Model with a language modeling head on top.
+    """
     _keys_to_ignore_on_load_missing = [r"lm_head.weight"]
 
     def __init__(self, config: TelechatConfig):
@@ -785,6 +737,7 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
             inputs_embeds: Optional[torch.Tensor] = None,
             **kwargs,
     ) -> dict:
+        # Prepare inputs during generation (like GPT-2/LLM style)
         if past_key_values:
             input_ids = input_ids[:, -1].unsqueeze(-1)
         if inputs_embeds is not None and past_key_values is None:
@@ -814,7 +767,7 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
             return_dict: Optional[bool] = None,
             **deprecated_arguments,
     ) -> Union[Tuple[torch.Tensor], CausalLMOutputWithCrossAttentions]:
-
+        # Forward pass for causal language modeling
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         transformer_outputs = self.transformer(
@@ -855,14 +808,19 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
 
     def chat(self, tokenizer, question: str = '', history: Union[List[Dict], History] = None, stream: bool = False,
              generation_config: Optional[GenerationConfig] = None, **kwargs):
-        """
+        r"""
+        Generate a reply for the given question with a chat-like interface.
+
         Args:
-            tokenizer:  the tokenizer of  telechat
-            question: question which the model reply in this turn
-            history: history which will format the input for telechat
-            stream: if return the full text at last or yield the text in token
-            generation_config:  configuration for generation
-            **kwargs: args which will update the generation config or pass to model forward
+            tokenizer: A tokenizer compatible with this model.
+            question (`str`): The user query.
+            history (`List[Dict]` or `History`, *optional*): The conversation history.
+            stream (`bool`, *optional*, default=False): Whether to return a streamer for tokens or final output.
+            generation_config (`GenerationConfig`, *optional*): Generation parameters for the model.
+            **kwargs: Additional generation parameters.
+
+        Returns:
+            `str` or `TelechatIterTextStreamer`: The generated answer (or a streamer if `stream=True`).
         """
         generation_config = generation_config or self.generation_config
         if not generation_config:
@@ -874,21 +832,19 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
         if history is None:
             history = []
 
-        # we update and check generate_config here for building inputs.
-
         generation_config = copy.deepcopy(generation_config)
         user_id = generation_config.user_token_id
         bot_id = generation_config.bot_token_id
         model_kwargs = generation_config.update(**kwargs)
         generation_config.validate()
 
-        # transfer to History
         if not isinstance(history, History):
             history = History(tokenizer, history)
 
         inputs = self.build_inputs_for_chat(tokenizer, question, history, generation_config, user_id, bot_id)
         history.append({"role": "user", "content": question})
         if stream:
+            # Return a streamer for iterative token output
             streamer = TelechatIterTextStreamer(tokenizer, history, skip_prompt=True)
             Thread(target=self.generate, kwargs=dict(
                 inputs=inputs.to(self.device), streamer=streamer,
@@ -896,31 +852,45 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
             )).start()
             return streamer
         else:
+            # Direct generation and return the final response
             outputs = self.generate(inputs.to(self.device), generation_config=generation_config, **model_kwargs)
             response = tokenizer.decode(outputs[0][len(inputs[0]):-1])
             history.append({"role": "bot", "content": response})
             return response, history
 
     def build_inputs_for_chat(self, tokenizer, question, history, generation_config, usr_id, bot_id):
+        r"""
+        Build input tokens for chat-based inference.
+
+        This method reconstructs the user-bot conversation turns from the given `history` and the `question`,
+        then truncates according to model maximum context length.
+
+        Args:
+            tokenizer: The tokenizer instance.
+            question (`str`): The question from the user.
+            history: Current conversation history (as a `History` instance or list of dicts).
+            generation_config (`GenerationConfig`): Generation config to respect max length constraints.
+            usr_id (`int`): The user id token.
+            bot_id (`int`): The bot id token.
+
+        Returns:
+            `torch.LongTensor`: The input token ids for the model.
         """
-        check history and  build inputs here
-        """
-        # first tokenize question
         q_token = tokenizer(question)
         qa_history = copy.deepcopy(history)
 
-        # get the max length we should build our inputs in
         model_max_length = self.config.seq_length
         build_max_length = max(0, model_max_length - generation_config.max_new_tokens - 1) \
             if generation_config.max_new_tokens else max(0, generation_config.max_length)
         if build_max_length < 3:
-            logger.warning("the model can not meet the  requirements of input length,Please check config")
+            logger.warning("the model can not meet the requirements of input length, Please check config")
             raise ValueError("")
 
-        # trunc left
+        # Start building the input tokens from the last user query
         input_tokens = [usr_id] + q_token["input_ids"][-build_max_length + 1:] + [bot_id]
         length = len(input_tokens)
 
+        # Prepend historical turns until max length reached
         while len(qa_history) != 0:
             message = qa_history.pop()
             if message["role"] == "user":
@@ -934,6 +904,7 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
             else:
                 input_tokens = tokens + input_tokens
 
+        # Add BOS token at the start
         input_tokens = [generation_config.bos_token_id] + input_tokens
 
         return torch.tensor([input_tokens], dtype=torch.int64)
