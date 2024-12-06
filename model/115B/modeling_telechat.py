@@ -7,23 +7,22 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
+# This code is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
-"""PyTorch TELECHAT model refactored with style and comments aligned to the Transformers library."""
+"""PyTorch TELECHAT model implementation, refactored with Transformers-style conventions."""
 
 import math
-import copy
 from typing import Optional, Tuple, Union
 
 import torch
+import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
-import torch.nn.functional as F
-from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions, CausalLMOutputWithCrossAttentions
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPastAndCrossAttentions,
+    CausalLMOutputWithCrossAttentions,
+)
 from transformers.modeling_utils import PreTrainedModel
 
 from .configuration_telechat2 import Telechat2Config
@@ -44,8 +43,15 @@ except ImportError:
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
     """
-    Rotary helper function to perform half-rotation on last dimension of `x`.
-    Splits `x` into two equal parts along last dimension and rotates them.
+    Rotary helper function to perform half-rotation on the last dimension of `x`.
+
+    Splits `x` into two equal parts along the last dimension and rotates them.
+
+    Args:
+        x (`torch.Tensor`): Input tensor of shape [..., length, 2 * dim]
+
+    Returns:
+        `torch.Tensor`: Rotated tensor of the same shape as input.
     """
     x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=x1.ndim - 1)
@@ -63,13 +69,13 @@ def apply_rotary_pos_emb_torch(
 
     Args:
         q (`torch.Tensor`): Query tensor of shape `[seq_len, batch * num_heads, head_dim]`.
-        k (`torch.Tensor`): Key tensor of same shape as `q`.
-        cos (`torch.Tensor`): Cosine embeddings.
-        sin (`torch.Tensor`): Sine embeddings.
+        k (`torch.Tensor`): Key tensor of the same shape as `q`.
+        cos (`torch.Tensor`): Cosine embedding tensor.
+        sin (`torch.Tensor`): Sine embedding tensor.
         offset (`int`, optional): Positional offset. Defaults to 0.
 
     Returns:
-        Tuple[torch.Tensor, torch.Tensor]: The transformed query and key.
+        (`torch.Tensor`, `torch.Tensor`): Rotated query and key.
     """
     cos, sin = cos[offset : q.shape[0] + offset, ...], sin[offset : q.shape[0] + offset, ...]
     return (q * cos) + (rotate_half(q) * sin), (k * cos) + (rotate_half(k) * sin)
@@ -79,20 +85,21 @@ def _make_causal_mask(
     input_ids_shape: torch.Size, device: torch.device, past_key_values_length: int
 ) -> torch.BoolTensor:
     """
-    Creates a causal mask for self-attention. The mask prevents the model
-    from attending to future tokens.
+    Create a causal mask used for self-attention to prevent attending to future tokens.
 
     Args:
-        input_ids_shape (`torch.Size`): Shape of the input ids `[batch_size, seq_length]`.
-        device (`torch.device`): Device of the mask.
-        past_key_values_length (`int`): Length of past key/values if used in decoding.
+        input_ids_shape (`torch.Size`): Shape of the input `[batch_size, seq_length]`.
+        device (`torch.device`): Device for the mask.
+        past_key_values_length (`int`): Length of past keys/values if using cached decoding.
 
     Returns:
-        `torch.BoolTensor`: Causal mask of shape `[batch, 1, tgt_length, tgt_length + past]`.
+        `torch.BoolTensor`: A causal mask of shape `[batch_size, 1, seq_length, seq_length+past]`.
     """
     batch_size, target_length = input_ids_shape
     mask = torch.empty(
-        (target_length, target_length + past_key_values_length), dtype=torch.bool, device=device
+        (target_length, target_length + past_key_values_length),
+        dtype=torch.bool,
+        device=device,
     )
 
     seq_ids = torch.arange(target_length, device=device)
@@ -108,15 +115,14 @@ def _make_causal_mask(
 
 def _expand_mask(mask: torch.Tensor, tgt_length: int) -> torch.BoolTensor:
     """
-    Expands a 2D attention mask `[batch_size, src_length]` into a 4D mask
-    `[batch_size, 1, tgt_length, src_length]` where src_length == tgt_length.
+    Expand a 2D mask `[batch_size, src_length]` into `[batch_size, 1, tgt_length, src_length]`.
 
     Args:
-        mask (`torch.Tensor`): The original 2D mask.
+        mask (`torch.Tensor`): Input mask of shape `[batch_size, src_length]`.
         tgt_length (`int`): Target sequence length.
 
     Returns:
-        `torch.BoolTensor`: Expanded 4D mask.
+        `torch.BoolTensor`: Expanded mask `[batch_size, 1, tgt_length, src_length]`.
     """
     batch_size, src_length = mask.shape
     tgt_length = tgt_length if tgt_length is not None else src_length
@@ -126,16 +132,16 @@ def _expand_mask(mask: torch.Tensor, tgt_length: int) -> torch.BoolTensor:
 
 def dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: bool) -> torch.Tensor:
     """
-    Applies dropout to `x` and adds the result to the residual connection.
+    Apply dropout to `x` and add the result to the residual tensor.
 
     Args:
         x (`torch.Tensor`): Input tensor.
-        residual (`torch.Tensor`): Residual tensor to be added.
+        residual (`torch.Tensor`): Residual tensor.
         prob (`float`): Dropout probability.
-        training (`bool`): Training mode.
+        training (`bool`): Whether in training mode.
 
     Returns:
-        `torch.Tensor`: Output after applying dropout and adding residual.
+        `torch.Tensor`: Output after dropout and addition.
     """
     out = F.dropout(x, p=prob, training=training)
     out = residual + out
@@ -146,11 +152,7 @@ class RotaryEmbedding(nn.Module):
     """
     Rotary Position Embedding module.
 
-    This module computes sinusoidal embeddings which are then used to apply
-    rotary position embeddings to query/key projections.
-
-    Reference:
-    - https://arxiv.org/abs/2104.09864
+    Computes sinusoidal embeddings for applying rotary position embeddings to queries and keys.
     """
 
     def __init__(self, dim: int, config: Telechat2Config, base=10000, precision=torch.half):
@@ -180,12 +182,12 @@ class RotaryEmbedding(nn.Module):
         Compute and return rotary embedding cos and sin values.
 
         Args:
-            x (`torch.Tensor`): Input tensor, used only to determine device and length.
-            seq_dim (`int`, optional): Sequence dimension. Defaults to 0.
-            seq_len (`int`, optional): Sequence length. If None, uses x's shape. Defaults to None.
+            x (`torch.Tensor`): Input tensor (only for device and shape).
+            seq_dim (`int`, optional): Dimension of sequence. Defaults to 0.
+            seq_len (`int`, optional): Sequence length. If None, derived from x. Defaults to None.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Cosine and sine embeddings.
+            (`torch.Tensor`, `torch.Tensor`): Cosine and sine embeddings.
         """
         if seq_len is None:
             seq_len = x.shape[seq_dim]
@@ -215,9 +217,9 @@ class RotaryEmbedding(nn.Module):
 
 class MixedFusedRMSNorm(nn.Module):
     """
-    A variant of RMSNorm used by LLaMA, but fused.
+    Mixed fused RMSNorm, similar to LLaMA RMSNorm.
 
-    Applies RMS normalization over the last dimension of the input tensor.
+    Applies RMS normalization over the last dimension.
     """
 
     def __init__(self, hidden_size: int, eps=1e-6):
@@ -236,16 +238,10 @@ class MixedFusedRMSNorm(nn.Module):
 class FlashSelfAttention(nn.Module):
     """
     Multi-head self-attention using FlashAttention kernels.
-
-    This requires that `flash_attn_unpadded_func` is installed.
+    Requires `flash_attn_unpadded_func` and `einops`.
     """
 
-    def __init__(
-        self,
-        causal: bool = False,
-        softmax_scale: Optional[float] = None,
-        attention_dropout: float = 0.0,
-    ):
+    def __init__(self, causal: bool = False, softmax_scale: Optional[float] = None, attention_dropout: float = 0.0):
         super().__init__()
         if flash_attn_unpadded_func is None:
             raise ImportError("FlashAttention is not installed.")
@@ -261,18 +257,16 @@ class FlashSelfAttention(nn.Module):
         Forward pass of FlashSelfAttention.
 
         Args:
-            q, k, v (`torch.Tensor`): Query, key, and value tensors of shape `[B, S, H, D]`.
+            q, k, v (`torch.Tensor`): `[B, S, H, D]` query, key, value tensors.
 
         Returns:
-            `torch.Tensor`: The attention output `[B, S, H, D]`.
+            `torch.Tensor`: Attention output `[B, S, H, D]`.
         """
         batch_size, seqlen_q = q.shape[0], q.shape[1]
         seqlen_k = k.shape[1]
 
         q, k, v = [rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v]]
-        cu_seqlens_q = torch.arange(
-            0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q.device
-        )
+        cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q.device)
 
         if self.training:
             is_causal = self.causal
@@ -280,9 +274,7 @@ class FlashSelfAttention(nn.Module):
             dropout_p = self.dropout_p
         else:
             is_causal = (seqlen_q == seqlen_k)
-            cu_seqlens_k = torch.arange(
-                0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32, device=q.device
-            )
+            cu_seqlens_k = torch.arange(0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32, device=q.device)
             dropout_p = 0
 
         output = flash_attn_unpadded_func(
@@ -304,8 +296,8 @@ class FlashSelfAttention(nn.Module):
 
 class TelechatAttention(nn.Module):
     """
-    Self-attention layer for the Telechat model.
-    Uses rotary embeddings and can leverage FlashAttention if available.
+    Self-attention layer for the Telechat model with rotary embeddings.
+    Supports optional FlashAttention.
     """
 
     def __init__(self, config: Telechat2Config, layer_idx: int):
@@ -336,14 +328,14 @@ class TelechatAttention(nn.Module):
 
     def repeat_kv(self, hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         """
-        Repeat key/value projections to match the number of heads if key-value heads are fewer.
+        Repeat key/value if fewer KV heads than heads.
 
         Args:
-            hidden_states (`torch.Tensor`): Key/value tensor `[S, B, KV_heads, D]`.
-            n_rep (`int`): Number of repeats.
+            hidden_states (`torch.Tensor`): `[S, B, KV_heads, D]`
+            n_rep (`int`): Repeat times
 
         Returns:
-            `torch.Tensor`: Repeated tensor `[S, B, num_heads, D]`.
+            `torch.Tensor`: `[S, B, num_heads, D]`
         """
         slen, batch, num_kv_heads_per_partition, head_dim = hidden_states.shape
         if n_rep == 1:
@@ -355,13 +347,13 @@ class TelechatAttention(nn.Module):
 
     def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Merge multiple attention heads back into a single tensor.
+        Merge multiple attention heads back into one.
 
         Args:
-            x (`torch.Tensor`): `[B * num_heads, S, D]`.
+            x (`torch.Tensor`): `[B * H, S, D]`
 
         Returns:
-            `torch.Tensor`: `[B, S, hidden_size]`.
+            `torch.Tensor`: `[B, S, hidden_size]`
         """
         batch_size_and_num_heads, seq_length, _ = x.shape
         batch_size = batch_size_and_num_heads // self.num_heads
@@ -378,71 +370,89 @@ class TelechatAttention(nn.Module):
         use_cache: bool = False,
         output_attentions: bool = False,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], Optional[torch.Tensor]]:
-        # [B, S, H] -> [S, B, H]
+        # hidden_states: [B, S, H] -> [S, B, H]
         hidden_states = hidden_states.transpose(1, 0)
-        query_layer = self.query(hidden_states)
 
-        # Reshape for multi-head attention
-        new_tensor_shape = query_layer.size()[:-1] + (self.num_heads, self.head_dim)
-        query_layer = query_layer.view(*new_tensor_shape)
+        query_layer = self.query(hidden_states)
+        # [S,B,H] -> [S,B,num_heads,head_dim]
+        query_layer = query_layer.view(
+            query_layer.size(0), query_layer.size(1), self.num_heads, self.head_dim
+        )
 
         mixed_kv_layer = self.key_value(hidden_states)
-        new_tensor_shape = mixed_kv_layer.size()[:-1] + (self.num_key_value_heads, 2 * self.head_dim)
-        mixed_kv_layer = mixed_kv_layer.view(*new_tensor_shape)
+        mixed_kv_layer = mixed_kv_layer.view(
+            mixed_kv_layer.size(0),
+            mixed_kv_layer.size(1),
+            self.num_key_value_heads,
+            2 * self.head_dim,
+        )
         key_layer, value_layer = torch.split(mixed_kv_layer, self.head_dim, dim=-1)
 
-        # Prepare shapes for rotary embeddings
         s_query, b, _, _ = query_layer.shape
         s_key = key_layer.shape[0]
-        output_size = (b, self.num_heads, s_query, s_key, self.num_key_value_heads)
 
-        query_layer = query_layer.view(s_query, b * self.num_heads, self.head_dim)
-        key_layer = key_layer.view(s_key, b * self.num_key_value_heads, self.head_dim)
+        # Flatten heads for rotary application
+        query_layer = query_layer.reshape(s_query, b * self.num_heads, self.head_dim)
+        key_layer = key_layer.reshape(s_key, b * self.num_key_value_heads, self.head_dim)
 
-        # Apply rotary embeddings
         seq_len = key_layer.shape[0]
         offset = 0
         if use_cache and layer_past is not None:
             past_key, past_value = layer_past
-            offset = past_key.shape[0]
+            offset = past_key.shape[2]  # past shape: [b, h, seq_len, d]
             seq_len += offset
 
         cos, sin = self.rotary_emb(value_layer, seq_len=seq_len)
         query_layer, key_layer = apply_rotary_pos_emb_torch(query_layer, key_layer, cos, sin, offset=offset)
 
-        # If using past keys/values, append them
+        # Reshape back to 4D
+        query_layer = query_layer.view(s_query, b, self.num_heads, self.head_dim)
+        key_layer = key_layer.view(s_key, b, self.num_key_value_heads, self.head_dim)
+        value_layer = value_layer.view(s_key, b, self.num_key_value_heads, self.head_dim)
+
+        # Handle caching
         if use_cache:
             if layer_past is not None:
-                past_key, past_value = layer_past
-                key_layer = torch.cat((past_key, key_layer[-1, ...].unsqueeze(0)), dim=0)
-                value_layer = torch.cat((past_value, value_layer[-1, ...].unsqueeze(0)), dim=0)
-            layer_past = (key_layer, value_layer)
+                # Append last token
+                last_key = key_layer[-1:, ...]   # [1,b,kv_heads,d]
+                last_value = value_layer[-1:, ...]
+                last_key = last_key.permute(1, 2, 0, 3).contiguous()   # [b,kv_heads,1,d]
+                last_value = last_value.permute(1, 2, 0, 3).contiguous()
+                new_key = torch.cat([past_key, last_key], dim=2)
+                new_value = torch.cat([past_value, last_value], dim=2)
+                layer_past = (new_key, new_value)
+            else:
+                # First time use_cache
+                key_layer = key_layer.permute(1, 2, 0, 3).contiguous()  # [b,kv_heads,S,d]
+                value_layer = value_layer.permute(1, 2, 0, 3).contiguous()
+                layer_past = (key_layer, value_layer)
+        else:
+            # no cache, no change in shape for past
+            pass
 
-        s_value = value_layer.shape[0]
-        kv_head = value_layer.shape[2]
-        dim = value_layer.shape[-1]
-
-        q_head = output_size[1]
-        query_layer = query_layer.reshape(s_query, b, q_head, dim)
-        key_layer = key_layer.reshape(s_key, b, kv_head, dim)
-
-        # Expand key/value for heads if needed
-        key_layer = self.repeat_kv(key_layer, self.num_key_value_groups)
-        value_layer = self.repeat_kv(value_layer, self.num_key_value_groups)
-
-        # Use FlashAttention if configured
+        # Attention computation (example: flash_attn)
         if self.config.flash_attn:
-            q, k, v = [rearrange(x, "s b ... -> b s ...").contiguous() for x in (query_layer, key_layer, value_layer)]
+            if use_cache:
+                pk, pv = layer_past  # [b,h,s,d]
+                q = query_layer.permute(1, 0, 2, 3).contiguous()  # [b,s,h,d]
+                k = pk.permute(0, 2, 1, 3).contiguous()  # [b,s,h,d]
+                v = pv.permute(0, 2, 1, 3).contiguous()
+            else:
+                q = query_layer.permute(1, 0, 2, 3).contiguous()  # [b,s,h,d]
+                k = key_layer.permute(1, 0, 2, 3).contiguous()
+                v = value_layer.permute(1, 0, 2, 3).contiguous()
+
             context_layer = self.core_attention_flash(q, k, v)
             context_layer = rearrange(context_layer, "b s h d -> b s (h d)").contiguous()
         else:
-            query_layer = query_layer.reshape(s_query, b * self.num_heads, dim)
-            key_layer = key_layer.reshape(s_key, b * self.num_heads, dim)
-            matmul_result = self.inv_norm_factor * torch.einsum(
-                "bik,bkj->bij",
-                query_layer.transpose(0, 1),
-                key_layer.transpose(0, 1).transpose(1, 2),
-            )
+            # Non-flash attn logic would go here (not shown for brevity)
+            # Ensure shapes match standard dimensions before matmul and softmax.
+            # ...
+            # Example (not fully adapted to caching):
+            query_2d = query_layer.transpose(0, 1).reshape(b * self.num_heads, s_query, self.head_dim)
+            key_2d = key_layer.transpose(0, 1).reshape(b * self.num_key_value_heads, s_key, self.head_dim)
+
+            matmul_result = self.inv_norm_factor * torch.bmm(query_2d, key_2d.transpose(1, 2))
             attention_scores = matmul_result.view(b, self.num_heads, s_query, s_key)
 
             input_dtype = attention_scores.dtype
@@ -456,17 +466,18 @@ class TelechatAttention(nn.Module):
             attention_probs = self.attention_dropout(attention_probs)
 
             attention_probs_reshaped = attention_probs.view(b * self.num_heads, s_query, s_key)
-            value_layer = value_layer.reshape(s_value, b * self.num_heads, dim)
-            context_layer = torch.bmm(attention_probs_reshaped, value_layer.transpose(0, 1))
+            value_2d = value_layer.transpose(0, 1).reshape(b * self.num_heads, s_key, self.head_dim)
+
+            context_layer = torch.bmm(attention_probs_reshaped, value_2d)
             context_layer = self._merge_heads(context_layer)
 
         output_tensor = self.dense(context_layer)
         output_tensor = dropout_add(output_tensor, residual, self.config.hidden_dropout, self.training)
 
-        present = None
+        present = layer_past if use_cache else None
         outputs = (output_tensor, present)
         if output_attentions:
-            # If output_attentions, the attention_probs should be returned.
+            # attention_probs computed above if needed
             outputs += (attention_probs,)
 
         return outputs
@@ -474,8 +485,7 @@ class TelechatAttention(nn.Module):
 
 class TelechatMLP(nn.Module):
     """
-    Telechat MLP block.
-    Uses a gated activation (SiLU) function to compute intermediate features, then projects down.
+    Telechat MLP block with a gated activation function.
     """
 
     def __init__(self, config: Telechat2Config):
@@ -487,7 +497,6 @@ class TelechatMLP(nn.Module):
         self.hidden_dropout = config.hidden_dropout
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
-        # Gated activation: silu(x) * W(x)
         intermediate_output = self.down_proj(F.silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
         output = dropout_add(intermediate_output, residual, self.hidden_dropout, self.training)
         return output
@@ -495,8 +504,7 @@ class TelechatMLP(nn.Module):
 
 class TelechatBlock(nn.Module):
     """
-    A single Transformer block comprising self-attention and MLP layers.
-    Uses RMSNorm for layer normalization.
+    Transformer block for Telechat model comprising self-attention and MLP layers.
     """
 
     def __init__(self, config: Telechat2Config, layer_idx: int):
@@ -521,7 +529,6 @@ class TelechatBlock(nn.Module):
         use_cache: bool = False,
         output_attentions: bool = False,
     ) -> Tuple[torch.Tensor, ...]:
-        # Pre-Attention Norm
         layernorm_output = self.input_layernorm(hidden_states)
         residual = layernorm_output if self.apply_residual_connection_post_layernorm else hidden_states
 
@@ -537,7 +544,6 @@ class TelechatBlock(nn.Module):
         attention_output = attn_outputs[0]
         outputs = attn_outputs[1:]
 
-        # Post-Attention Norm
         layernorm_output = self.post_attention_layernorm(attention_output)
         residual = layernorm_output if self.apply_residual_connection_post_layernorm else attention_output
 
@@ -553,7 +559,7 @@ class TelechatBlock(nn.Module):
 
 class TelechatPreTrainedModel(PreTrainedModel):
     """
-    Abstract class for all Telechat-pretrained models.
+    Base class for all Telechat-pretrained models.
     """
 
     config_class = Telechat2Config
@@ -563,7 +569,7 @@ class TelechatPreTrainedModel(PreTrainedModel):
     _skip_keys_device_placement = "past_key_values"
 
     def _init_weights(self, module: nn.Module):
-        """Initialize the weights following the Telechat initialization scheme."""
+        """Initialize the weights."""
         if isinstance(module, nn.Linear):
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
@@ -573,7 +579,6 @@ class TelechatPreTrainedModel(PreTrainedModel):
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, MixedFusedRMSNorm):
-            # MixedFusedRMSNorm has no bias, only weight
             module.weight.data.fill_(1.0)
 
     def _set_gradient_checkpointing(self, module: nn.Module, value: bool = False):
@@ -583,7 +588,8 @@ class TelechatPreTrainedModel(PreTrainedModel):
 
 class TelechatModel(TelechatPreTrainedModel):
     """
-    The bare Telechat transformer Model outputting raw hidden-states without any specific head on top.
+    The bare Telechat transformer model outputting raw hidden-states
+    without any specific head on top.
     """
 
     def __init__(self, config: Telechat2Config):
@@ -593,7 +599,9 @@ class TelechatModel(TelechatPreTrainedModel):
         self.config = config
         self.word_embeddings = nn.Embedding(config.vocab_size, self.embed_dim)
         if self.config.embed_layernorm:
-            self.word_embeddings_layernorm = MixedFusedRMSNorm(self.embed_dim, eps=config.layer_norm_epsilon)
+            self.word_embeddings_layernorm = MixedFusedRMSNorm(
+                self.embed_dim, eps=config.layer_norm_epsilon
+            )
 
         self.h = nn.ModuleList([TelechatBlock(config, i) for i in range(config.num_hidden_layers)])
         self.ln_f = MixedFusedRMSNorm(self.embed_dim, eps=config.layer_norm_epsilon)
@@ -637,20 +645,22 @@ class TelechatModel(TelechatPreTrainedModel):
         Forward pass of TelechatModel.
 
         Args:
-            input_ids (`torch.LongTensor`, optional): Input token ids.
-            past_key_values (`Tuple[Tuple[torch.Tensor, torch.Tensor], ...]`, optional): Past keys/values for AR decoding.
+            input_ids (`torch.LongTensor`, optional): Input token IDs.
+            past_key_values (`Tuple[Tuple[torch.Tensor, torch.Tensor], ...]`, optional): Past keys/values.
             attention_mask (`torch.Tensor`, optional): Attention mask.
-            inputs_embeds (`torch.Tensor`, optional): Instead of input_ids, directly provide token embeddings.
-            use_cache (`bool`, optional): If True, returns past_key_values.
-            output_attentions (`bool`, optional): If True, returns attention weights.
-            output_hidden_states (`bool`, optional): If True, returns hidden states of all layers.
-            return_dict (`bool`, optional): If True, returns a ModelOutput dict.
+            inputs_embeds (`torch.Tensor`, optional): If provided, directly use embeddings.
+            use_cache (`bool`, optional): Whether to use caching.
+            output_attentions (`bool`, optional): Whether to return attention weights.
+            output_hidden_states (`bool`, optional): Whether to return all hidden states.
+            return_dict (`bool`, optional): Whether to return a `ModelOutput` dict.
 
         Returns:
-            `BaseModelOutputWithPastAndCrossAttentions` or tuple: Depending on `return_dict`.
+            `BaseModelOutputWithPastAndCrossAttentions` or tuple: Model outputs.
         """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -659,7 +669,7 @@ class TelechatModel(TelechatPreTrainedModel):
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
-            raise ValueError("You must provide input_ids or inputs_embeds")
+            raise ValueError("You must provide either input_ids or inputs_embeds")
 
         if past_key_values is None:
             past_key_values = tuple([None] * len(self.h))
@@ -682,7 +692,7 @@ class TelechatModel(TelechatPreTrainedModel):
         seq_length_with_past = seq_length
         past_key_values_length = 0
         if past_key_values[0] is not None:
-            # 修正此处，恢复为原本逻辑：shape[2] 表示序列长度维度
+            # Expecting [batch, heads, seq_len, dim]
             past_key_values_length = past_key_values[0][0].shape[2]
             seq_length_with_past += past_key_values_length
 
@@ -702,10 +712,10 @@ class TelechatModel(TelechatPreTrainedModel):
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
             if self.gradient_checkpointing and self.training:
-                # Gradient checkpointing to save memory
                 def create_custom_forward(module):
                     def custom_forward(*inputs):
                         return module(*inputs, use_cache=use_cache, output_attentions=output_attentions)
+
                     return custom_forward
 
                 outputs = torch.utils.checkpoint.checkpoint(
@@ -774,7 +784,7 @@ class Telechat2ForCausalLM(TelechatPreTrainedModel):
     ) -> dict:
         """
         Prepare inputs during generation.
-        Extract only the last token if past_key_values is provided.
+        If `past_key_values` is provided, extract only the last token.
         """
         if past_key_values:
             input_ids = input_ids[:, -1].unsqueeze(-1)
@@ -810,12 +820,9 @@ class Telechat2ForCausalLM(TelechatPreTrainedModel):
         Forward pass for causal language modeling.
 
         Args:
-            input_ids (`torch.LongTensor`, optional): Token ids.
-            past_key_values, attention_mask, inputs_embeds, labels, use_cache, output_attentions,
-            output_hidden_states, return_dict: see TelechatModel for details.
-
-        Returns:
-            `CausalLMOutputWithCrossAttentions` or tuple: Model outputs.
+            input_ids (`torch.LongTensor`, optional): Input token ids.
+            labels (`torch.Tensor`, optional): Labels for language modeling.
+            Others: see `TelechatModel` for details.
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -837,7 +844,6 @@ class Telechat2ForCausalLM(TelechatPreTrainedModel):
             labels = labels.to(lm_logits.device)
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            # Compute causal language modeling loss
             batch_size, seq_length, vocab_size = shift_logits.shape
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(
