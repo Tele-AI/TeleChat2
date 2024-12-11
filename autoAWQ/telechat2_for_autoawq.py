@@ -58,7 +58,6 @@ class TeleChatV2AWQForCausalLM(BaseAWQForCausalLM):
             module, input_feat, module_kwargs
     ):
         layers = []
-        # 不知道这种方法好不好，通过hook的方式完成
         module_kwargs_attenion = deepcopy(module_kwargs)
         module_kwargs_attenion["residual"] = input_feat["self_attention_residual"]
         layers.append(
@@ -153,7 +152,7 @@ class TeleChatV2AWQForCausalLM(BaseAWQForCausalLM):
 class TeleChatAwqQuantizer(AwqQuantizer):
     def _get_input_feat(self, layer, named_linears):
         # firstly, get input features of all linear layers
-        def cache_input_hook(m, x, y, name, feat_dict): ####主要需要修改这个函数
+        def cache_input_hook(m, x, y, name, feat_dict):
             x = x[0]
             x = x.detach().cpu()
             if name in ['self_attention', 'mlp']:
