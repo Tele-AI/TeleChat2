@@ -16,7 +16,7 @@ quant_config = {"zero_point": True, "q_group_size": 128, "w_bit": 4, "version": 
 
 import pandas as pd
 
-sft_data = pd.read_json("YOUR_DATA_PATH",lines=True, dtype=str)
+sft_data = pd.read_json("YOUR_DATA_PATH",dtype=str)
 """
 格式:
 [
