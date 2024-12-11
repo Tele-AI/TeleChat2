@@ -8,4 +8,4 @@ pip install flash-attn==2.6.3
 # 执行telechat_quant.py
 执行量化步骤
 # 修改load_quant_model_test.py中的路径并进行测试
-测试量化模型的性能，实测1024长度下，A100-40g可以从2卡资源需求变为1卡。
+测试量化模型的性能，实测1024长度下，35B-A100-40g可以从2卡资源需求变为1卡。
