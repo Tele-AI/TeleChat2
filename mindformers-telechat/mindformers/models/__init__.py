@@ -182,6 +182,11 @@ from .cogvlm2 import (
     CogVLM2VideoLMModel,
     LlamaForCausalLMForCogVLM2Image
 )
+from .telechat2 import (
+    TelechatForCausalLM,
+    Telechat2Tokenizer,
+    TelechatConfig
+)
 from .eva02 import (
     EVA02Config,
     EVAModel
@@ -236,3 +241,4 @@ __all__.extend(llama.__all__)
 __all__.extend(multi_modal.__all__)
 __all__.extend(configuration_utils.__all__)
 __all__.extend(modeling_utils.__all__)
+__all__.extend(telechat2.__all__)
