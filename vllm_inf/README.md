@@ -49,13 +49,20 @@ cd ./vllm/model_executor/models/
 
 #### 示例
 ```
->>> from vllm import LLM, SamplingParams
->>> import torch
->>> llm = LLM(model="模型路径", trust_remote_code=True, tensor_parallel_size=4)
->>> prompts = ['你好']
->>> sampling_params = SamplingParams(max_tokens=2048, temperature=0.0, repetition_penalty=1.03) #推荐repetition_penalty为1.03
->>> outputs = llm.generate(prompts, sampling_params)
->>> for output in outputs:
->>>     generated_text = output.outputs[0].text
->>>     print(generated_text)
+from vllm import LLM, SamplingParams
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("TeleAI/TeleChat2-7B/",trust_remote_code=True)
+llm = LLM(model="TeleAI/TeleChat2-7B/", trust_remote_code=True, gpu_memory_utilization=0.90)
+sampling_params = SamplingParams(max_tokens=2048, temperature=0.0, repetition_penalty=1.01) #推荐repetition_penalty为1.01
+
+prompt = "你好"
+
+messages = [{"role": "user", "content": prompt}]
+text = tokenizer.apply_chat_template(messages,tokenize=False,add_generation_prompt=True)
+
+outputs = llm.generate([text], sampling_params)
+for output in outputs:
+    generated_text = output.outputs[0].text
+    print(generated_text)
 ```
