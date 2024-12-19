@@ -165,7 +165,7 @@ API: 分为流式接口和json接口，支持传入推理参数
 
 Web: 支持流式生成、多轮对话
 
-[现已支持vllm推理](./vllm_inf)
+[现已支持vllm推理](./tutorial/telechat_vllm.md)
 
 ### 模型工具调用能力
 
