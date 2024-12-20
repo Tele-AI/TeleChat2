@@ -18,6 +18,7 @@
 - [声明、协议、引用](#声明协议引用)
 
 # 最新动态
+- 2024.12.20 开源 **TeleChat2-35B-32K**
 - 2024.11.08 开源 **TeleChat2-3B**、**TeleChat2-7B**、**TeleChat2-35B**，该版本模型均具备 **Function Call** 功能。
 - 2024.10.18 开源TeleChat2-35B模型。
 - 2024.9.20 开源TeleChat2-115B模型，该模型是**首个完全国产算力训练并开源的千亿参数模型**。
@@ -65,6 +66,7 @@ head层参数分开，有助于增强训练稳定性和收敛性。我们选择�
 | telechat2-3B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-3B)|
 | telechat2-7B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-7B)|
 | telechat2-35B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-35B-Nov)|
+| telechat2-35B-32K |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-35B-32K)|
 | telechat2-115B |   [modelscope](https://modelscope.cn/models/TeleAI/TeleChat2-115B)|
 
 
