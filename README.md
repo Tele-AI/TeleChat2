@@ -161,7 +161,7 @@ GSM8K、MATH、HumanEval、BBH等数据集，评测能力包括了指令遵循�
 
 ### 模型部署
 
-TeleChat目前已支持vllm推理。
+我们建议您在部署TeleChat时尝试使用vLLM。
 
 #### [vllm推理](./tutorial/telechat_vllm.md)
 
