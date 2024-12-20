@@ -107,15 +107,14 @@ vllm serve TeleChat2/TeleChat2-7B
 ```
 
 ## 上下文支持扩展
-TeleChat2 模型的上下文长度默认设置为 8192 个token。为了处理超出 8192 个token的大量输入，我们使用了 dynamic，这是一种增强模型长度外推的技术，确保在处理长文本时的最优性能。
+TeleChat2 模型的上下文长度默认设置为 8192和32768 个token。为了处理超出默认token的大量输入，我们使用了 dynamic，这是一种增强模型长度外推的技术，确保在处理长文本时的最优性能。
 vLLM 支持 dynamic，并且可以通过在模型的 config.json 文件中添加一个 rope_scaling 字段来启用它。例如，
 ```
 {
   ...,
   "rope_scaling": {
-    "factor": 2.0,
-    "original_max_position_embeddings": 8192,
-    "type": "dynamic"
-  }
+    "factor": 3.0,
+    "rope_type": "dynamic"
+  },
 }
 ```
