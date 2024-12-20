@@ -75,9 +75,9 @@ chat_response = client.chat.completions.create(
         {"role": "user", "content": "Tell me something about large language models."},
     ],
     temperature=0.0,
-    max_tokens=512,
+    max_tokens=2048,
     extra_body={
-        "repetition_penalty": 1.05,
+        "repetition_penalty": 1.01,
         "skip_special_tokens": False,
         "spaces_between_special_tokens": False,
     },
