@@ -161,13 +161,9 @@ GSM8K、MATH、HumanEval、BBH等数据集，评测能力包括了指令遵循�
 
 ### 模型部署
 
-TeleChat目前提供了API、Web两种部署方式。目前仅提供简单的单卡单并发场景，用于演示和效果测试。
+TeleChat目前已支持vllm推理。
 
-API: 分为流式接口和json接口，支持传入推理参数
-
-Web: 支持流式生成、多轮对话
-
-[现已支持vllm推理](./tutorial/telechat_vllm.md)
+#### [vllm推理](./tutorial/telechat_vllm.md)
 
 ### 模型工具调用能力
 
