@@ -52,7 +52,8 @@ for output in outputs:
 ```
 vllm serve TeleChat2/TeleChat2-7B
     --trust-remote-code
-    --dtype float16
+    --dtype bfloat16
+    --disable-custom-all-reduce
 ```
 你无需担心chat模板，因为它默认会使用由tokenizer提供的chat模板。
 
@@ -92,18 +93,19 @@ vLLM中的OpenAI兼容API 可以配置为支持 TeleChat2 的工具调用。详�
 当 TeleChat2 与 vLLM 结合使用时，支持结构化/JSON 输出。请参照[vllm 的文档](https://docs.vllm.ai/en/stable/serving/openai_compatible_server.html#extra-parameters-for-chat-api)了解 guided_json 参数。此外，也建议在系统消息或用户提示中指示模型生成特定格式，避免仅依赖于推理参数配置。
 
 ## 多卡分布式部署
-要提高模型的处理吞吐量，分布式服务可以通过利用更多的GPU设备来帮助您。特别是对于像 TeleChat-115B 这样的大模型，单个GPU无法支撑其在线服务。在这里，我们通过演示如何仅通过传入参数 tensor_parallel_size ，来使用张量并行来运行 TeleChat-115B 模型：
+要提高模型的处理吞吐量，分布式服务可以通过利用更多的GPU设备来帮助您。特别是对于像 TeleChat-115B 这样的大模型，单个GPU无法支撑其在线服务。在这里，我们通过演示如何仅通过传入参数 tensor_parallel_size ，来使用张量并行来运行 TeleChat-35B 模型：
 离线推理
 ```
 from vllm import LLM, SamplingParams
-llm = LLM(model="TeleChat/TeleChat2-115B", trust_remote_code=True, tensor_parallel_size=4)
+llm = LLM(model="TeleChat/TeleChat2-35B", trust_remote_code=True, tensor_parallel_size=4)
 ```
 API
 ```
-vllm serve TeleChat2/TeleChat2-7B
+vllm serve TeleChat2/TeleChat2-35B
     --trust-remote-code
     --tensor-parallel-size 4
-    --dtype float16
+    --dtype bfloat16
+    --disable-custom-all-reduce
 ```
 
 ## 上下文支持扩展
