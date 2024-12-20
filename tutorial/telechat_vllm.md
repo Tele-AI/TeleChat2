@@ -4,33 +4,9 @@
 ## 安装
 默认情况下，你可以通过 pip 在新环境中安装vLLM：
 ```
-pip install vllm #推荐 0.6.1.post2 版本
+pip install vllm #需要0.6.5 或以上版本
 ```
 
-### 将telechat model文件放入
-pip show vllm 找到vllm对应位置并进入
-```
-cd ./vllm/model_executor/models/
-```
-将的[telechat.py](../vllm_inf/telechat.py) 文件放入以上路径
-
-### 修改init文件
-修改同路径下的__init__.py
-```
-    "StableLmForCausalLM": ("stablelm", "StablelmForCausalLM"),
-    "Starcoder2ForCausalLM": ("starcoder2", "Starcoder2ForCausalLM"),
-    "TeleChatForCausalLM": ("telechat", "TeleChatForCausalLM"),  #telechat
-    "ArcticForCausalLM": ("arctic", "ArcticForCausalLM"),
-    "XverseForCausalLM": ("xverse", "XverseForCausalLM"),
-```
-添加以上代码中的TeleChat 一行
-
-### 修改模型文件里的config.json
-```
->>> architectures": [
->>>     "TeleChatForCausalLM"
->>>     ]
-```
 
 请留意预构建的vllm对torch和其CUDA版本有强依赖。请查看[vLLM官方文档](https://docs.vllm.ai/en/latest/getting_started/installation.html)中的注意事项以获取有关安装的帮助。我们也建议你通过 pip install ray 安装ray， 以便支持分布式服务。
 
@@ -131,15 +107,14 @@ vllm serve TeleChat2/TeleChat2-7B
 ```
 
 ## 上下文支持扩展
-TeleChat2 模型的上下文长度默认设置为 8192 个token。为了处理超出 8192 个token的大量输入，我们使用了 dynamic，这是一种增强模型长度外推的技术，确保在处理长文本时的最优性能。
+TeleChat2 模型的上下文长度默认设置为 8192和32768 个token。为了处理超出默认token的大量输入，我们使用了 dynamic，这是一种增强模型长度外推的技术，确保在处理长文本时的最优性能。
 vLLM 支持 dynamic，并且可以通过在模型的 config.json 文件中添加一个 rope_scaling 字段来启用它。例如，
 ```
 {
   ...,
   "rope_scaling": {
-    "factor": 2.0,
-    "original_max_position_embeddings": 8192,
-    "type": "dynamic"
-  }
+    "factor": 3.0,
+    "rope_type": "dynamic"
+  },
 }
 ```
