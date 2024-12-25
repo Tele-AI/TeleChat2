@@ -29,8 +29,9 @@ flash-attn 用于TeleChat模型推理
 
 pydantic与langchain包的更新是为了解决在旧版本中版本不兼容的报错
 
+### 设置参数
 
-### TeleChat模型下载
+#### TeleChat模型下载
 首先下载需要的telechat模型，例如模型所在位置为：
 ./telechat2-7B
 其中包含以下文件：
@@ -48,10 +49,59 @@ pydantic与langchain包的更新是为了解决在旧版本中版本不兼容的
 12. pytorch_model_00003-of-00004.bin
 13. pytorch_model_00004-of-00004.bin
 
-### 文本向量化模型下载
+#### 文本向量化模型下载
 模型地址：https://huggingface.co/sentence-transformers/all-mpnet-base-v2/tree/main
 
 将下载后的所有文件放于：./all-mpnet-base-v2 目录下即可。
+
+```python
+import torch
+from llama_index.core import Settings
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.llms.huggingface import HuggingFaceLLM
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
+model_path = "telechat2-7B"
+
+Settings.llm = HuggingFaceLLM(
+    model_name=model_path,
+    tokenizer_name=model_path,
+    context_window=30000,
+    max_new_tokens=2000,
+    generate_kwargs={"temperature": 0.7, "top_k": 50, "top_p": 0.95},
+    device_map="cuda",
+)
+
+# Set embedding model
+Settings.embed_model = HuggingFaceEmbedding(
+    model_name = "all-mpnet-base-v2",
+)
+
+# Set the size of the text chunk for retrieval
+Settings.transformations = [SentenceSplitter(chunk_size=1024)]
+```
+
+#### 构建索引
+现在我们可以从文档或网站构建索引。
+
+以下代码片段展示了如何为本地名为’document’的文件夹中的文件（无论是PDF格式还是TXT格式）构建索引。
+```python
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+
+documents = SimpleDirectoryReader("./document").load_data()
+index = VectorStoreIndex.from_documents(
+    documents,
+    embed_model=Settings.embed_model,
+    transformations=Settings.transformations
+)
+```
+
+#### 检索增强(RAG)
+```python
+query_engine = index.as_query_engine()
+your_query = "<your query here>"
+print(query_engine.query(your_query).response)
+```
 
 ### 示例代码运行
 示例代码位于当前目录 "inference.py" 文件中，使用的知识库为"document"目录，该目录可以放置知识库，例如"example.txt"
