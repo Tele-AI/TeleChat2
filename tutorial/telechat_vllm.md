@@ -24,7 +24,7 @@ tokenizer = AutoTokenizer.from_pretrained("TeleChat/TeleChat2-7B", trust_remote_
 sampling_params = SamplingParams(temperature=0.0, repetition_penalty=1.05, max_tokens=512)
 
 # Input the model name or path.
-llm = LLM(model="TeleChat/TeleChat2-7B", trust_remote_code=True)
+llm = LLM(model="TeleChat/TeleChat2-7B", trust_remote_code=True, dtype="bfloat16")
 
 # Prepare your prompts
 prompt = "Tell me something about large language models."
