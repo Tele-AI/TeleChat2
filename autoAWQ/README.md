@@ -1,11 +1,46 @@
-# 安装依赖（测试已通过版本)
+# TeleChat Autoawq 推理使用方式
+
+## 下载autoawq
 ```
-pip install autoawq
+pip install autoawq==x.x.x
 pip install accelerate==0.34.2
 pip install flash-attn==2.6.3
 ```
-# 修改telechat_quant.py中的路径
-# 执行telechat_quant.py
-执行量化步骤
-# 修改load_quant_model_test.py中的路径并进行测试
-测试量化模型的性能，实测1024长度下，35B-A100-40g可以从2卡资源需求变为1卡。
+
+## autoawq 添加telechat
+
+### 将telechat model文件放入
+pip show autoawq 找到autoawq对应位置并进入
+```bash
+cd ./awq/models/
+```
+将此路径下的 telechat.py和bsae.py 文件放入以上路径
+
+
+```bash
+cd ./awq/quantize/
+```
+将此路径下的 quantize.py 替换原 quantize.py 文件
+
+### 修改init文件
+修改同路径下的__init__.py
+```python
+from .minicpm3 import MiniCPM3AWQForCausalLM
+from .qwen2vl import Qwen2VLAWQForCausalLM
+from .telechat2 import Telechat2AWQForCausalLM # 添加telechat2
+```
+
+### 修改auto文件
+修改同路径下的auto.py
+```python
+    "minicpm3": MiniCPM3AWQForCausalLM,
+    "qwen2_vl": Qwen2VLAWQForCausalLM,
+    'telechat': Telechat2AWQForCausalLM, # 添加telechat2
+```
+
+
+# 启动
+使用autoawq 量化telechat2模型
+```bash
+python telechat_quant.py
+```
