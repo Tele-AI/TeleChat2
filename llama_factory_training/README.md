@@ -93,59 +93,92 @@ LLaMA-Factory 在 data 文件夹中提供了多个训练数据集，您可以直
     ```
 
 # 训练
+下载模型，例如模型位置为："./telechat_7B"，需要将模型位置中的"modeling_telechat2.py"文件进行替换，使用[modeling_telechat2.py](../llama_factory_training/modeling_telechat2.py)文件替换即可。
 
-需要将模型位置中的"modeling_telechat2.py"文件进行替换，使用[modeling_telechat2.py](../llama_factory_training/modeling_telechat2.py)文件替换即可。
+替换完毕后，使用如下命令即可使用示例数据进行lora微调过程。
 
-执行下列命令：
-
-```bash
-DISTRIBUTED_ARGS="
-    --nproc_per_node $NPROC_PER_NODE \
-    --nnodes $NNODES \
-    --node_rank $NODE_RANK \
-    --master_addr $MASTER_ADDR \
-    --master_port $MASTER_PORT
-  "
-
-torchrun $DISTRIBUTED_ARGS src/train.py \
-    --deepspeed $DS_CONFIG_PATH \
-    --stage sft \
-    --do_train \
-    --use_fast_tokenizer \
-    --flash_attn \
-    --model_name_or_path $MODEL_PATH \
-    --dataset your_dataset \
-    --template telechat \
-    --finetuning_type lora \
-    --lora_target q_proj,v_proj\
-    --output_dir $OUTPUT_PATH \
-    --overwrite_cache \
-    --overwrite_output_dir \
-    --warmup_steps 100 \
-    --weight_decay 0.1 \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 4 \
-    --ddp_timeout 9000 \
-    --learning_rate 5e-6 \
-    --lr_scheduler_type cosine \
-    --logging_steps 1 \
-    --cutoff_len 4096 \
-    --save_steps 1000 \
-    --plot_loss \
-    --num_train_epochs 3
+```Bash
+CUDA_VISIBLE_DEVICES=0 llamafactory-cli train \--stage sft \--do_train True \--model_name_or_path ./telechat_7B \--preprocessing_num_workers 16 \--finetuning_type lora \--template telechat \--flash_attn auto \--dataset_dir data \--dataset identity,alpaca_en_demo \--cutoff_len 1024 \--learning_rate 3.e-5 \--num_train_epochs 2.0 \--max_samples 100000 \--per_device_train_batch_size 1 \--gradient_accumulation_steps 1 \--lr_scheduler_type cosine \--max_grad_norm 1.0 \--logging_steps 1 \--save_steps 100 \--warmup_steps 0 \--optim adamw_torch \--packing False \--report_to none \--output_dir saves/telechat_7B_lora \--plot_loss True \--ddp_timeout 180000000 \--include_num_input_tokens_seen True \--lora_rank 8 \--lora_alpha 16 \--lora_dropout 0 \--lora_target all 
 ```
-并享受训练过程。若要调整您的训练，您可以通过修改训练命令中的参数来调整超参数。其中一个需要注意的参数是 cutoff_len ，它代表训练数据的最大长度。通过控制这个参数，可以避免出现OOM（内存溢出）错误。
 
-合并LoRA
-如果你使用 LoRA 训练模型，可能需要将adapter参数合并到主分支中。请运行以下命令以执行 LoRA adapter 的合并操作。
+该命令指定学习率为3e-5，训练epoch为2，训练后保存的权重位置为**"saves/telechat_7B_lora"**。
+
+## 对话
+
+微调完后，即可开始对话，首先需要定义配置文件：**"inference_telechat_lora_sft.yaml"**
+
+```Bash
+model_name_or_path: ./telechat_7B
+adapter_name_or_path: saves/telechat_7B_lora
+template: telechat
+infer_backend: huggingface  # choices: [huggingface, vllm]
+```
+
+使用该命令启动推理脚本，该方式会自动合并lora部分权重：
+
+```Bash
+llamafactory-cli chat inference_telechat_lora_sft.yaml
+```
+运行后，即可在命令行中进行输入，并得到推理结果。
+
+## lora权重合并
+
+如果想导出新模型进行后续推理与部署，需要进行lora权重合并，首先定义配置文件：**"merge_telechat_lora_sft.yaml"**
+
+```Bash
+### Note: DO NOT use quantized model or quantization_bit when merging lora adapters
+### model
+model_name_or_path: ./telechat_7B
+adapter_name_or_path: saves/telechat_7B_lora
+template: telechat
+finetuning_type: lora
+
+### export
+export_dir: models/telechat_7B_lora
+export_size: 2
+export_device: cpu
+export_legacy_format: false
+```
+
+使用该命令运行合并脚本：
+
+```Bash
+llamafactory-cli export merge_telechat_lora_sft.yaml
+```
+
+运行该脚本后，则会在当前目录下生成: **"models/telechat_7B_lora"**目录，该目录为导出的新模型，里面会包含配置文件，字典文件，以及权重文件等，可用于后续的推理与部署。
+
+## huggingface 推理
 
 ```python
-CUDA_VISIBLE_DEVICES=0 llamafactory-cli export \
-    --model_name_or_path path_to_base_model \
-    --adapter_name_or_path path_to_adapter \
-    --template telechat \
-    --finetuning_type lora \
-    --export_dir path_to_export \
-    --export_size 2 \
-    --export_legacy_format False
+import os
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+
+tokenizer = AutoTokenizer.from_pretrained('models/telechat_7B_lora', trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained('models/telechat_7B_lora', trust_remote_code=True, device_map="auto", torch_dtype=torch.float16)
+
+prompt = "生抽与老抽的区别？"
+messages = [{"role": "user", "content": prompt}]
+text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+generated_ids = model.generate(**model_inputs, max_new_tokens=512)
+
+generated_ids = [
+    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+]
+
+response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+print(response
 ```
+
+## vllm部署
+
+合并权重后，新模型位于: **"models/telechat_7B_lora"**
+
+```Bash
+vllm serve models/telechat_7B_lora --trust-remote-code
+```
+
+通过该命令即可部署成功。
