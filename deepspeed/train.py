@@ -10,7 +10,6 @@ import random
 import shutil
 import hashlib
 import datasets
-import deepspeed
 import transformers
 import pandas as pd
 import torch.nn as nn
@@ -26,7 +25,7 @@ from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 from accelerate.utils import DistributedType
 from transformers.trainer_pt_utils import LabelSmoother
-from transformers.deepspeed import is_deepspeed_zero3_enabled
+from transformers.integrations import is_deepspeed_zero3_enabled
 from transformers import set_seed, AutoTokenizer, AutoModelForCausalLM
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
