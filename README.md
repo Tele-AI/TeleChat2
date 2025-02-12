@@ -15,6 +15,12 @@
 - [效果评测](#效果评测)
 - [模型推理和部署](#模型推理和部署)
 - [模型微调](#模型微调)
+- [国产化适配](#国产化适配)
+- [更多功能](#更多功能)
+  - [llama-factory](##llama-factory) 
+  - [text-generation-webui](##text-generation-webui)
+  - [langchain](##langchain)
+  - [llama-index](##llama-index)
 - [声明、协议、引用](#声明协议引用)
 
 # 最新动态
@@ -190,6 +196,26 @@ TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[Tel
 
 - 我们提供了详细的运行指引，在 [telechat国产化](./tutorial/telechat_国产化运行.md)。
 - 如果您对mindsformers相关特性有疑问，也可以查看[mindformers](https://gitee.com/mindspore/mindformers/tree/dev/)
+
+# 更多功能
+
+### LLaMA-Factory
+
+TeleChat2 已支持使用LLaMA-Factory进行LoRA微调、权重合并、推理、部署，具体使用方式参考文档[TeleChat2-LLaMA-Factory微调文档](./tutorial/telechat_llama_factory.md)。
+
+### text-generation-webui
+
+TeleChat2 已支持使用text-generation-webui实现界面应用，具体使用方式参考文档[TeleChat2-text-generation-webui部署文档](./text_generation_webui/README.md)。
+
+### LangChain
+
+TeleChat2 已支持使用LangChain进行高效向量知识库检索问答，具体使用方式参考文档[TeleChat2-LangChain文档](./langchain/README.md)。
+
+### LlamaIndex
+
+TeleChat2 已支持使用LlamaIndex进行高效向量知识库检索问答，具体使用方式参考文档[TeleChat2-LlamaIndex文档](./llama_index/README.md)。
+
+
 
 # 声明、协议、引用
 
