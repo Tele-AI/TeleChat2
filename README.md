@@ -15,6 +15,12 @@
 - [效果评测](#效果评测)
 - [模型推理和部署](#模型推理和部署)
 - [模型微调](#模型微调)
+- [国产化适配](#国产化适配)
+- [更多功能](#更多功能)
+  - [llama-factory](##llama-factory) 
+  - [text-generation-webui](##text-generation-webui)
+  - [langchain](##langchain)
+  - [llama-index](##llama-index)
 - [声明、协议、引用](#声明协议引用)
 
 # 最新动态
@@ -175,21 +181,52 @@ TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[Tel
 
 # 国产化适配
 
-### 昇腾Atlas 800T A2训练服务器+昇思MindSpore框架:  训练、推理适配
+### 昇腾Atlas 800T A2训练服务器实现训练、推理适配
 
-当前星辰语义大模型TeleChat2支持昇腾Atlas 800T A2训练服务器，可基于昇思MindSpore框架进行模型训练和评测。
+#### 核心组件：
 
-- 115B模型性能方面，具体对比如下：
+- 昇思MindSpore：该框架是华为开发的深度学习框架，旨在为AI应用提供高效、灵活的开发环境。它支持多种硬件平台，并具有自动微分、模型优化等功能，适合各种深度学习任务。
+
+- MindSpore Transformers：该框架的目标是构建一个大模型训练、微调、评估、推理、部署的全流程开发套件，提供业内主流的Transformer类预训练模型和SOTA下游任务应用，涵盖丰富的并行特性。期望帮助用户轻松的实现大模型训练和创新研发。
+
+**当前星辰语义大模型TeleChat2支持昇腾Atlas 800T A2训练服务器，可基于昇思MindSpore框架以及MindSpore Transformers框架进行模型训练和评测，详情请看[telechat国产化](./tutorial/telechat_国产化运行.md)。如果您对mindsformers相关特性有疑问，也可以查看[mindformers](https://gitee.com/mindspore/mindformers/tree/dev/)。**
+
+115B模型性能方面，具体对比如下：
 
 | NAME                 | performance(samples/p/s) | Epochs | AMP_Type |
-  |--------------------------| ---------------------: | ------ | -------: |
+|:-------------------------| :--------------------- | :----- | :------- |
 | 115B  |  0.0192            | 1      |        O1 |
 | 115B           | 0.0174                | 1      |       O2 |
 
-说明：建议采用8台一组进行训练
 
-- 我们提供了详细的运行指引，在 [telechat国产化](./tutorial/telechat_国产化运行.md)。
-- 如果您对mindsformers相关特性有疑问，也可以查看[mindformers](https://gitee.com/mindspore/mindformers/tree/dev/)
+
+# 更多功能
+
+### LLaMA-Factory
+
+[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory) 是一个专注于大语言模型（LLM）开发和优化的开源平台，旨在简化模型训练和部署的过程。该平台提供了多种工具和框架，支持用户根据特定需求自定义和扩展语言模型。通过LLaMA-Factory，研究人员和开发者可以更高效地探索和实现最新的自然语言处理技术，例如LoRA，QLoRA，Pre-Training，Supervised Fine-Tuning，DPO Training等。
+
+TeleChat2 已支持使用LLaMA-Factory进行微调、权重合并、推理、部署，具体使用方式参考文档[TeleChat2-LLaMA-Factory微调文档](./tutorial/telechat_llama_factory.md)。
+
+### text-generation-webui
+
+[text-generation-webui](https://github.com/oobabooga/text-generation-webui) 是一个开源的Web用户界面，旨在简化大语言模型的使用和交互。它支持多种预训练模型，使用户能够方便地进行文本生成、对话和其他自然语言处理任务。该界面友好易用，适合研究人员和开发者快速构建和测试他们的应用程序。
+
+TeleChat2 已支持使用text-generation-webui实现界面应用，具体使用方式参考文档[TeleChat2-text-generation-webui部署文档](./text_generation_webui/README.md)。
+
+### LangChain
+
+[LangChain](https://github.com/langchain-ai/langchain) 是一个用于构建基于大语言模型（LLM）的应用程序的框架，旨在简化开发流程。它提供了一系列工具和模块，使开发者能够轻松集成数据源、API和后端服务，与语言模型进行交互。通过LangChain，用户可以快速创建复杂的对话系统、智能助手和其他自然语言处理应用。
+
+TeleChat2 已支持使用LangChain进行高效向量知识库检索问答，具体使用方式参考文档[TeleChat2-LangChain文档](./langchain/README.md)。
+
+### LlamaIndex
+
+[LlamaIndex](https://github.com/run-llama/llama_index) 是一个用于构建和管理与大型语言模型（LLM）交互的数据索引工具，旨在提高信息检索的效率。它允许用户将结构化和非结构化数据转化为可供语言模型查询的格式，从而提升模型的响应准确性和相关性。LlamaIndex适用于各种应用场景，包括知识库、对话系统和文档检索等。
+
+TeleChat2 已支持使用LlamaIndex进行高效向量知识库检索问答，具体使用方式参考文档[TeleChat2-LlamaIndex文档](./llama_index/README.md)。
+
+
 
 # 声明、协议、引用
 
