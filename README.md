@@ -204,17 +204,25 @@ TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[Tel
 
 ### LLaMA-Factory
 
-TeleChat2 已支持使用LLaMA-Factory进行LoRA微调、权重合并、推理、部署，具体使用方式参考文档[TeleChat2-LLaMA-Factory微调文档](./tutorial/telechat_llama_factory.md)。
+[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory) 是一个专注于大语言模型（LLM）开发和优化的开源平台，旨在简化模型训练和部署的过程。该平台提供了多种工具和框架，支持用户根据特定需求自定义和扩展语言模型。通过LLaMA-Factory，研究人员和开发者可以更高效地探索和实现最新的自然语言处理技术，例如LoRA，QLoRA，Pre-Training，Supervised Fine-Tuning，DPO Training等。
+
+TeleChat2 已支持使用LLaMA-Factory进行微调、权重合并、推理、部署，具体使用方式参考文档[TeleChat2-LLaMA-Factory微调文档](./tutorial/telechat_llama_factory.md)。
 
 ### text-generation-webui
+
+[text-generation-webui](https://github.com/oobabooga/text-generation-webui) 是一个开源的Web用户界面，旨在简化大语言模型的使用和交互。它支持多种预训练模型，使用户能够方便地进行文本生成、对话和其他自然语言处理任务。该界面友好易用，适合研究人员和开发者快速构建和测试他们的应用程序。
 
 TeleChat2 已支持使用text-generation-webui实现界面应用，具体使用方式参考文档[TeleChat2-text-generation-webui部署文档](./text_generation_webui/README.md)。
 
 ### LangChain
 
+[LangChain](https://github.com/langchain-ai/langchain) 是一个用于构建基于大语言模型（LLM）的应用程序的框架，旨在简化开发流程。它提供了一系列工具和模块，使开发者能够轻松集成数据源、API和后端服务，与语言模型进行交互。通过LangChain，用户可以快速创建复杂的对话系统、智能助手和其他自然语言处理应用。
+
 TeleChat2 已支持使用LangChain进行高效向量知识库检索问答，具体使用方式参考文档[TeleChat2-LangChain文档](./langchain/README.md)。
 
 ### LlamaIndex
+
+[LlamaIndex](https://github.com/run-llama/llama_index) 是一个用于构建和管理与大型语言模型（LLM）交互的数据索引工具，旨在提高信息检索的效率。它允许用户将结构化和非结构化数据转化为可供语言模型查询的格式，从而提升模型的响应准确性和相关性。LlamaIndex适用于各种应用场景，包括知识库、对话系统和文档检索等。
 
 TeleChat2 已支持使用LlamaIndex进行高效向量知识库检索问答，具体使用方式参考文档[TeleChat2-LlamaIndex文档](./llama_index/README.md)。
 
