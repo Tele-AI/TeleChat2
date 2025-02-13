@@ -181,21 +181,24 @@ TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[Tel
 
 # 国产化适配
 
-### 昇腾Atlas 800T A2训练服务器+昇思MindSpore框架:  训练、推理适配
+### 昇腾Atlas 800T A2训练服务器实现训练、推理适配
 
-当前星辰语义大模型TeleChat2支持昇腾Atlas 800T A2训练服务器，可基于昇思MindSpore框架进行模型训练和评测。
+#### 核心组件：
 
-- 115B模型性能方面，具体对比如下：
+- 昇思MindSpore：该框架是华为开发的深度学习框架，旨在为AI应用提供高效、灵活的开发环境。它支持多种硬件平台，并具有自动微分、模型优化等功能，适合各种深度学习任务。
+
+- MindSpore Transformers：该框架的目标是构建一个大模型训练、微调、评估、推理、部署的全流程开发套件，提供业内主流的Transformer类预训练模型和SOTA下游任务应用，涵盖丰富的并行特性。期望帮助用户轻松的实现大模型训练和创新研发。
+
+**当前星辰语义大模型TeleChat2支持昇腾Atlas 800T A2训练服务器，可基于昇思MindSpore框架以及MindSpore Transformers框架进行模型训练和评测，详情请看[telechat国产化](./tutorial/telechat_国产化运行.md)。如果您对mindsformers相关特性有疑问，也可以查看[mindformers](https://gitee.com/mindspore/mindformers/tree/dev/)。**
+
+115B模型性能方面，具体对比如下：
 
 | NAME                 | performance(samples/p/s) | Epochs | AMP_Type |
-  |--------------------------| ---------------------: | ------ | -------: |
+|:-------------------------| :--------------------- | :----- | :------- |
 | 115B  |  0.0192            | 1      |        O1 |
 | 115B           | 0.0174                | 1      |       O2 |
 
-说明：建议采用8台一组进行训练
 
-- 我们提供了详细的运行指引，在 [telechat国产化](./tutorial/telechat_国产化运行.md)。
-- 如果您对mindsformers相关特性有疑问，也可以查看[mindformers](https://gitee.com/mindspore/mindformers/tree/dev/)
 
 # 更多功能
 
