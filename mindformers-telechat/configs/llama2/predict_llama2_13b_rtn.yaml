@@ -20,7 +20,7 @@ runner_config:
   epochs: 2
   batch_size: 1
   sink_mode: True
-  sink_size: 2
+  sink_size: 1
 
 # eval dataset
 eval_dataset: &eval_dataset
@@ -68,7 +68,6 @@ micro_batch_interleave_num: 1
 context:
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "58GB"
   save_graphs: False

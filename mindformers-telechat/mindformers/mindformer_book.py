@@ -255,14 +255,6 @@ class MindFormerBook:
                 _PROJECT_PATH, "configs/glm4/predict_glm4_9b_chat.yaml")),
             ("codegeex2_6b", os.path.join(
                 _PROJECT_PATH, "configs/codegeex2/run_codegeex2_6b.yaml")),
-            ("bloom_560m", os.path.join(
-                _PROJECT_PATH, "configs/bloom/run_bloom_560m.yaml")),
-            ("bloom_7.1b", os.path.join(
-                _PROJECT_PATH, "configs/bloom/run_bloom_7.1b.yaml")),
-            ("bloom_65b", os.path.join(
-                _PROJECT_PATH, "configs/bloom/run_bloom_65b.yaml")),
-            ("bloom_176b", os.path.join(
-                _PROJECT_PATH, "configs/bloom/run_bloom_176b.yaml")),
             ("baichuan_7b", os.path.join(
                 _PROJECT_PATH, "research/baichuan/run_baichuan_7b.yaml")),
             ("baichuan2_7b", os.path.join(
@@ -416,6 +408,8 @@ class MindFormerBook:
                 _PROJECT_PATH, "configs/llama2/predict_llama2_13b.yaml")),
             ("llama2_70b", os.path.join(
                 _PROJECT_PATH, "configs/llama2/predict_llama2_70b.yaml")),
+            ("mllama_11b", os.path.join(
+                _PROJECT_PATH, "configs/mllama/predict_mllama_11b.yaml")),
             ("codellama_34b", os.path.join(
                 _PROJECT_PATH, "configs/codellama/predict_codellama_34b.yaml")),
             ("llama_7b_lora", os.path.join(
@@ -442,14 +436,6 @@ class MindFormerBook:
                 _PROJECT_PATH, "configs/glm4/predict_glm4_9b_chat.yaml")),
             ("codegeex2_6b", os.path.join(
                 _PROJECT_PATH, "configs/codegeex2/run_codegeex2_6b.yaml")),
-            ("bloom_560m", os.path.join(
-                _PROJECT_PATH, "configs/bloom/run_bloom_560m.yaml")),
-            ("bloom_7.1b", os.path.join(
-                _PROJECT_PATH, "configs/bloom/run_bloom_7.1b.yaml")),
-            ("bloom_65b", os.path.join(
-                _PROJECT_PATH, "configs/bloom/run_bloom_65b.yaml")),
-            ("bloom_176b", os.path.join(
-                _PROJECT_PATH, "configs/bloom/run_bloom_176b.yaml")),
             ("baichuan_7b", os.path.join(
                 _PROJECT_PATH, "research/baichuan/run_baichuan_7b.yaml")),
             ("baichuan2_7b", os.path.join(
@@ -571,18 +557,15 @@ class MindFormerBook:
             'llama2_13b',
             'llama2_70b',
         ]),
+        ('mllama', [
+            'mllama_11b',
+        ]),
         ('codellama', [
             'codellama_34b',
         ]),
         ('pangualpha', [
             'pangualpha_2_6b',
             'pangualpha_13b'
-        ]),
-        ('bloom', [
-            'bloom_560m',
-            'bloom_7.1b',
-            'bloom_65b',
-            'bloom_176b',
         ]),
         ('glm', [
             'glm_6b',
@@ -619,6 +602,9 @@ class MindFormerBook:
         ]),
         ('deepseekv2', [
             'deepseekv2_236b',
+        ]),
+        ('deepseekv3', [
+            'deepseekv3_671b',
         ])
     ])
 
@@ -705,18 +691,15 @@ class MindFormerBook:
             'llama2_13b',
             'llama2_70b',
         ]),
+        ('mllama', [
+            'mllama_11b',
+        ]),
         ('codellama', [
             'codellama_34b',
         ]),
         ('pangualpha', [
             'pangualpha_2_6b',
             'pangualpha_13b'
-        ]),
-        ('bloom', [
-            'bloom_560m',
-            'bloom_7.1b',
-            'bloom_65b',
-            'bloom_176b',
         ]),
         ('glm', [
             'glm_6b',
@@ -812,6 +795,9 @@ class MindFormerBook:
         ('llama', [
             'llama_7b',
         ]),
+        ('mllama', [
+            'mllama_11b',
+        ]),
         ('pangualpha', [
             'pangualpha_2_6b',
             'pangualpha_13b'
@@ -827,12 +813,6 @@ class MindFormerBook:
         ]),
         ('glm4', [
             'glm4_9b',
-        ]),
-        ('bloom', [
-            'bloom_560m',
-            'bloom_7.1b',
-            'bloom_65b',
-            'bloom_176b',
         ]),
         ('sam', [
             'sam_vit_b',
@@ -896,6 +876,9 @@ class MindFormerBook:
         ('llama3', [
             'llama3_8b',
         ]),
+        ('mllama', [
+            'mllama_11b',
+        ]),
         ('codellama', [
             'codellama_34b',
         ]),
@@ -917,12 +900,6 @@ class MindFormerBook:
         ]),
         ('codegeex2', [
             'codegeex2_6b'
-        ]),
-        ('bloom', [
-            'bloom_560m',
-            'bloom_7.1b',
-            'bloom_65b',
-            'bloom_176b',
         ]),
         ('internlm', [
             'internlm_7b',
@@ -1109,18 +1086,6 @@ class MindFormerBook:
          ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
           '/XFormer_for_mindspore/glm/glm_6b_lora.ckpt'
           ]),
-        ('glm2_6b',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/XFormer_for_mindspore/glm2/glm2_6b.ckpt'
-          ]),
-        ('glm2_6b_lora',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/XFormer_for_mindspore/glm2/glm2_6b_lora.ckpt'
-          ]),
-        ('glm3_6b',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/XFormer_for_mindspore/glm3/glm3_6b.ckpt'
-          ]),
         ('codegeex2_6b',
          ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
           '/MindFormers/codegeex2/codegeex2_6b.ckpt'
@@ -1144,14 +1109,6 @@ class MindFormerBook:
         ('llama_7b_lora',
          ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
           '/XFormer_for_mindspore/llama/open_llama_7b_lora.ckpt'
-          ]),
-        ('bloom_560m',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/MindFormers/bloom/bloom_560m.ckpt'
-          ]),
-        ('bloom_7.1b',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/MindFormers/bloom/bloom_7.1b.ckpt'
           ]),
         ('sam_vit_b',
          ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
@@ -1411,22 +1368,6 @@ class MindFormerBook:
          ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
           '/MindFormers/llama2/tokenizer.model'
           ]),
-        ('bloom_560m',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/MindFormers/bloom/tokenizer.json'
-          ]),
-        ('bloom_7.1b',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/MindFormers/bloom/tokenizer.json'
-          ]),
-        ('bloom_65b',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/MindFormers/bloom/tokenizer.json'
-          ]),
-        ('bloom_176b',
-         ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
-          '/MindFormers/bloom/tokenizer.json'
-          ]),
         ('qwen_7b',
          ['https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com'
           '/MindFormers/qwen/qwen.tiktoken'
@@ -1444,7 +1385,6 @@ class MindFormerBook:
         ('LlamaTokenizer', 'LlamaProcessor'),
         ('GPT2Tokenizer', 'GPT2Processor'),
         ('PanguAlphaTokenizer', 'PanguAlphaProcessor'),
-        ('BloomTokenizer', 'BloomProcessor'),
         ('InternLMTokenizer', 'LlamaProcessor'),
         ('BaichuanTokenizer', 'LlamaProcessor'),
         ('Baichuan2Tokenizer', 'LlamaProcessor')

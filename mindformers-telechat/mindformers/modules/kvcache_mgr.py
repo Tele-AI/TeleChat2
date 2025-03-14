@@ -222,6 +222,7 @@ class KVCachePreprocess(nn.Cell):
         self.expand_dims = P.ExpandDims().shard(((1, 1, 1),))
         self.div = P.Div()
         self.concat = P.Concat(axis=0)
+        self.cast = P.Cast()
 
     def construct(self, batch_size, batch_valid_length=None, batch_index=None, zactivate_len=None):
         """precompute kvcache inputs"""

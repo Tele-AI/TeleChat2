@@ -22,40 +22,43 @@ from mindspore.numpy import array_equal
 from mindspore.common.parameter import Parameter
 from mindspore.communication import init
 
+from mindformers.experimental.parallel_core.pynative.transformer.enums import ModelType
 from mindformers.models.llama import LlamaConfig
 from mindformers.experimental.graph.transformer.transformer_config_utils import convert_to_transformer_config
 from mindformers.experimental.graph.transformer.transformer_config import TransformerConfig
-from mindformers.experimental.graph.tensor_parallel.layers import (RowParallelLinear as Graph_RP_Linear,
-                                                                   ColumnParallelLinear as Graph_CP_Linear,
-                                                                   VocabParallelEmbedding as Graph_VP_Embedding)
+from mindformers.experimental.graph.tensor_parallel.layers import (RowParallelLinear as GraphRPLinear,
+                                                                   ColumnParallelLinear as GraphCPLinear,
+                                                                   VocabParallelEmbedding as GraphVPEmbedding)
 from mindformers.experimental.parallel_core.pynative.tensor_parallel.\
-    layers import (RowParallelLinear as Pynative_RP_Linear,
-                   ColumnParallelLinear as Pynative_CP_Linear,
-                   VocabParallelEmbedding as Pynative_VP_Embedding)
+    layers import (RowParallelLinear as PynativeRPLinear,
+                   ColumnParallelLinear as PynativeCPLinear,
+                   VocabParallelEmbedding as PynativeVPEmbedding)
 from mindformers.experimental.graph.transformer. \
-    rotary_pos_embedding import (RotaryEmbedding as Graph_RotaryEmbedding,
+    rotary_pos_embedding import (RotaryEmbedding as GraphRotaryEmbedding,
                                  apply_rotary_pos_emb as graph_apply_rotary_pos_emb)
 from mindformers.experimental.parallel_core.pynative.transformer.\
-    rotary_pos_embedding import (RotaryEmbedding as Pynative_RotaryEmbedding,
+    rotary_pos_embedding import (RotaryEmbedding as PynativeRotaryEmbedding,
                                  apply_rotary_pos_emb as pynative_apply_rotary_pos_emb)
 from mindformers.experimental.graph.transformer.\
-    transformer import (ParallelTransformer as Graph_ParallelTransformer,
-                        ParallelTransformerLayer as Graph_ParallelTransformerLayer,
-                        ParallelAttention as Graph_ParallelAttention,
-                        ParallelMLP as Graph_ParallelMLP)
+    transformer import (ParallelTransformer as GraphParallelTransformer,
+                        ParallelTransformerLayer as GraphParallelTransformerLayer,
+                        ParallelAttention as GraphParallelAttention,
+                        ParallelMLP as GraphParallelMLP,
+                        ParallelLMLogits as GraphParallelLMLogits)
 from mindformers.experimental.parallel_core.pynative.transformer.\
-    transformer import (ParallelTransformer as Pynative_ParallelTransformer,
-                        ParallelTransformerLayer as Pynative_ParallelTransformerLayer,
-                        ParallelAttention as Pynative_ParallelAttention,
-                        ParallelMLP as Pynative_ParallelMLP)
+    transformer import (ParallelTransformer as PynativeParallelTransformer,
+                        ParallelTransformerLayer as PynativeParallelTransformerLayer,
+                        ParallelAttention as PynativeParallelAttention,
+                        ParallelMLP as PynativeParallelMLP,
+                        ParallelLMLogits as PynativeParallelLMLogits)
 from mindformers.experimental.graph.transformer.language_model import (
-    TransformerLanguageModel as Graph_TransformerLanguageModel)
+    TransformerLanguageModel as GraphTransformerLanguageModel)
 from mindformers.experimental.parallel_core.pynative.transformer.language_model import (
-    TransformerLanguageModel as Pynative_TransformerLanguageModel)
-from mindformers.experimental.graph.transformer.language_model import Embedding as Graph_Embedding
-from mindformers.experimental.parallel_core.pynative.transformer.language_model import Embedding as Pynative_Embedding
-from mindformers.experimental.graph.optimizer.adamw import AdamW as Graph_AdamW
-from mindformers.experimental.parallel_core.pynative.optimizer.zero.adamw_zero import AdamW as Pynative_AdamW
+    TransformerLanguageModel as PynativeTransformerLanguageModel)
+from mindformers.experimental.graph.transformer.language_model import Embedding as GraphEmbedding
+from mindformers.experimental.parallel_core.pynative.transformer.language_model import Embedding as PynativeEmbedding
+from mindformers.experimental.graph.optimizer.adamw import AdamW as GraphAdamW
+from mindformers.experimental.parallel_core.pynative.optimizer.zero.adamw_zero import AdamW as PynativeAdamW
 from mindformers.experimental.parallel_core import (ParallelTransformer,
                                                     ParallelTransformerLayer,
                                                     ParallelAttention,
@@ -67,7 +70,8 @@ from mindformers.experimental.parallel_core import (ParallelTransformer,
                                                     VocabParallelEmbedding,
                                                     AdamW,
                                                     Embedding,
-                                                    get_language_model)
+                                                    get_language_model,
+                                                    ParallelLMLogits)
 from mindformers.experimental.parallel_core.pynative.parallel_state import initialize_model_parallel
 from mindformers.experimental.utils import init_method_normal
 from mindformers.core.context import build_context
@@ -128,12 +132,20 @@ def add_attr_for_pynative(config):
     """add attributes for pynative."""
     config.parallel_config.standalone_embedding_stage = True
     config.lora_config = SimpleNamespace(use_lora=False)
+    config.dataset_config = SimpleNamespace(data_layout='BSH')
     config.apply_residual_connection_post_norm = False
+    config.seq_len_interpolation_factor = 1.0
     config.residual_connection_dtype = None
+    config.kv_channels = config.hidden_size // config.num_heads
     config.param_init_dtype = config.params_dtype
     config.use_gqa = False
     config.num_heads = config.num_attention_heads
     config.parallel_config.use_sequence_parallel = False
+    config.parallel_config.sequence_parallel = False
+    config.parallel_config.deterministic_mode = False
+    config.parallel_config.use_cpu_initialization = False
+    config.parallel_config.recompute_config = None
+    config.parallel_config.expert_model_parallel_size = 1
     config.use_flash_attention = False
     config.qkv_has_bias = False
     config.bias_init = 'zeros'
@@ -156,37 +168,64 @@ def add_attr_for_pynative(config):
     config.parallel_position_embedding = False
     config.rotary_interleaved = False
     config.rotary_base = 10000
+    config.use_sequence_parallel = False
+    config.retro_add_retriever = False
+    config.gradient_accumulation_fusion = False
+    config.fp32_residual_connection = False
+    config.clone_scatter_output_in_embedding = False
+    config.transformer_impl = None
+    config.distribute_saved_activations = False
+    config.fp8 = None
+    config.encoder_num_layers = None
+    config.decoder_num_layers = None
+    config.norm_epsilon = config.rms_norm_eps
+    config.enable_flash_sp = False
+    config.expert_model_parallel_size = 1
+    config.select_comm_recompute = False
+    config.masked_softmax_fusion = False
+    config.bias_dropout_fusion = False
+    config.select_recompute = False
+    config.apply_rope_fusion = False
+    config.use_sandwich_norm = False
+    fa_config = {
+        'pre_tokens': 65536,
+        'next_tokens': 0,
+        'sparse_mode': 0,
+        'input_layout': 'BNSD',
+    }
+    config.fa_config = fa_config
 
 
 def test_graph_router():
     """test graph router."""
     set_route_mode(mode=0)
     config = get_config()
-    assert isinstance(ParallelTransformer(config=config), Graph_ParallelTransformer)
-    assert isinstance(ParallelTransformerLayer(config=config, layer_number=0), Graph_ParallelTransformerLayer)
-    assert isinstance(ParallelAttention(config=config, layer_number=0), Graph_ParallelAttention)
-    assert isinstance(ParallelMLP(config=config), Graph_ParallelMLP)
+    assert isinstance(ParallelTransformer(config=config), GraphParallelTransformer)
+    assert isinstance(ParallelTransformerLayer(config=config, layer_number=0), GraphParallelTransformerLayer)
+    assert isinstance(ParallelAttention(config=config, layer_number=0), GraphParallelAttention)
+    assert isinstance(ParallelMLP(config=config), GraphParallelMLP)
     assert isinstance(
         ColumnParallelLinear(input_size=8, output_size=16, skip_weight_param_allocation=True, config=config),
-        Graph_CP_Linear)
+        GraphCPLinear)
     assert isinstance(
         RowParallelLinear(input_size=8, output_size=16, init_method=init_method_normal(), config=config),
-        Graph_RP_Linear)
-    assert isinstance(RotaryEmbedding(kv_channels=8), Graph_RotaryEmbedding)
+        GraphRPLinear)
+    assert isinstance(RotaryEmbedding(kv_channels=8), GraphRotaryEmbedding)
     x = initializer('normal', (1, 8, 4096, 64), ms.dtype.bfloat16)
     freqs = initializer('normal', (1, 1, 4096, 64), ms.dtype.bfloat16)
     assert array_equal(apply_rotary_pos_emb(x, freqs, config), graph_apply_rotary_pos_emb(x, freqs, config))
     assert isinstance(
         VocabParallelEmbedding(num_embeddings=123, embedding_dim=16, parallel_config=config,
                                init_method=init_method_normal()),
-        Graph_VP_Embedding)
-    assert isinstance(AdamW(params=[Parameter(initializer('zeros', (16, 16)), name='weight')]), Graph_AdamW)
+        GraphVPEmbedding)
+    assert isinstance(AdamW(params=[Parameter(initializer('zeros', (16, 16)), name='weight')]), GraphAdamW)
     assert isinstance(get_language_model(config=config, num_tokentypes=0, add_pooler=False,
                                          encoder_attn_mask_type=None, decoder_attn_mask_type=None)[0],
-                      Graph_TransformerLanguageModel)
+                      GraphTransformerLanguageModel)
     assert isinstance(Embedding(hidden_size=16, vocab_size=1600, config=config,
                                 max_sequence_length=64, embedding_dropout_prob=0.),
-                      Graph_Embedding)
+                      GraphEmbedding)
+    assert isinstance(ParallelLMLogits(config=config, bias=False), GraphParallelLMLogits)
 
 
 def test_pynative_router():
@@ -194,33 +233,36 @@ def test_pynative_router():
     set_route_mode(mode=1)
     config = get_config()
     add_attr_for_pynative(config)
-    assert isinstance(ParallelTransformer(config=config), Pynative_ParallelTransformer)
-    assert isinstance(ParallelTransformerLayer(config=config, layer_number=0), Pynative_ParallelTransformerLayer)
-    assert isinstance(ParallelAttention(config=config, layer_number=0), Pynative_ParallelAttention)
-    assert isinstance(ParallelMLP(config=config), Pynative_ParallelMLP)
+    assert isinstance(ParallelTransformer(config=config, model_type=ModelType.encoder_or_decoder),
+                      PynativeParallelTransformer)
+    assert isinstance(ParallelTransformerLayer(config=config, layer_number=0), PynativeParallelTransformerLayer)
+    assert isinstance(ParallelAttention(config=config, layer_number=0), PynativeParallelAttention)
+    assert isinstance(ParallelMLP(config=config), PynativeParallelMLP)
     assert isinstance(
         ColumnParallelLinear(input_size=8, output_size=16, init_method='normal', config=config),
-        Pynative_CP_Linear)
+        PynativeCPLinear)
     assert isinstance(
         RowParallelLinear(input_size=8, output_size=16, skip_bias_add=None, input_is_parallel=True,
                           init_method='normal', bias=False, config=config),
-        Pynative_RP_Linear)
-    assert isinstance(RotaryEmbedding(kv_channels=8), Pynative_RotaryEmbedding)
+        PynativeRPLinear)
+    assert isinstance(RotaryEmbedding(kv_channels=8), PynativeRotaryEmbedding)
     x = initializer('normal', (1, 8, 4096, 64), ms.dtype.bfloat16)
     freqs = initializer('normal', (1, 1, 4096, 64), ms.dtype.bfloat16)
-    assert array_equal(apply_rotary_pos_emb(x, freqs, None), pynative_apply_rotary_pos_emb(x, freqs, None))
+    assert array_equal(apply_rotary_pos_emb(x, freqs, config, None),
+                       pynative_apply_rotary_pos_emb(x, freqs, config, None))
     assert isinstance(
         VocabParallelEmbedding(num_embeddings=123, embedding_dim=16, config=config,
                                init_method='zeros'),
-        Pynative_VP_Embedding)
+        PynativeVPEmbedding)
     assert isinstance(AdamW(network=None, params=[Parameter(initializer('zeros', (16, 16)), name='weight')]),
-                      Pynative_AdamW)
+                      PynativeAdamW)
     assert isinstance(get_language_model(config=config, num_tokentypes=0, add_pooler=False,
                                          encoder_attn_mask_type=None, decoder_attn_mask_type=None)[0],
-                      Pynative_TransformerLanguageModel)
+                      PynativeTransformerLanguageModel)
     assert isinstance(Embedding(hidden_size=16, vocab_size=1600, config=config,
                                 max_sequence_length=64, embedding_dropout_prob=0.),
-                      Pynative_Embedding)
+                      PynativeEmbedding)
+    assert isinstance(ParallelLMLogits(config=config, bias=False), PynativeParallelLMLogits)
 
 
 if args_.graph:

@@ -41,6 +41,7 @@ __all__ = [
 __all__.extend(zero.__all__)
 __all__.extend(lr_scheduler.__all__)
 
+
 ModuleRegistry.register(mf_AdamW, ModuleType.OPTIMIZER)
 ModuleRegistry.register(Adam, ModuleType.OPTIMIZER)
 ModuleRegistry.register(SGD, ModuleType.OPTIMIZER)
@@ -110,9 +111,9 @@ def _append_order_param_group(params, network, optimizer_cls):
     """
     Append 'order_params' parameter group to params when a user invokes
     'get_optimizer' with parameter groups and intends to create a
-    subclass instance of mindspore.nn.optim.optimizer.Optimizer
+    subclass instance of mindspore.nn.optim.Optimizer.
 
-    NOTE: mindspore.nn.optim.optimizer.Optimizer assumes that 'order_params' contains
+    NOTE: mindspore.nn.optim.Optimizer assumes that 'order_params' contains
     the original parameter list of network and arranges its parameter list
     following the order of 'order_params'.
     """
@@ -121,49 +122,13 @@ def _append_order_param_group(params, network, optimizer_cls):
         all(isinstance(t, dict) and "params" in t for t in params):
         if network is None:
             raise ValueError("Network must be provided when using built-in "
-                             "mindspore.nn.optim.optimizer.Optimizer")
+                             "mindspore.nn.optim.Optimizer")
         params.append({"order_params": network.trainable_params()})
     return params
 
 
-def get_optimizer(optimizer_config, training_config, params=None, network=None, return_instance: bool = True, **kwargs):
-    """
-    Get an optimizer instance or class based on the provided optimizer configuration.
-
-    Args:
-        optimizer_config (OptimizerConfig): The configuration object for the optimizer.
-        params (list or dict, optional): The parameters to optimize. Default: None.
-        network (nn.Cell, optional): The network model, should be provided when use ZeRO optimizer. Default: None.
-        return_instance (bool): Whether to return an instance of the optimizer or just the optimizer class.
-        **kwargs: Additional keyword arguments to be passed to the optimizer class.
-
-    Returns:
-        Optimizer or type: An instance of the optimizer class if `return_instance` is True,
-        otherwise the optimizer class itself.
-
-    Raises:
-        ValueError: If `params` is None and `return_instance` is True.
-        ValueError: If `network` is None and use ZeRO optimizer.
-        NotImplementedError: If `weight_decay_kwargs` is not supported yet.
-
-    """
-    if optimizer_config.parallel_config.zero_level is not None:
-        optimizer_type = optimizer_config.optimizer_type + "ZeRO"
-    else:
-        optimizer_type = optimizer_config.optimizer_type
-
-    optimizer_cls = ModuleRegistry.get_item(module_type=ModuleType.OPTIMIZER, item_name=optimizer_type)
-    if not return_instance:
-        return optimizer_cls
-
-    if params is None:
-        raise ValueError("params must be provided when return_instance is True.")
-
-    params = _append_order_param_group(params, network, optimizer_cls)
-
-    if optimizer_config.weight_decay_kwargs is not None:
-        raise NotImplementedError("weight_decay_kwargs is not supported yet.")
-
+def _prepare_optimizer_kwargs(optimizer_config, params, network, optimizer_cls, kwargs):
+    ''' prepare optimizer kwargs for optimizer '''
     weight_decay = optimizer_config.weight_decay
 
     if optimizer_config.learning_rate_scheduler_kwargs is not None:
@@ -182,10 +147,10 @@ def get_optimizer(optimizer_config, training_config, params=None, network=None, 
     optimizer_kwargs["weight_decay"] = weight_decay
     optimizer_kwargs["params"] = params
     if "grad_allreduce_op" in kwargs:
-        if optimizer_config.parallel_config.zero_level is not None:
+        if optimizer_config.zero_without_ddp:
             optimizer_kwargs["grad_allreduce_op"] = kwargs["grad_allreduce_op"]
         kwargs.pop("grad_allreduce_op", None)
-    if optimizer_config.parallel_config.zero_level is not None:
+    if optimizer_config.zero_without_ddp:
         if network is None:
             raise ValueError("Network must be provided when get ZeRO optimizer instance.")
         optimizer_kwargs["zero_level"] = optimizer_config.parallel_config.zero_level
@@ -193,8 +158,78 @@ def get_optimizer(optimizer_config, training_config, params=None, network=None, 
         if optimizer_config.zero_config is not None:
             optimizer_kwargs.update(optimizer_config.zero_config)
     optimizer_kwargs.update(kwargs)
-    return_item = optimizer_cls(**optimizer_kwargs)
+    return optimizer_kwargs
 
+
+def get_optimizer(optimizer_config, training_config, params=None, network=None, return_instance: bool = True, **kwargs):
+    """
+    Get an optimizer instance or class based on the provided optimizer configuration.
+
+    Args:
+        optimizer_config (OptimizerConfig): The configuration object for the optimizer.
+        training_config (TrainingConfig): The configuration object for the training.
+        params (list or dict, optional): The parameters to optimize. Default: ``None``.
+        network (nn.Cell, optional): The network model, should be provided when use ZeRO optimizer. Default: ``None``.
+        return_instance (bool): Whether to return an instance of the optimizer with extra optimizer arguments.
+            Default: ``True``.
+        **kwargs: Additional keyword arguments to be passed to the optimizer class.
+
+    Returns:
+        Optimizer instance, an instance of the optimizer class if `return_instance` is ``True``,
+        otherwise the optimizer class itself.
+
+    Raises:
+        RuntimeError: If `zero_without_ddp` in `optimizer_config` is ``False`` and `zero_level` in
+            `optimizer_config.parallel_config` is ``z3`` and `use_distributed_optimizer` in `training_config` is
+            ``Fasle``.
+        ValueError: If `return_instance` is ``True`` and `params` is ``None``.
+        NotImplementedError: If `return_instance` is ``True`` and `weight_decay_kwargs` in `optimizer_config` is not
+            ``None``.
+
+    Examples:
+        >>> from mindformers.experimental.parallel_core.pynative.optimizer import get_optimizer
+        >>> from mindformers.experimental.parallel_core.pynative.training import get_model
+        >>> from mindformers.experimental.parallel_core import get_language_model
+        >>> from mindformers.experimental.parallel_core.pynative.training.utils import set_weight_decay
+        >>> from mindformers.experimental.parallel_core.pynative.config import init_configs_from_yaml
+        >>> def model_provider_func(model_config, pre_process=True, post_process=True):
+        ...     network_with_loss, _ = get_language_model(config=model_config, num_tokentypes=0,
+        ...         add_pooler=False, encoder_attn_mask_type=None, pre_process=pre_process, post_process=post_process)
+        ...     return network_with_loss
+        >>> config_file = "/path/to/config/file"
+        >>> all_config = init_configs_from_yaml(config_file)
+        >>> training_config = all_config.training_config
+        >>> optimizer_config = all_config.optimizer_config
+        >>> network_with_loss = get_model(model_provider_func, training_config)
+        >>> group_params = set_weight_decay(network_with_loss.trainable_params(), optimizer_config.weight_decay)
+        >>> optimizer = get_optimizer(optimizer_config, training_config, group_params, network_with_loss,
+        >>>                           grad_allreduce_op=training_config.loss_reduction)
+    """
+    optimizer_config.zero_without_ddp = optimizer_config.parallel_config.zero_level is not None and \
+        not training_config.wrap_with_ddp
+
+    optimizer_type = optimizer_config.optimizer_type
+
+    if optimizer_config.zero_without_ddp:
+        optimizer_type = optimizer_type + "ZeRO"
+
+    elif optimizer_config.parallel_config.zero_level == 'z3' and not training_config.use_distributed_optimizer:
+        raise RuntimeError("For zero3 with DDP, use_distributed_optimizer must be on. Please check the configuration.")
+
+    optimizer_cls = ModuleRegistry.get_item(module_type=ModuleType.OPTIMIZER, item_name=optimizer_type)
+    if not return_instance:
+        return optimizer_cls
+
+    if params is None:
+        raise ValueError("params must be provided when return_instance is True.")
+
+    params = _append_order_param_group(params, network, optimizer_cls)
+
+    if optimizer_config.weight_decay_kwargs is not None:
+        raise NotImplementedError("weight_decay_kwargs is not supported yet.")
+
+    optimizer_kwargs = _prepare_optimizer_kwargs(optimizer_config, params, network, optimizer_cls, kwargs)
+    return_item = optimizer_cls(**optimizer_kwargs)
     if training_config.wrap_with_ddp and training_config.use_distributed_optimizer:
         return_item = get_ditributed_optimizer(
             return_item,

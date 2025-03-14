@@ -19,9 +19,10 @@ import time
 import pytest
 
 import numpy as np
-from mindspore import set_context, Tensor
+from mindspore import set_context, Tensor, get_context
 
 from mindformers.generation.text_generator import GenerationMixin
+from mindformers.tools.debug_info import DetailedLatency, Profiling
 
 set_context(device_target='CPU')
 
@@ -29,6 +30,7 @@ set_context(device_target='CPU')
 class TestConfig:
     def __init__(self):
         self.is_encoder_decoder = False
+        self.is_dynamic = True
 
 
 class TestGenerationMixin:
@@ -42,8 +44,13 @@ class TestGenerationMixin:
     """
 
     def __init__(self):
+        self.detailed_latency = DetailedLatency()
+        self.profile = Profiling()
         self.config = TestConfig()
         self._pre_set_phase = None
+        self._exec_add_flags = True
+        self.is_pynative = get_context('mode') == 1
+
     # pylint: disable=W0613
     def prepare_inputs_for_generation(self, input_ids, **kwargs):
         return {"input_ids": Tensor.from_numpy(input_ids)}

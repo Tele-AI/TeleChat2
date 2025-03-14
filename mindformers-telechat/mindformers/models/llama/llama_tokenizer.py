@@ -58,39 +58,35 @@ class LlamaTokenizer(PreTrainedTokenizer):
             Path to the vocabulary file.
         unk_token (Union[str, AddedToken], optional):
             The unknown token. A token that is not in the vocabulary cannot be converted to an ID and is set to be this
-            token instead. Default: ``"<unk>"`` .
+            token instead. Default: ``"<unk>"``.
         bos_token (Union[str, AddedToken], optional):
             The beginning of sequence token that was used during pretraining. Can be used a sequence classifier token.
-            Default: ``"<s>"`` .
+            Default: ``"<s>"``.
         eos_token (Union[str, AddedToken], optional):
-            The end of sequence token. Default: ``"</s>"`` .
+            The end of sequence token. Default: ``"</s>"``.
         pad_token (Union[str, AddedToken], optional):
             A special token used to make arrays of tokens the same size for batching purpose. Will then be ignored by
-            attention mechanisms or loss computation. Default: ``"<unk>"`` .
+            attention mechanisms or loss computation. Default: ``"<unk>"``.
         sp_model_kwargs (Dict[str, Any], optional):
             Will be passed to the `SentencePieceProcessor.__init__()` method.
             The `Python wrapper for SentencePiece <https://github.com/google/sentencepiece/tree/master/python>`_
             can be used, among other things, to set keys below. Default: ``None`` , an empty dict will be passed.
         add_bos_token (bool, optional):
-            Whether to add an `bos_token` at the start of sequences. Default: ``True`` .
+            Whether to add an `bos_token` at the start of sequences. Default: ``True``.
         add_eos_token (bool, optional):
-            Whether to add an `eos_token` at the end of sequences. Default: ``False`` .
+            Whether to add an `eos_token` at the end of sequences. Default: ``False``.
         clean_up_tokenization_spaces (bool, optional):
             Whether to clean up spaces after decoding. Cleanup includes removing potential artifacts like
-            extra spaces. Default: ``False`` .
-        use_default_system_prompt (bool, optional):
-            Whether the default system prompt for Llama should be used. Default: ``False`` .
-        spaces_between_special_tokens (bool, optional):
-            Whether to add spaces between special tokens. Default: ``False`` .
+            extra spaces. Default: ``False``.
         legacy (bool, optional):
-            Whether the `legacy` behavior of the tokenizer should be used. Default: ``True`` .
+            Whether the `legacy` behavior of the tokenizer should be used. Default: ``True``.
 
     Returns:
         A LlamaTokenizer instance.
 
     Examples:
         >>> from mindformers import LlamaTokenizer
-        >>> tokenizer = LlamaTokenizer.from_pretrained("llama_7b")
+        >>> tokenizer = LlamaTokenizer.from_pretrained("llama2_7b")
         >>> res = tokenizer("hello world")
         >>> print(res)
         {'input_ids': [1, 27701, 924], 'attention_mask': [1, 1, 1]}
@@ -326,7 +322,7 @@ class LlamaTokenizer(PreTrainedTokenizer):
             token_ids_1 (List[int], optional):
                 Second list of token IDs for sequence pairs. Default: ``None`` , only use one sequence.
             already_has_special_tokens (bool, optional):
-                Whether the token list is already formatted with special tokens for the model. Default: ``False`` .
+                Whether the token list is already formatted with special tokens for the model. Default: ``False``.
 
         Returns:
             A list consists of integer 0 and 1, where 1 for a special token and 0 for a sequence token.

@@ -50,6 +50,7 @@ def convert_model_config(configs):
     configs.post_norm = True
     configs.recompute_granularity = None
     configs.ffn_concat = configs.qkv_concat
+    configs.is_dynamic = True
 
     parallel_config = configs.parallel_config
     parallel_config.tensor_parallel = parallel_config.model_parallel

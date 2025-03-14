@@ -20,15 +20,17 @@ import json
 import os
 from enum import Enum
 from typing import Any, Dict, List, Union
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 from mindspore import dtype as msdtype
-from mindspore_gs.ptq import PTQConfig, PTQMode, OutliersSuppressionType
+from mindspore_gs.ptq import PTQConfig, PTQMode, OutliersSuppressionType, QuantGranularity, PrecisionRecovery
 from mindspore_gs.common import BackendTarget
 
 dtype_map = {"None": None,
              "bool": msdtype.bool_,
              "int": msdtype.int_,
+             "int4": msdtype.qint4x2,
              "int8": msdtype.int8,
              "int16": msdtype.int16,
              "int32": msdtype.int32,
@@ -46,7 +48,17 @@ dtype_map = {"None": None,
              "complex128": msdtype.complex128}
 
 outliers_map = {"None": OutliersSuppressionType.NONE,
-                "smooth": OutliersSuppressionType.SMOOTH}
+                "smooth": OutliersSuppressionType.SMOOTH,
+                "awq": OutliersSuppressionType.AWQ,
+                "outlier-suppression+": OutliersSuppressionType.OUTLIER_SUPPRESSION_PLUS}
+
+precision_recovery_map = {"none": PrecisionRecovery.NONE,
+                          "gptq": PrecisionRecovery.GPTQ}
+
+quant_granularity_map = {"per_tensor": QuantGranularity.PER_TENSOR,
+                         "per_channel": QuantGranularity.PER_CHANNEL,
+                         "per_token": QuantGranularity.PER_TOKEN,
+                         "per_group": QuantGranularity.PER_GROUP}
 
 
 class QuantizationMethod(str, Enum):
@@ -189,6 +201,10 @@ class RtnConfig(QuantizationConfigMixin, PTQConfig):
             blacklist will not being quanted.
         outliers_suppression (OutliersSuppressionType): the method of outliers suprression,
             support None and smooth currently.
+        act_quant_granularity (QuantGranularity): the quant granularity of act,
+            support QuantGranularity.PER_TENSOR and QuantGranularity.PER_TOKEN currently.
+        kvcache_quant_granularity(QuantGranularity): the quant granularity of kvcache,
+            support QuantGranularity.PER_CHANNEL and QuantGranularity.PER_TOKEN currently.
 
     Raises:
         ValueError: If `mode` is not PTQMode.QUANTIZE or PTQMode.DEPLOY.
@@ -198,6 +214,10 @@ class RtnConfig(QuantizationConfigMixin, PTQConfig):
         ValueError: If `activation_dtype` is not mindspore.dtype.int8 or None.
         ValueError: If `kvcache_dtype` is not mindspore.dtype.int8 or None.
         ValueError: If `outliers_suppression` is not OutliersSuppressionType.NONE or OutliersSuppressionType.SMOOTH.
+        ValueError: If `kvcache_quant_granularity` is QuantGranularity.PER_TOKEN but `kvcache_dtype` is
+                    not mindspore.dtype.int8.
+        ValueError: If `act_quant_granularity` is QuantGranularity.PER_TOKEN but `weight_dtype` is
+                    not mindspore.dtype.int8 or `activation_dtype` is not mindspore.dtype.int8.
 
     Examples:
         >>> from mindformers.utils.quantization_config import RtnConfig
@@ -217,6 +237,8 @@ class RtnConfig(QuantizationConfigMixin, PTQConfig):
             modules_to_not_convert: List[str] = field(default_factory=list),
             outliers_suppression: OutliersSuppressionType = OutliersSuppressionType.NONE,
             algorithm_args: Union[dict, object] = field(default_factory=dict),
+            act_quant_granularity: str = "per_tensor",
+            kvcache_quant_granularity: str = "per_channel",
             **kwargs
     ):
         super().__init__()
@@ -229,6 +251,8 @@ class RtnConfig(QuantizationConfigMixin, PTQConfig):
         self.kvcache_quant_dtype = dtype_map.get(kvcache_dtype)
         self.act_quant_dtype = dtype_map.get(activation_dtype)
         self.outliers_suppression = outliers_map[outliers_suppression]
+        self.act_quant_granularity = quant_granularity_map.get(act_quant_granularity)
+        self.kvcache_quant_granularity = quant_granularity_map.get(kvcache_quant_granularity)
         self.init_check()
 
     def init_check(self):
@@ -240,6 +264,8 @@ class RtnConfig(QuantizationConfigMixin, PTQConfig):
         accepted_weights = [None, msdtype.int8]
         accepted_activations = [None, msdtype.int8]
         accepted_kvcache = [None, msdtype.int8]
+        accepted_act_granularity = [QuantGranularity.PER_TENSOR, QuantGranularity.PER_TOKEN]
+        accepted_kvcache_granularity = [QuantGranularity.PER_CHANNEL, QuantGranularity.PER_TOKEN]
         if self.mode not in accepted_mode:
             raise ValueError(f"Only support {accepted_mode} but found {self.mode}")
         if self.backend not in accepted_backend:
@@ -259,6 +285,20 @@ class RtnConfig(QuantizationConfigMixin, PTQConfig):
                              f"weight_quant_dtype={self.weight_quant_dtype},"
                              f"kvcache_quant_dtype={self.kvcache_quant_dtype},"
                              f"outliers_suppression={self.outliers_suppression}")
+        if self.act_quant_granularity not in accepted_act_granularity:
+            raise ValueError(f"Only support act_quant_granularity in {accepted_act_granularity} but found "
+                             f"{self.act_quant_granularity}")
+        if self.kvcache_quant_granularity not in accepted_kvcache_granularity:
+            raise ValueError(f"Only support kvcache_quant_granularity in {accepted_kvcache_granularity} but found "
+                             f"{self.kvcache_quant_granularity}")
+        if (self.weight_quant_dtype != msdtype.int8 or self.act_quant_dtype != msdtype.int8) and \
+            self.act_quant_granularity is QuantGranularity.PER_TOKEN:
+            raise ValueError("when self.act_quant_granularity is QuantGranularity.PER_TOKEN, self.weight_quant_dtype:"
+                             f"{self.weight_quant_dtype} and self.act_quant_dtype: {self.act_quant_dtype} must be "
+                             "mindspore.dtype.int8.")
+        if self.kvcache_quant_dtype != msdtype.int8 and self.kvcache_quant_granularity is QuantGranularity.PER_TOKEN:
+            raise ValueError("when self.kvcache_quant_granularity is QuantGranularity.PER_TOKEN, "
+                             "self.kvcache_quant_dtype must be mindspore.dtype.int8.")
 
 
 @dataclass
@@ -282,8 +322,20 @@ class PtqConfig(QuantizationConfigMixin, PTQConfig):
             SmoothQuant, and OmniQuant.
         modules_to_not_convert (List[str]): Blacklist of opname. Layers in network with name fuzzy matched with this
             blacklist will not being quanted.
-        outliers_suppression (OutliersSuppressionType): the method of outliers suprression,
-            support None and smooth currently.
+        outliers_suppression (OutliersSuppressionType): the method of outliers suprression.
+            Choose from (`"None"`, `"smooth"`, `"awq"`, `"outlier-suppression+"`). Defaults: ``"None"``.
+        precision_recovery (PrecisionRecovery): the method of precision recovery, used to precision compensation of
+            weights during quantization, support None and GPTQ currently.
+        act_quant_granularity (QuantGranularity): the quant granularity of act,
+            support QuantGranularity.PER_TENSOR and QuantGranularity.PER_TOKEN currently.
+        kvcache_quant_granularity(QuantGranularity): the quant granularity of kvcache,
+            support QuantGranularity.PER_CHANNEL and QuantGranularity.PER_TOKEN currently.
+        weight_quant_granularity(QuantGranularity): the quant granularity of weight,
+            support QuantGranularity.PER_CHANNEL and QuantGranularity.PER_GROUP currently.
+        group_size (int): group_size of per_group quantization, suggest using 64 or 128.
+        layer_policies (dict, optional): quantization strategy for layers. Defaults: ``None``.
+            The key of `layer_policies` is regular string to match the layer name,
+            the value of `layer_policies` is the quantization strategy of current layer.
 
     Raises:
         ValueError: If `mode` is not PTQMode.QUANTIZE or PTQMode.DEPLOY.
@@ -293,6 +345,15 @@ class PtqConfig(QuantizationConfigMixin, PTQConfig):
         ValueError: If `activation_dtype` is not mindspore.dtype.int8 or None.
         ValueError: If `kvcache_dtype` is not mindspore.dtype.int8 or None.
         ValueError: If `outliers_suppression` is not OutliersSuppressionType.NONE or OutliersSuppressionType.SMOOTH.
+        ValueError: If `precision_recovery` is not PrecisionRecovery.NONE or PrecisionRecovery.GPTQ.
+        ValueError: If `kvcache_quant_granularity` is QuantGranularity.PER_TOKEN but `kvcache_dtype` is
+                    not mindspore.dtype.int8.
+        ValueError: If `act_quant_granularity` is QuantGranularity.PER_TOKEN but `weight_dtype` is
+                    not mindspore.dtype.int8 or `activation_dtype` is not mindspore.dtype.int8.
+        ValueError: If `weight_quant_granularity` is QuantGranularity.PER_GROUP but `group_size` is not in [64, 128].
+        TypeError: If `group_size` is not Int.
+        TypeError: If `layer_policies` not dict, the key of `layer_policies` is not string or
+            the value of `layer_policies` is not a regular expression.
 
     Examples:
         >>> from mindformers.utils.quantization_config import PtqConfig
@@ -310,8 +371,14 @@ class PtqConfig(QuantizationConfigMixin, PTQConfig):
             activation_dtype: msdtype = None,
             kvcache_dtype: msdtype = None,
             modules_to_not_convert: List[str] = field(default_factory=list),
-            outliers_suppression: OutliersSuppressionType = OutliersSuppressionType.NONE,
+            outliers_suppression: str = "None",
+            precision_recovery: str = "none",
             algorithm_args: Union[dict, object] = field(default_factory=dict),
+            act_quant_granularity: str = "per_tensor",
+            kvcache_quant_granularity: str = "per_channel",
+            weight_quant_granularity: str = "per_channel",
+            group_size: int = 0,
+            layer_policies: Dict[str, Any] = None,
             **kwargs
     ):
         super().__init__()
@@ -323,7 +390,17 @@ class PtqConfig(QuantizationConfigMixin, PTQConfig):
         self.weight_quant_dtype = dtype_map.get(weight_dtype)
         self.kvcache_quant_dtype = dtype_map.get(kvcache_dtype)
         self.act_quant_dtype = dtype_map.get(activation_dtype)
+        self.act_quant_granularity = quant_granularity_map.get(act_quant_granularity)
+        self.kvcache_quant_granularity = quant_granularity_map.get(kvcache_quant_granularity)
+        self.weight_quant_granularity = quant_granularity_map.get(weight_quant_granularity)
         self.outliers_suppression = outliers_map[outliers_suppression]
+        self.precision_recovery = precision_recovery_map[precision_recovery]
+        self.group_size = group_size
+
+        self.layer_policies = OrderedDict()
+        if layer_policies:
+            for key, value in layer_policies.items():
+                self.layer_policies[key] = PtqConfig.from_dict(value)
         self.init_check()
 
     def init_check(self):
@@ -332,10 +409,13 @@ class PtqConfig(QuantizationConfigMixin, PTQConfig):
         """
         accepted_mode = [PTQMode.DEPLOY]
         accepted_backend = [BackendTarget.ASCEND]
-        accepted_weights = [None, msdtype.int8]
+        accepted_weights = [None, msdtype.int8, msdtype.qint4x2]
         accepted_activations = [None, msdtype.int8]
         accepted_kvcache = [None, msdtype.int8]
-        accepted_outliers_suppression = [OutliersSuppressionType.NONE, OutliersSuppressionType.SMOOTH]
+        accepted_outliers_suppression = [OutliersSuppressionType.NONE, OutliersSuppressionType.SMOOTH,
+                                         OutliersSuppressionType.AWQ, OutliersSuppressionType.OUTLIER_SUPPRESSION_PLUS]
+        accepted_precision_recovery = [PrecisionRecovery.NONE, PrecisionRecovery.GPTQ]
+        accepted_group_size = [0, 64, 128]
         if self.mode not in accepted_mode:
             raise ValueError(f"Only support {accepted_mode} but found {self.mode}")
         if self.backend not in accepted_backend:
@@ -352,8 +432,52 @@ class PtqConfig(QuantizationConfigMixin, PTQConfig):
         if self.outliers_suppression not in accepted_outliers_suppression:
             raise ValueError(f"Only support outliers suppression in {accepted_outliers_suppression} but found "
                              f"{self.outliers_suppression}")
+        if self.precision_recovery not in accepted_precision_recovery:
+            raise ValueError(f"Only support precision recovery in {accepted_precision_recovery} but found "
+                             f"{self.precision_recovery}")
         if self.weight_quant_dtype is None and self.act_quant_dtype == msdtype.int8:
             raise ValueError("PTQ algorithm not support only quant activation.")
+        if (self.weight_quant_dtype != msdtype.int8 or self.act_quant_dtype != msdtype.int8) and \
+            self.act_quant_granularity is QuantGranularity.PER_TOKEN:
+            raise ValueError("when self.act_quant_granularity is QuantGranularity.PER_TOKEN, self.weight_quant_dtype:"
+                             f"{self.weight_quant_dtype} and self.act_quant_dtype: {self.act_quant_dtype} must be "
+                             "mindspore.dtype.int8.")
+        self._check_quant_granularity()
+        if self.group_size not in accepted_group_size:
+            raise ValueError(f"Only support group_size in {accepted_group_size} but found "
+                             f"{self.group_size}")
+        self._check_layer_policies()
+
+    def _check_quant_granularity(self):
+        """check quant granularity"""
+        accepted_act_granularity = [QuantGranularity.PER_TENSOR, QuantGranularity.PER_TOKEN]
+        accepted_kvcache_granularity = [QuantGranularity.PER_CHANNEL, QuantGranularity.PER_TOKEN]
+        accepted_weight_granularity = [QuantGranularity.PER_CHANNEL, QuantGranularity.PER_GROUP]
+        if self.act_quant_granularity not in accepted_act_granularity:
+            raise ValueError(f"Only support act_quant_granularity in {accepted_act_granularity} but found "
+                             f"{self.act_quant_granularity}")
+        if self.kvcache_quant_granularity not in accepted_kvcache_granularity:
+            raise ValueError(f"Only support kvcache_quant_granularity in {accepted_kvcache_granularity} but found "
+                             f"{self.kvcache_quant_granularity}")
+        if self.weight_quant_granularity not in accepted_weight_granularity:
+            raise ValueError(f"Only support weight_quant_granularity in {accepted_weight_granularity} but found "
+                             f"{self.weight_quant_granularity}")
+        if self.kvcache_quant_dtype != msdtype.int8 and self.kvcache_quant_granularity is QuantGranularity.PER_TOKEN:
+            raise ValueError("when self.kvcache_quant_granularity is QuantGranularity.PER_TOKEN, "
+                             "self.kvcache_quant_dtype must be mindspore.dtype.int8.")
+
+    def _check_layer_policies(self):
+        """_check_layer_policies"""
+        import re
+        if not isinstance(self.layer_policies, OrderedDict):
+            raise TypeError(f'layer_policies should be an OrderedDict, bug got {type(self.layer_policies)}.')
+        if any(not isinstance(key, str) for key in self.layer_policies.keys()):
+            raise TypeError(f'all key of layer_policies should be a string.')
+        try:
+            for key, _ in self.layer_policies.items():
+                re.compile(key)
+        except re.error as e:
+            raise TypeError(f'The regular string of layer_policies not correct, please check and try again.') from e
 
 
 @dataclass
@@ -379,6 +503,10 @@ class SmoothQuantConfig(QuantizationConfigMixin, PTQConfig):
             blacklist will not being quanted.
         outliers_suppression (OutliersSuppressionType): the method of outliers suprression,
             support None and smooth currently.
+        act_quant_granularity (QuantGranularity): the quant granularity of act,
+            support QuantGranularity.PER_TENSOR currently.
+        kvcache_quant_granularity(QuantGranularity): the quant granularity of kvcache,
+            support QuantGranularity.PER_CHANNEL currently.
 
     Raises:
         ValueError: If `mode` is not PTQMode.QUANTIZE or PTQMode.DEPLOY.
@@ -388,6 +516,8 @@ class SmoothQuantConfig(QuantizationConfigMixin, PTQConfig):
         ValueError: If `activation_dtype` is not mindspore.dtype.int8 or None.
         ValueError: If `kvcache_dtype` is not mindspore.dtype.int8 or None.
         ValueError: If `outliers_suppression` is not OutliersSuppressionType.NONE or OutliersSuppressionType.SMOOTH.
+        ValueError: If `act_quant_granularity` is not QuantGranularity.PER_TENSOR.
+        ValueError: If `outliers_suppression` is not QuantGranularity.PER_CHANNEL.
 
     Examples:
         >>> from mindformers.utils import SmoothQuantConfig
@@ -407,6 +537,8 @@ class SmoothQuantConfig(QuantizationConfigMixin, PTQConfig):
             modules_to_not_convert: List[str] = field(default_factory=list),
             outliers_suppression: OutliersSuppressionType = OutliersSuppressionType.NONE,
             algorithm_args: Union[dict, object] = field(default_factory=dict),
+            act_quant_granularity: str = "per_tensor",
+            kvcache_quant_granularity: str = "per_channel",
             **kwargs
     ):
         super().__init__()
@@ -417,6 +549,8 @@ class SmoothQuantConfig(QuantizationConfigMixin, PTQConfig):
         self.algo_args = algorithm_args
         self.weight_quant_dtype = dtype_map[weight_dtype]
         self.kvcache_quant_dtype = dtype_map[kvcache_dtype]
+        self.act_quant_granularity = quant_granularity_map.get(act_quant_granularity)
+        self.kvcache_quant_granularity = quant_granularity_map.get(kvcache_quant_granularity)
         self.act_quant_dtype = dtype_map[activation_dtype]
         self.outliers_suppression = outliers_map[outliers_suppression]
         self.init_check()
@@ -443,6 +577,12 @@ class SmoothQuantConfig(QuantizationConfigMixin, PTQConfig):
                 f"Only support activation weights in {accepted_activations} but found {self.act_quant_dtype}")
         if self.kvcache_quant_dtype not in accepted_kvcache:
             raise ValueError(f"Only support kvcache weights in {accepted_kvcache} but found {self.kvcache_quant_dtype}")
+        if self.act_quant_granularity is not QuantGranularity.PER_TENSOR or self.kvcache_quant_granularity \
+                is not QuantGranularity.PER_CHANNEL:
+            raise ValueError("Only support act_quant_granularity is QuantGranularity.PER_TENSOR and "
+                             "kvcache_quant_granularity is QuantGranularity.PER_CHANNEL but found "
+                             f"act_quant_granularity is {self.act_quant_granularity} and "
+                             f"kvcache_quant_granularity is {self.kvcache_quant_granularity}.")
         do_a8w8 = self.act_quant_dtype == msdtype.int8 and self.weight_quant_dtype == msdtype.int8 and \
                     self.outliers_suppression == OutliersSuppressionType.SMOOTH and \
                     self.kvcache_quant_dtype is None

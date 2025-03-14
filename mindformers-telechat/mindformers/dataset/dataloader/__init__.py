@@ -28,5 +28,6 @@ from .training_dataloader import TrainingDataLoader
 from .toolaplaca_dataloader import ToolAlpacaDataLoader
 from .multi_modal_dataloader import BaseMultiModalDataLoader
 from .indexed_dataset import IndexedDataLoader
+from .blended_megatron_dataloader import BlendedMegatronDatasetDataLoader
 
-__all__ = []
+__all__ = ['BlendedMegatronDatasetDataLoader']

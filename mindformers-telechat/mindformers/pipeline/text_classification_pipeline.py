@@ -16,6 +16,7 @@
 """TextClassificationPipeline"""
 
 import numpy as np
+
 from mindspore import ops, Tensor
 
 from mindformers.mindformer_book import MindFormerBook
@@ -23,10 +24,12 @@ from mindformers.models import GPT2ForSequenceClassification
 from mindformers.pipeline.base_pipeline import Pipeline
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 from mindformers.dataset.labels import labels
+from mindformers.utils import deprecated
 
 __all__ = ['TextClassificationPipeline']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="text_classification")
 class TextClassificationPipeline(Pipeline):
     """Pipeline for text classification

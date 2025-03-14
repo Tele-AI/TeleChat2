@@ -20,6 +20,7 @@ import inspect
 import os
 
 from mindformers.tools.hub.dynamic_module_utils import get_class_from_dynamic_module
+from mindformers.version_control import check_tft_valid
 
 
 class MindFormerModuleType:
@@ -167,7 +168,7 @@ class MindFormerRegister:
         Args:
             module_type (MindFormerModuleType, optional): Module type name of MindFormers.
                 Default: ``MindFormerModuleType.TOOLS``.
-            alias (str, optional) : Alias for the class. Default: ``None``.
+            alias (str, optional): Alias for the class. Default: ``None``.
 
         Returns:
             Wrapper, decorates the registered class.
@@ -200,7 +201,7 @@ class MindFormerRegister:
             register_class (type): The class that need to be registered.
             module_type (MindFormerModuleType, optional): Module type name of MindFormers.
                 Default: ``MindFormerModuleType.TOOLS``.
-            alias (str, optional) : Alias for the class. Default: ``None``.
+            alias (str, optional): Alias for the class. Default: ``None``.
 
         Returns:
             Class, the registered class itself.
@@ -312,6 +313,10 @@ class MindFormerRegister:
             in class registry".format(type, obj_type))
 
         try:
+            if module_type == MindFormerModuleType.OPTIMIZER:
+                if check_tft_valid():
+                    from mindspore.train.callback import TrainFaultTolerance
+                    obj_cls = TrainFaultTolerance.get_optimizer_wrapper(obj_cls)
             return obj_cls(**args)
         except Exception as e:
             raise type(e)('{}: {}'.format(obj_cls.__name__, e))

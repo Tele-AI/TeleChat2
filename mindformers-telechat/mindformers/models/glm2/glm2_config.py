@@ -1,4 +1,4 @@
-# Copyright 2023 Huawei Technologies Co., Ltd
+# Copyright 2023-2024 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,114 +33,88 @@ class ChatGLM2Config(PretrainedConfig):
     ChatGLM2 model config class which defines the model size.
 
     Args:
-        batch_size (int, optional): batch size for input data, use in predict. Default: ``1`` .
+        batch_size (int, optional): Batch size for input data, use in predict. Default: ``1``.
         num_layers (int, optional): Number of hidden layers in the Transformer encoder.
-            Default: ``28`` .
-        padded_vocab_size (int, optional): Vocabulary size of the ChatGLM2 model. Default: ``65024`` .
-        hidden_size (int, optional): Dimensionality of the hidden layers. Default: ``4096`` .
-        ffn_hidden_size (int, optional): Dimensionality of the ffn layer. Default: ``13696`` .
+            Default: ``28``.
+        padded_vocab_size (int, optional): Vocabulary size of the ChatGLM2 model. Default: ``65024``.
+        hidden_size (int, optional): Dimensionality of the hidden layers. Default: ``4096``.
+        ffn_hidden_size (int, optional): Dimensionality of the ffn layer. Default: ``13696``.
         kv_channels (int, optional): The number of channels for key and value vectors in the transformer.
-            Default: ``128`` .
-        num_attention_heads (int, optional): The number of attention heads for each attention layer. Default: ``32`` .
-        seq_length (int, optional): The sequence length of input_ids, default is 2048. Default: ``2048`` .
-        hidden_dropout (float, optional): The dropout ratio of the dropout function. Default: ``0.0`` .
-        attention_dropout (float, optional): The dropout ratio for the attention matrix. Default: ``0.0`` .
+            Default: ``128``.
+        num_attention_heads (int, optional): The number of attention heads for each attention layer. Default: ``32``.
+        seq_length (int, optional): The sequence length of input_ids, default is 2048. Default: ``2048``.
+        hidden_dropout (float, optional): The dropout ratio of the dropout function. Default: ``0.0``.
+        attention_dropout (float, optional): The dropout ratio for the attention matrix. Default: ``0.0``.
         layernorm_epsilon (float, optional): The ϵ value added to prevent the denominator from being zero when computing
-            layer normalization. Default: ``1e-5`` .
-        rope_ratio (float, optional): RoPE rotation coefficient. Default: ``1`` .
-        rmsnorm (bool, optional): Whether to use rmsnorm. Default: ``True`` .
+            layer normalization. Default: ``1e-5``.
+        rope_ratio (float, optional): RoPE rotation coefficient. Default: ``1``.
+        rmsnorm (bool, optional): Whether to use rmsnorm. Default: ``True``.
         apply_residual_connection_post_layernorm (bool, optional): Whether apply the residual connection to post
-            layernorm. Default: ``False`` .
-        post_layer_norm (bool, optional): Whether to use layer normalization after the ffn layer. Default: ``True`` .
-        add_bias_linear (bool, optional): Whether to add bias to the linear layer. Default: ``False`` .
-        add_qkv_bias (bool, optional): Whether to add bias for qkv. Default: ``True`` .
-        bias_dropout_fusion (bool, optional): Whether to add bias, dropout, and fusion operations. Default: ``True`` .
-        multi_query_attention (bool, optional): Whether to use multi query attention. Default: ``True`` .
-        multi_query_group_num (int, optional): Define multi group head attention heads number. Default: ``2`` .
-        apply_query_key_layer_scaling (bool, optional): Whether scaling the query_key layer. Default: ``True`` .
-        attention_softmax_in_fp32 (bool, optional): Whether apply fp32 to the attention softmax. Default: ``True`` .
-        fp32_residual_connection (bool, optional): Whether apply fp32 to residual connection layer. Default: ``False`` .
-        quantization_bit (int, optional): Weight and number of activation bits. Default: ``0`` .
-        pre_seq_len (int, optional): Length of the input sequence that can be learned. Default: ``None`` .
-        prefix_projection (bool, optional): Add a projection layer before a sequence. Default: ``False`` .
-        param_init_type (str, optional): parameter initial dtype. Default: ``float16`` .
-        compute_dtype (str, optional): Linear layer compute dtype. Default: ``float16`` .
-        layernorm_compute_type (str, optional): layernorm compute dtype. Default: ``float32`` .
+            layernorm. Default: ``False``.
+        post_layer_norm (bool, optional): Whether to use layer normalization after the ffn layer. Default: ``True``.
+        add_bias_linear (bool, optional): Whether to add bias to the linear layer. Default: ``False``.
+        add_qkv_bias (bool, optional): Whether to add bias for qkv. Default: ``True``.
+        bias_dropout_fusion (bool, optional): Whether to add bias, dropout, and fusion operations. Default: ``True``.
+        multi_query_attention (bool, optional): Whether to use multi query attention. Default: ``True``.
+        multi_query_group_num (int, optional): Define multi group head attention heads number. Default: ``2``.
+        apply_query_key_layer_scaling (bool, optional): Whether scaling the query_key layer. Default: ``True``.
+        attention_softmax_in_fp32 (bool, optional): Whether apply fp32 to the attention softmax. Default: ``True``.
+        fp32_residual_connection (bool, optional): Whether apply fp32 to residual connection layer. Default: ``False``.
+        quantization_bit (int, optional): Weight and number of activation bits. Default: ``0``.
+        pre_seq_len (int, optional): Length of the input sequence that can be learned. Default: ``None``.
+        prefix_projection (bool, optional): Add a projection layer before a sequence. Default: ``False``.
+        param_init_type (str, optional): Parameter initial dtype. Default: ``float16``.
+        compute_dtype (str, optional): Linear layer compute dtype. Default: ``float16``.
+        layernorm_compute_type (str, optional): LayerNorm compute dtype. Default: ``float32``.
+        residual_dtype (str, optional): Residual compute dtype. Default: ``float32``.
+        rotary_dtype (str, optional): Custom rotary position embedding compute dtype. Default: ``None``.
         use_past (bool, optional): Whether the model should use the past last key/values attentions (if applicable to
-            the model) to speed up decoding. Default: ``False`` .
-        use_flash_attention(bool, optional): Whether enable flash attention ops, default False. Default: ``False`` .
+            the model) to speed up decoding. Default: ``False``.
+        use_flash_attention (bool, optional): Whether enable flash attention ops, default False. Default: ``False``.
+        enable_high_performance (bool, optional): Whether to adjust parallel strategies of qkv and ffn,
+            in order to get high performance. Default: ``False``.
         block_size (int, optional): The maximum number of tokens in one block can have when using PagedAttention.
-            Default: ``16`` .
-        num_blocks (int, optional): The maximum number of blocks when using PagedAttention. Default: ``128`` .
-        is_dynamic (bool, optional): Whether to use dynamic diagram mode. Default: ``False`` .
-        eos_token_id (int, optional): The token id of the *end-of-sequence* token. Default: ``2`` .
+            Default: ``16``.
+        num_blocks (int, optional): The maximum number of blocks when using PagedAttention. Default: ``128``.
+        is_dynamic (bool, optional): Whether to use dynamic diagram mode. Default: ``False``.
+        eos_token_id (int, optional): The token id of the *end-of-sequence* token. Default: ``2``.
         pad_token_id (int, optional): In multi-batch inference, the token id value used to pad shorter sequences to
-            match the length of the longest sequence. Default: ``0`` .
-        gmask_token_id (int, optional): A special token representing a gmask token. Default: ``None`` .
-        bos_token_id (int, optional): The id of the *beginning-of-sequence* token. Default: ``None`` .
+            match the length of the longest sequence. Default: ``0``.
+        gmask_token_id (int, optional): A special token representing a gmask token. Default: ``None``.
+        bos_token_id (int, optional): The id of the *beginning-of-sequence* token. Default: ``None``.
         repetition_penalty (float, optional): The parameter for repetition penalty. 1.0 means no penalty.
-            Default: ``1.0`` .
-        checkpoint_name_or_path (str, optional): checkpoint path or name used to load to the network.
-            Default: ``None`` .
-        parallel_config(TransformerOpParallelConfig, optional): The parallel configure. an instance of
-            `TransformerOpParallelConfig` with default args. Default: ``TransformerOpParallelConfig`` .
-        offset (int, optional): The layer offset for each (mini) stage. Default: ``0`` .
-        pp_interleave_num  (int, optional): Number of microbatch interleavings in pipeline parallelism. Default: ``1`` .
+            Default: ``1.0``.
+        checkpoint_name_or_path (str, optional): Checkpoint path or name used to load to the network.
+            Default: ``None``.
+        parallel_config (TransformerOpParallelConfig, optional): The parallel configure. an instance of
+            `TransformerOpParallelConfig` with default args. Default: ``TransformerOpParallelConfig``.
+        offset (int, optional): The layer offset for each (mini) stage. Default: ``0``.
+        pp_interleave_num (int, optional): Number of microbatch interleavings in pipeline parallelism. Default: ``1``.
+        mlp_concat (bool, optional): Whether to concatenate two mlp to one Linear. Default: ``True``.
+        qkv_concat (bool, optional): Whether to concatenate query key and value Linear calculation to one entire Linear.
+             Default: ``True``.
+        use_rearrange_rope (bool, optional): Whether to use rearranged rotary embedding. Default: ``False``.
+        mask_generate (str, optional): Which mask generation to use, which can be "inmap", "compress_reset", None. When
+             set as None, lower triangular mask is used. Default: ``None``.
+        fine_grain_interleave (int, optional): Number of slices for fine grain interleave feature, which covers
+             communication time with computation time in tensor parallel case. Default: ``1``.
+        use_ring_attention (bool, optional): Whether enable ring attention ops. Default: ``False``.
         kwargs (dict, optional): A variable number of keyword parameters reserved for the keyword parameters to be
             expanded.
+
+    Returns:
+        An instance of ChatGLM2Config.
 
     Examples:
         >>> from mindformers.models import ChatGLM2Config
         >>> config = ChatGLM2Config(num_layers=2, seq_length=1024)
-        >>> print(config)
-        ChatGLM2Config {
-            "add_bias_linear": false,
-            "add_qkv_bias": true,
-            "apply_query_key_layer_scaling": true,
-            "apply_residual_connection_post_layernorm": false,
-            "attention_dropout": 0.0,
-            "attention_softmax_in_fp32": true,
-            "batch_size": 1,
-            "bias_dropout_fusion": true,
-            "block_size": 16,
-            "bos_token_id": null,
-            "compute_dtype": "float16",
-            "eos_token_id": 2,
-            "ffn_hidden_size": 13696,
-            "fp32_residual_connection": false,
-            "gmask_token_id": null,
-            "hidden_dropout": 0.0,
-            "hidden_size": 4096,
-            "is_dynamic": false,
-            "kv_channels": 128,
-            "layernorm_compute_type": "float32",
-            "layernorm_epsilon": 1e-05,
-            "mindformers_version": "1.1",
-            "model_type": "glm2",
-            "multi_query_attention": true,
-            "multi_query_group_num": 2,
-            "n_kv_heads": 2,
-            "num_attention_heads": 32,
-            "num_blocks": 128,
-            "num_heads": 32,
-            "num_layers": 2,
-            "offset": 0,
-            "pad_token_id": 0,
-            "padded_vocab_size": 65024,
-            "param_init_type": "float16",
-            "post_layer_norm": true,
-            "pre_seq_len": null,
-            "prefix_projection": false,
-            "quantization_bit": 0,
-            "repetition_penalty": 1.0,
-            "rmsnorm": true,
-            "rope_ratio": 1,
-            "seq_length": 1024,
-            "use_flash_attention": false,
-            "use_past": false,
-            "vocab_size": 65024
-            }
+        >>> print(config.num_layers)
+        2
+        >>> print(config.seq_length)
+        1024
+
     """
+
 
     model_type = "glm2"
     _support_list = MindFormerBook.get_config_support_list()['glm2']
@@ -178,9 +152,11 @@ class ChatGLM2Config(PretrainedConfig):
                  param_init_type: str = "float16",
                  compute_dtype: str = "float16",
                  layernorm_compute_type: str = "float32",
+                 residual_dtype: str = "float32",
                  rotary_dtype: str = None,
                  use_past=False,
                  use_flash_attention=False,
+                 enable_high_performance=False,
                  block_size=16,
                  num_blocks=128,
                  is_dynamic=False,
@@ -191,8 +167,14 @@ class ChatGLM2Config(PretrainedConfig):
                  repetition_penalty=1.0,
                  checkpoint_name_or_path=None,
                  parallel_config: Union[dict, TransformerOpParallelConfig] = default_transformer_config,
-                 offset=0,
-                 pp_interleave_num=1,
+                 offset: int = 0,
+                 pp_interleave_num: int = 1,
+                 mlp_concat: bool = True,
+                 qkv_concat: bool = True,
+                 use_rearrange_rope: bool = False,
+                 mask_generate: str = None,
+                 fine_grain_interleave: int = 1,
+                 use_ring_attention: bool = False,
                  **kwargs):
         super().__init__(**kwargs)
         if isinstance(parallel_config, dict):
@@ -227,9 +209,11 @@ class ChatGLM2Config(PretrainedConfig):
         self.param_init_type = convert_mstype(param_init_type)
         self.compute_dtype = convert_mstype(compute_dtype)
         self.layernorm_compute_type = convert_mstype(layernorm_compute_type)
+        self.residual_dtype = convert_mstype(residual_dtype)
         self.rotary_dtype = convert_mstype(rotary_dtype) if rotary_dtype is not None else self.compute_dtype
         self.use_past = use_past
         self.use_flash_attention = use_flash_attention
+        self.enable_high_performance = enable_high_performance
         self.eos_token_id = eos_token_id
         self.pad_token_id = pad_token_id
         self.repetition_penalty = repetition_penalty
@@ -244,3 +228,9 @@ class ChatGLM2Config(PretrainedConfig):
         self.n_kv_heads = self.multi_query_group_num if self.multi_query_attention else None
         self.offset = offset
         self.pp_interleave_num = pp_interleave_num
+        self.mlp_concat = mlp_concat
+        self.qkv_concat = qkv_concat
+        self.use_rearrange_rope = use_rearrange_rope
+        self.mask_generate = mask_generate
+        self.fine_grain_interleave = fine_grain_interleave
+        self.use_ring_attention = use_ring_attention

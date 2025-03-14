@@ -19,14 +19,17 @@ import mindspore.ops.operations as P
 from mindspore import Parameter, Tensor, mint, nn, ops
 from mindspore.common.initializer import initializer
 
-from mindformers.experimental.parallel_core.pynative.parallel_state import get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
-from mindformers.experimental.parallel_core.pynative.tensor_parallel.random import TENSOR_PARALLEL_GENERATOR, get_rng_tracer
-from mindformers.experimental.parallel_core.pynative.utils import divide
 from mindformers.experimental.infer.core.mapping import (GatherFromModelParallelRegion,
                                                          GatherFromSequenceParallelRegion,
                                                          ReduceFromModelParallelRegion,
                                                          ReduceScatterToSequenceParallelRegion,
                                                          ScatterToModelParallelRegion)
+from mindformers.experimental.infer.core.utils import get_tp_world_size
+from mindformers.experimental.parallel_core.pynative.parallel_state import get_tensor_model_parallel_rank
+from mindformers.experimental.parallel_core.pynative.tensor_parallel.random import (TENSOR_PARALLEL_GENERATOR,
+                                                                                    get_rng_tracer)
+from mindformers.experimental.parallel_core.pynative.utils import divide
+from mindformers.version_control import check_valid_gmm_op
 
 __all__ = ["ColumnParallelLinear", "RowParallelLinear", "VocabParallelEmbedding"]
 
@@ -58,6 +61,7 @@ class ColumnParallelLinear(nn.Cell):
         transpose_b (bool): Specifies whether the weight parameter will be initialized as a transposed shape.
         param_init_type (dtype.Number): The parameter initialization type. Default: mstype.float32.
         compute_dtype (dtype.Number): The computation type. Default: mstype.float16.
+        expert_num (int): The number of expert. Default: 1.
 
     Inputs:
         - **x** (Tensor) - Tensor of shape :math:`(*, in\_channels)`. The `input_size` in `Args` should be equal
@@ -94,6 +98,7 @@ class ColumnParallelLinear(nn.Cell):
             transpose_b=True,
             param_init_type=mstype.float32,
             compute_dtype=mstype.float16,
+            expert_num=1,
     ):
         super(ColumnParallelLinear, self).__init__()
         if stride > 1:
@@ -113,33 +118,44 @@ class ColumnParallelLinear(nn.Cell):
             raise NotImplementedError("For ColumnParallelLinear, `tp_comm_buffer_name` is not supported for now.")
         if disable_grad_reduce:
             raise NotImplementedError("For ColumnParallelLinear, `disable_grad_reduce=True` is not supported for now.")
-        if is_expert:
-            raise NotImplementedError("For ColumnParallelLinear, `is_expert=True` is not supported for now.")
 
         self.input_size = input_size
         self.output_size = output_size
         self.has_bias = bias
         self.gather_output = gather_output
-        self.tensor_parallel_group_size = get_tensor_model_parallel_world_size()
+        self.tensor_parallel_group_size = get_tp_world_size()
 
         self.output_size_per_partition = divide(output_size, self.tensor_parallel_group_size)
         self.is_expert = is_expert
+        self.expert_num = expert_num
         self.skip_weight_param_allocation = skip_weight_param_allocation
         self.parallel_config = config
         self.compute_dtype = compute_dtype
-
         self.sequence_parallel = self.parallel_config.use_sequence_parallel
-        self.transpose_b = transpose_b
+        #self.sequence_parallel = getattr(self.parallel_config, 'use_sequence_parallel',
+        #                                 self.parallel_config.sequence_parallel)
+        
+        self.transpose_b = transpose_b if self.expert_num <= 1 else False
 
         if self.sequence_parallel and self.tensor_parallel_group_size <= 1:
             self.sequence_parallel = False
 
         weight_shape = (self.output_size_per_partition, self.input_size) if self.transpose_b else (
             self.input_size, self.output_size_per_partition)
+        if self.is_expert and self.expert_num > 1:
+            weight_shape = (self.expert_num,) + weight_shape
+            if check_valid_gmm_op(gmm_version='GroupedMatmulV4'):
+                self.matmul = ops.auto_generate.GroupedMatmulV4()
+            elif check_valid_gmm_op(gmm_version='GroupedMatmul'):
+                self.matmul = ops.auto_generate.GroupedMatmul(split_item=3, group_type=0)
+            else:
+                raise RuntimeError(f"Inference of the MoE model relies on the GMM op. "
+                                   "Please upgrade to a MindSpore version above 2.3.0.")
+        else:
+            self.matmul = P.MatMul(transpose_b=self.transpose_b)
         with get_rng_tracer().rng_fork(TENSOR_PARALLEL_GENERATOR):
             if not self.skip_weight_param_allocation:
                 self.weight = Parameter(initializer(weight_init, weight_shape, param_init_type), name="weight")
-        self.matmul = P.MatMul(transpose_b=self.transpose_b)
 
         if self.has_bias:
             self.bias = Parameter(
@@ -153,9 +169,10 @@ class ColumnParallelLinear(nn.Cell):
         self.shape = ops.Shape()
         self.reshape = ops.Reshape()
         self.gather_from_mp_region = GatherFromModelParallelRegion()
-        self.gather_from_sp_region = GatherFromSequenceParallelRegion()
+        if self.sequence_parallel:
+            self.gather_from_sp_region = GatherFromSequenceParallelRegion()
 
-    def construct(self, input_parallel, weight=None):
+    def construct(self, input_parallel, weight=None, group_list=None):
         """
         Forward of ColumnParallelLinear.
         Performs a linear transformation considering various parallel modes and data type conversions.
@@ -179,7 +196,19 @@ class ColumnParallelLinear(nn.Cell):
 
         output_shape = self.shape(input_parallel)[:-1] + (self.output_size_per_partition,)
         input_parallel = self.reshape(input_parallel, (-1, self.input_size))
-        output_parallel = self.matmul(input_parallel, weight)
+        if self.is_expert and self.expert_num > 1:
+            if check_valid_gmm_op(gmm_version='GroupedMatmulV4'):
+                output_parallel = self.matmul([input_parallel], [weight], None, None, None, None, None, None,
+                                        group_list, split_item=3, group_type=0, group_list_type=1)[0]
+            elif check_valid_gmm_op(gmm_version='GroupedMatmul'):
+                output_parallel = self.matmul([input_parallel], [weight], None, None, None, None, None,
+                                        group_list)[0]
+            else:
+                raise RuntimeError(f"Inference of the MoE model relies on the GMM op. "
+                                   "Please upgrade to a MindSpore version above 2.3.0.")
+            
+        else:
+            output_parallel = self.matmul(input_parallel, weight)
         if self.has_bias:
             output_parallel = self.bias_add(
                 output_parallel, self.cast(self.bias, self.compute_dtype)
@@ -196,6 +225,11 @@ class ColumnParallelLinear(nn.Cell):
     def sharded_state_dict(self):
         """provide the sharded state dict based on the config"""
         w_shard = (self.tensor_parallel_group_size, 1) if self.transpose_b else (1, self.tensor_parallel_group_size)
+
+        if self.is_expert and self.expert_num > 1:
+            w_shard = (1, self.tensor_parallel_group_size, 1) if self.transpose_b \
+                else (1, 1, self.tensor_parallel_group_size)
+
         state_dict = {}
         if not self.skip_weight_param_allocation:
             state_dict[self.weight.name] = {'shape': self.weight.shape,
@@ -227,10 +261,12 @@ class RowParallelLinear(nn.Cell):
         bias_init (Union[Tensor, str, Initializer, numbers.Number]): The trainable bias_init parameter. The values
             of str refer to the function `initializer`. Default: 'zeros'.
         bias (bool): Specifies whether the layer uses a bias vector. Default: True.
+        skip_bias_add (bool): Specifies whether the layer doesn't need to add bias. Default: False.
         is_expert (bool): Specifies whether this linear layer is an expert. Default: False.
         transpose_b (bool): Specifies whether the weight parameter will be initialized as a transposed shape.
         param_init_type (dtype.Number): The parameter initialization type. Default: mstype.float32.
         compute_dtype (dtype.Number): The computation type. Default: mstype.float16.
+        expert_num (int): The number of expert. Default: 1.
 
     Inputs:
         - **x** (Tensor) - Tensor of shape :math:`(*, in\_channels)`. The `input_size` in `Args` should be equal
@@ -260,31 +296,35 @@ class RowParallelLinear(nn.Cell):
             transpose_b=True,
             param_init_type=mstype.float32,
             compute_dtype=mstype.float16,
+            expert_num=1,
+            moe_delay_allreduce=False,
     ):
         super(RowParallelLinear, self).__init__()
-        if skip_bias_add:
-            raise NotImplementedError("For ColumnParallelLinear, `skip_bias_add=True` is not supported for now.")
         if stride > 1:
             raise NotImplementedError("For ColumnParallelLinear, `stride > 1` is not supported for now, "
                                       "but got `stride={}`".format(stride))
         if keep_master_weight_for_test:
             raise NotImplementedError("For ColumnParallelLinear, `keep_master_weight_for_test=True` "
                                       "is not supported for now.")
-        if is_expert:
-            raise NotImplementedError("For RowParallelLinear, `is_expert=True` is not supported for now.")
         if tp_comm_buffer_name:
             raise NotImplementedError("For ColumnParallelLinear, `tp_comm_buffer_name` is not supported for now.")
 
         self.input_size = input_size
         self.output_size = output_size
         self.has_bias = bias
+        self.skip_bias_add = skip_bias_add
         self.input_is_parallel = input_is_parallel
-        self.tensor_parallel_group_size = get_tensor_model_parallel_world_size()
+        self.tensor_parallel_group_size = get_tp_world_size()
         self.input_size_per_partition = divide(input_size, self.tensor_parallel_group_size)
         self.parallel_config = config
         self.compute_dtype = compute_dtype
         self.sequence_parallel = self.parallel_config.use_sequence_parallel
-        self.transpose_b = transpose_b
+        #self.sequence_parallel = getattr(self.parallel_config, 'use_sequence_parallel',
+        #                                 self.parallel_config.sequence_parallel)
+        self.expert_num = expert_num
+        self.is_expert = is_expert
+        self.transpose_b = transpose_b if self.expert_num <= 1 else False
+        self.moe_delay_allreduce = moe_delay_allreduce
 
         if self.sequence_parallel and not self.input_is_parallel:
             raise RuntimeError(
@@ -293,6 +333,19 @@ class RowParallelLinear(nn.Cell):
 
         weight_shape = (self.output_size, self.input_size_per_partition) if self.transpose_b else (
             self.input_size_per_partition, self.output_size)
+        bias_shape = (self.output_size,)
+        if self.is_expert and self.expert_num > 1:
+            weight_shape = (self.expert_num,) + weight_shape
+            bias_shape = (1, self.expert_num, 1) + bias_shape
+            if check_valid_gmm_op(gmm_version='GroupedMatmulV4'):
+                self.matmul = ops.auto_generate.GroupedMatmulV4()
+            elif check_valid_gmm_op(gmm_version='GroupedMatmul'):
+                self.matmul = ops.auto_generate.GroupedMatmul(split_item=3, group_type=0)
+            else:
+                raise RuntimeError(f"Inference of the MoE model relies on the GMM op. "
+                                   "Please upgrade to a MindSpore version above 2.3.0.")
+        else:
+            self.matmul = P.MatMul(transpose_b=self.transpose_b)
         with get_rng_tracer().rng_fork(TENSOR_PARALLEL_GENERATOR):
             self.weight = Parameter(
                 initializer(
@@ -302,20 +355,21 @@ class RowParallelLinear(nn.Cell):
                 ),
                 name="weight",
             )
-        self.matmul = P.MatMul(transpose_b=self.transpose_b)
 
         if self.has_bias:
-            self.bias = Parameter(initializer(bias_init, (self.output_size), param_init_type), name="bias")
+            self.bias = Parameter(initializer(bias_init, bias_shape, param_init_type), name="bias")
             self.bias_add = P.Add()
 
         self.shape = P.Shape()
         self.reshape = P.Reshape()
         self.cast = P.Cast()
-        self.scatter_to_mp_region = ScatterToModelParallelRegion()
-        self.reduce_scatter_to_sp_region = ReduceScatterToSequenceParallelRegion()
         self.reduce_from_mp_region = ReduceFromModelParallelRegion()
+        if not self.input_is_parallel:
+            self.scatter_to_mp_region = ScatterToModelParallelRegion()
+        if self.sequence_parallel:
+            self.reduce_scatter_to_sp_region = ReduceScatterToSequenceParallelRegion()
 
-    def construct(self, input_):
+    def construct(self, input_, group_list=None):
         """
         Forward of RowParallelLinear.
         Performs a linear transformation considering various parallel modes and data type conversions.
@@ -331,16 +385,30 @@ class RowParallelLinear(nn.Cell):
         input_parallel = self.cast(input_parallel, self.compute_dtype)
         output_shape = self.shape(input_parallel)[:-1] + (self.output_size,)
         input_parallel = self.reshape(input_parallel, (-1, self.input_size_per_partition))
-        output_parallel = self.matmul(input_parallel, weight)
+        if self.is_expert and self.expert_num > 1:
+            if check_valid_gmm_op(gmm_version='GroupedMatmulV4'):
+                output_parallel = self.matmul([input_parallel], [weight], None, None, None, None, None, None,
+                                        group_list, split_item=3, group_type=0, group_list_type=1)[0]
+            elif check_valid_gmm_op(gmm_version='GroupedMatmul'):
+                output_parallel = self.matmul([input_parallel], [weight], None, None, None, None, None,
+                                        group_list)[0]
+            else:
+                raise RuntimeError(f"Inference of the MoE model relies on the GMM op. "
+                                   "Please upgrade to a MindSpore version above 2.3.0.")
+        else:
+            output_parallel = self.matmul(input_parallel, weight)
 
         if self.sequence_parallel:
             output_parallel = output_parallel.swapaxes(0, 1).contiguous()
             output = self.reduce_scatter_to_sp_region(output_parallel)
             output = output.swapaxes(0, 1).contiguous()
         else:
-            output = self.reduce_from_mp_region(output_parallel)
+            if self.moe_delay_allreduce or self.skip_bias_add:
+                output = output_parallel
+            else:
+                output = self.reduce_from_mp_region(output_parallel)
 
-        if self.has_bias:
+        if self.has_bias and not self.skip_bias_add:
             output = self.bias_add(output, self.cast(self.bias, self.compute_dtype))
         output = self.cast(output, origin_dtype)
         output = self.reshape(output, output_shape)
@@ -349,6 +417,11 @@ class RowParallelLinear(nn.Cell):
     def sharded_state_dict(self):
         """provide the sharded state dict based on the config"""
         w_shard = (1, self.tensor_parallel_group_size) if self.transpose_b else (self.tensor_parallel_group_size, 1)
+
+        if self.is_expert and self.expert_num > 1:
+            w_shard = (1, 1, self.tensor_parallel_group_size) if self.transpose_b \
+                else (1, self.tensor_parallel_group_size, 1)
+
         state_dict = {}
         state_dict[self.weight.name] = {'shape': self.weight.shape,
                                         'shard': w_shard}
@@ -383,9 +456,9 @@ class VocabParallelEmbedding(nn.Cell):
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
+        # self.sequence_parallel = getattr(parallel_config, 'use_sequence_parallel', parallel_config.sequence_parallel)
         self.sequence_parallel = parallel_config.use_sequence_parallel
-
-        self.tensor_parallel_group_size = get_tensor_model_parallel_world_size()
+        self.tensor_parallel_group_size = get_tp_world_size()
 
         (
             self.vocab_start_index,
@@ -461,14 +534,3 @@ class VocabParallelEmbedding(nn.Cell):
                                                   'shard': w_shard}
 
         return state_dict
-
-
-def _update_sharded_state_dict(network: nn.Cell, dict_: dict):
-    cells = network.name_cells()
-    for _, subcell in cells.items():
-        if subcell == network:
-            continue
-        if hasattr(subcell, "sharded_state_dict"):
-            dict_.update(subcell.sharded_state_dict())
-        else:
-            _update_sharded_state_dict(subcell, dict_)

@@ -17,14 +17,15 @@
 import argparse
 
 import numpy as np
-from mindspore import Tensor, set_context
+from mindspore import Tensor, get_context, set_context
 from mindspore.communication import init
 
 from mindformers.experimental.parallel_core.pynative.parallel_state import initialize_model_parallel
-from tests.st.test_infer.test_infer_core.utils import get_config, get_module
+from tests.st.test_infer.test_infer_core.utils import (AttentionNet, MLPNet, TransformerLayerNet, TransformerNet,
+                                                       get_config)
 
 
-def _test_parallel_mlp(net):
+def _test_parallel_mlp(config):
     """
     Test case for the ParallelMLP.
 
@@ -32,10 +33,12 @@ def _test_parallel_mlp(net):
     passes it through the `net` (ParallelMLP), and verifies that the output tensor
     has the same shape [batch_size, seq_length, hidden_size].
     """
-    base_config = get_config()
-    batch_size = base_config.batch_size
-    seq_length = base_config.seq_length
-    hidden_size = base_config.hidden_size
+
+    net = MLPNet(config)
+
+    batch_size = config.batch_size
+    seq_length = config.seq_length
+    hidden_size = config.hidden_size
 
     input_x = Tensor(np.random.randn(batch_size, seq_length, hidden_size).astype(np.float16))
     output = net(input_x)
@@ -43,7 +46,7 @@ def _test_parallel_mlp(net):
     assert output.shape == (batch_size, seq_length, hidden_size)
 
 
-def _test_parallel_attention(net):
+def _test_parallel_attention(config):
     """
     Test case for the ParallelAttention.
 
@@ -51,27 +54,38 @@ def _test_parallel_attention(net):
     passes them through the `net` (ParallelAttention), and asserts that
     the output tensor has the expected shape [batch_size, seq_length, hidden_size].
     """
-    base_config = get_config()
-    batch_size = base_config.batch_size
-    seq_length = base_config.seq_length
-    hidden_size = base_config.hidden_size
-    head_dim = base_config.hidden_size // base_config.num_heads
-    num_blocks = base_config.num_blocks
+
+    net = AttentionNet(config)
+    batch_size = config.batch_size
+    seq_length = config.seq_length
+    hidden_size = config.hidden_size
+    head_dim = config.hidden_size // config.num_heads
+    num_blocks = config.num_blocks
+
+    use_past = config.use_past
+    is_pynative = get_context('mode') == 1
 
     input_x = Tensor(np.random.randn(batch_size, seq_length, hidden_size).astype(np.float16))
-    batch_valid_length = Tensor(np.ones((batch_size, 1)).astype(np.int32))
-    block_tables = Tensor(np.ones((batch_size, num_blocks)).astype(np.int64))
-    slot_mapping = Tensor(np.ones((batch_size * seq_length,)).astype(np.int32))
-    attn_mask = Tensor(np.ones((batch_size, 1, seq_length, seq_length)).astype(np.uint8))
     freqs_cos = Tensor(np.ones((seq_length, head_dim)).astype(np.float16))
     freqs_sin = Tensor(np.ones((seq_length, head_dim)).astype(np.float16))
-    freqs_cis = (freqs_cos, freqs_sin, None)
+    swap_mask = Tensor(np.ones((head_dim, head_dim)).astype(np.float16))
+    freqs_cis = (freqs_cos, freqs_sin, swap_mask)
+    batch_valid_length = None
+    block_tables = None
+    slot_mapping = None
+    attn_mask = Tensor(np.ones((batch_size, 1, seq_length, seq_length)).astype(np.uint8))
+    if use_past:
+        batch_valid_length = Tensor(np.ones((batch_size,)).astype(np.int32))
+        block_tables = Tensor(np.ones((batch_size, num_blocks)).astype(np.int64))
+        slot_mapping = Tensor(np.ones((batch_size * seq_length,)).astype(np.int32))
+        if not is_pynative:
+            attn_mask = Tensor(np.ones((batch_size, 1, seq_length, seq_length)).astype(np.uint8))
     output = net(input_x, batch_valid_length, block_tables, slot_mapping, freqs_cis=freqs_cis, attn_mask=attn_mask)
 
     assert output.shape == (batch_size, seq_length, hidden_size)
 
 
-def _test_parallel_transformerlayers(net):
+def _test_parallel_transformerlayers(config):
     """
     Test case for the ParallelTransformerLayer.
 
@@ -79,27 +93,37 @@ def _test_parallel_transformerlayers(net):
     passes them through the `net` (ParallelTransformerLayer), and asserts that
     the output tensor has the expected shape [batch_size, seq_length, hidden_size].
     """
-    base_config = get_config()
-    batch_size = base_config.batch_size
-    seq_length = base_config.seq_length
-    hidden_size = base_config.hidden_size
-    head_dim = base_config.hidden_size // base_config.num_heads
-    num_blocks = base_config.num_blocks
+    net = TransformerLayerNet(config)
+    batch_size = config.batch_size
+    seq_length = config.seq_length
+    hidden_size = config.hidden_size
+    head_dim = config.hidden_size // config.num_heads
+    num_blocks = config.num_blocks
+
+    use_past = config.use_past
+    is_pynative = get_context('mode') == 1
 
     x = Tensor(np.random.randn(batch_size, seq_length, hidden_size).astype(np.float16))
-    batch_valid_length = Tensor(np.ones((batch_size, 1)).astype(np.int32))
-    block_tables = Tensor(np.ones((batch_size, num_blocks)).astype(np.int64))
-    slot_mapping = Tensor(np.ones((batch_size * seq_length,)).astype(np.int32))
-    mask = Tensor(np.ones((batch_size, 1, seq_length, seq_length)).astype(np.uint8))
     freqs_cos = Tensor(np.ones((seq_length, head_dim)).astype(np.float16))
     freqs_sin = Tensor(np.ones((seq_length, head_dim)).astype(np.float16))
-    freqs_cis = (freqs_cos, freqs_sin, None)
-    output = net(x, freqs_cis, mask, batch_valid_length, block_tables, slot_mapping)
+    swap_mask = Tensor(np.ones((head_dim, head_dim)).astype(np.float16))
+    freqs_cis = (freqs_cos, freqs_sin, swap_mask)
+    batch_valid_length = None
+    block_tables = None
+    slot_mapping = None
+    attn_mask = Tensor(np.ones((batch_size, 1, seq_length, seq_length)).astype(np.uint8))
+    if use_past:
+        batch_valid_length = Tensor(np.ones((batch_size,)).astype(np.int32))
+        block_tables = Tensor(np.ones((batch_size, num_blocks)).astype(np.int64))
+        slot_mapping = Tensor(np.ones((batch_size * seq_length,)).astype(np.int32))
+        if not is_pynative:
+            attn_mask = Tensor(np.ones((batch_size, 1, seq_length, seq_length)).astype(np.uint8))
+    output = net(x, freqs_cis, attn_mask, batch_valid_length, block_tables, slot_mapping)
 
     assert output.shape == (batch_size, seq_length, hidden_size)
 
 
-def _test_parallel_transformer(net):
+def _test_parallel_transformer(config):
     """
     Test case for the ParallelTransformer.
 
@@ -107,16 +131,22 @@ def _test_parallel_transformer(net):
     passes them through the `net` (ParallelTransformer), and asserts that
     the output tensor has the expected shape [batch_size, seq_length, hidden_size].
     """
-    base_config = get_config()
-    batch_size = base_config.batch_size
-    seq_length = base_config.seq_length
-    num_blocks = base_config.num_blocks
-    hidden_size = base_config.hidden_size
+    net = TransformerNet(config)
+    batch_size = config.batch_size
+    seq_length = config.seq_length
+    num_blocks = config.num_blocks
+    hidden_size = config.hidden_size
+    use_past = config.use_past
 
     tokens = Tensor(np.arange(seq_length).astype(np.int32)).tile((batch_size, 1))
-    batch_valid_length = Tensor(np.ones((batch_size, 1)).astype(np.int32))
-    block_tables = Tensor(np.ones((batch_size, num_blocks)).astype(np.int64))
-    slot_mapping = Tensor(np.ones((batch_size * seq_length,)).astype(np.int32))
+    batch_valid_length = None
+    block_tables = None
+    slot_mapping = None
+
+    if use_past:
+        batch_valid_length = Tensor(np.ones((batch_size,)).astype(np.int32))
+        block_tables = Tensor(np.ones((batch_size, num_blocks)).astype(np.int64))
+        slot_mapping = Tensor(np.ones((batch_size * seq_length,)).astype(np.int32))
 
     output = net(tokens, batch_valid_length=batch_valid_length, batch_index=None, zactivate_len=None,
                  block_tables=block_tables, slot_mapping=slot_mapping, prefix_keys_values=None)
@@ -124,20 +154,23 @@ def _test_parallel_transformer(net):
     assert output.shape == (batch_size, seq_length, hidden_size)
 
 
-def _test_module(module):
+def _test_module(module, mode):
     """main"""
     # set_context
     jit_level = "O0"
     infer_boost = "on"
-    set_context(mode=0, jit_config={"jit_level": jit_level, "infer_boost": infer_boost})
+    set_context(mode=mode, jit_config={"jit_level": jit_level, "infer_boost": infer_boost})
 
     # init communication
     init()
     initialize_model_parallel(tensor_model_parallel_size=2)
 
     # test module
-    net = get_module(module)
-    TEST_FUNC[module](net)
+    config = get_config(use_past=True)
+    TEST_FUNC[module](config)
+
+    config = get_config(use_past=False)
+    TEST_FUNC[module](config)
 
 
 TEST_FUNC = {
@@ -151,6 +184,7 @@ TEST_FUNC = {
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--module', type=str, help='test module of parallel transformer')
+    parser.add_argument('--mode', type=int, default=0, help='test mode of parallel transformer')
 
     args = parser.parse_args()
-    _test_module(args.module)
+    _test_module(args.module, args.mode)

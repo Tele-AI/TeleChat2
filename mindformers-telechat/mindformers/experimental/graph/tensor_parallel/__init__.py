@@ -16,7 +16,9 @@
 """
 MindFormers tensor_parallel API.
 """
-from .layers import *
+from .layers import RowParallelLinear, ColumnParallelLinear, VocabParallelEmbedding
+from .lora_layers import LoRARowParallelLinear, LoRAColumnParallelLinear
 
 __all__ = []
 __all__.extend(layers.__all__)
+__all__.extend(lora_layers.__all__)

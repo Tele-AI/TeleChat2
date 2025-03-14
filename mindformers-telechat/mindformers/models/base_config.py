@@ -21,7 +21,7 @@ import os
 import shutil
 
 import yaml
-
+from mindformers.tools.check_rules import check_yaml_depth_before_loading
 from ..mindformer_book import MindFormerBook
 from ..mindformer_book import print_path_or_list
 from ..tools.logger import logger
@@ -194,6 +194,8 @@ class BaseConfig(dict):
         meraged_dict = {}
         if os.path.exists(save_path):
             with open(save_path, 'r') as file_reader:
+                check_yaml_depth_before_loading(file_reader)
+                file_reader.seek(0)
                 meraged_dict = yaml.safe_load(file_reader.read())
             file_reader.close()
         meraged_dict.update(wraped_config)

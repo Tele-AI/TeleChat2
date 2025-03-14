@@ -139,8 +139,7 @@ class LLamaCrossAttention(nn.Cell):
                                 out_channels=self.hidden_size + self.kv_dim * 2,
                                 has_bias=qkv_has_bias,
                                 compute_dtype=compute_dtype,
-                                param_init_type=param_init_type,
-                                skip_redistribution=is_dynamic)
+                                param_init_type=param_init_type)
             self.w_qkv.shard(((dp, 1), (mp, 1)))
             self.split_qkv = ms.ops.auto_generate.SplitWithSize()
             self.split_qkv.add_prim_attr("skip_redistribution", True)
@@ -150,20 +149,17 @@ class LLamaCrossAttention(nn.Cell):
                              self.hidden_size,
                              has_bias=qkv_has_bias,
                              compute_dtype=compute_dtype,
-                             param_init_type=param_init_type,
-                             skip_redistribution=is_dynamic)
+                             param_init_type=param_init_type)
             self.wk = Linear(self.hidden_size,
                              self.kv_dim,
                              has_bias=qkv_has_bias,
                              compute_dtype=compute_dtype,
-                             param_init_type=param_init_type,
-                             skip_redistribution=is_dynamic)
+                             param_init_type=param_init_type)
             self.wv = Linear(self.hidden_size,
                              self.kv_dim,
                              has_bias=qkv_has_bias,
                              compute_dtype=compute_dtype,
-                             param_init_type=param_init_type,
-                             skip_redistribution=is_dynamic)
+                             param_init_type=param_init_type)
             if qkv_has_bias:
                 self.wq.shard(((dp * cp, 1), (mp, 1)), ((dp * cp, mp), (mp,)))
                 self.wk.shard(((dp * cp, 1), (mp, 1)), ((dp * cp, mp), (mp,)))
@@ -176,8 +172,7 @@ class LLamaCrossAttention(nn.Cell):
                          out_channels=self.hidden_size,
                          has_bias=False,
                          compute_dtype=compute_dtype,
-                         param_init_type=param_init_type,
-                         skip_redistribution=is_dynamic)
+                         param_init_type=param_init_type)
         self.wo.shard(((dp * cp, mp), (1, mp)), out_strategy_matmul=((dp * cp, 1),))
 
         if self.use_past:
@@ -191,9 +186,9 @@ class LLamaCrossAttention(nn.Cell):
                                                   next_tokens=0,
                                                   block_size=self.block_size,
                                                   num_blocks=self.num_blocks,
+                                                  is_dynamic=is_dynamic,
                                                   use_flash_attention=self.use_flash_attention,
                                                   rotary_cos_format=2,
-                                                  rotary_dtype=rotary_dtype,
                                                   compute_dtype=compute_dtype)
             self.infer_attention.shard(parallel_config)
         else:

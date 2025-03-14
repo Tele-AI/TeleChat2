@@ -1,0 +1,180 @@
+seed: 0
+run_mode: 'train'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+
+# context
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  max_call_depth: 10000
+  save_graphs: False
+  device_id: 0
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+
+# runner
+runner_config:
+  epochs: 5
+  batch_size: 32
+  image_size: 224
+  sink_mode: False
+  sink_size: 2
+
+# parallel
+use_parallel: False
+parallel:
+  parallel_mode: 0 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: True
+  enable_alltoall: False
+  full_batch: False
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+parallel_config:
+  data_parallel: 1
+  model_parallel: 1
+  expert_parallel: 1
+  pipeline_stage: 1
+  micro_batch_num: 1
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# recompute
+recompute_config:
+  recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: False
+
+# autotune
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+# profile
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+
+# Trainer
+trainer:
+  type: ContrastiveLanguageImagePretrainTrainer
+  model_name: 'clip_vit_b_32'
+
+# train dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: Flickr8kDataLoader
+    dataset_dir: "./checkpoint_download/Flickr8k"
+    stage: "train"
+    column_names: ["image", "text"]
+  text_transforms:
+    type: RandomChoiceTokenizerForward
+    max_length: 77
+    padding: "max_length"
+    random_seed: 2022
+  transforms:
+    - type: Resize
+      size: 224
+    - type: CenterCrop
+      size: 224
+    - type: ToTensor
+    - type: Normalize
+      mean: [0.48145466, 0.4578275, 0.40821073]
+      std: [0.26862954, 0.26130258, 0.27577711]
+      is_hwc: False
+  tokenizer:
+    type: CLIPTokenizer
+    pad_token: '!'
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 32
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 30
+  seed: 2022
+train_dataset_task:
+  type: ContrastiveLanguageImagePretrainDataset
+  dataset_config: *train_dataset
+
+# model
+model:
+  arch:
+    type: CLIPModel
+  model_config:
+    type: CLIPConfig
+    text_config:
+      type: CLIPTextConfig
+      vocab_size: 49408
+      hidden_size: 512
+      intermediate_size: 2048
+      num_hidden_layers: 12
+      num_attention_heads: 8
+      max_position_embeddings: 77
+      hidden_act: "quick_gelu"
+      attention_dropout: 0.0
+      drop_out: 0.0
+      initializer_range: 0.02
+      initializer_factor: 1.0
+    vision_config:
+      type: CLIPVisionConfig
+      hidden_size: 768
+      intermediate_size: 3072
+      num_hidden_layers: 12
+      num_attention_heads: 12
+      image_size: 224
+      patch_size: 32
+      hidden_act: "quick_gelu"
+      dropout: 0.0
+      attention_dropout: 0.0
+      initializer_range: 0.02
+      initializer_factor: 1.0
+    dtype: float16  # type of tensors
+    checkpoint_name_or_path: clip_vit_b_32   # the loaded model type
+    projection_dim: 512  # feature dims
+    logit_scale_init_value: 2.6592
+
+
+# lr schedule
+layer_scale: False
+layer_decay: 0.65
+
+# optimizer
+optimizer:
+  type: adamw
+  weight_decay: 0.001
+  learning_rate: 0.00001
+lr_scale: False
+lr_scale_factor: 256
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "mindformers"
+    save_checkpoint_steps: 100
+    integrated_save: True
+    async_save: False
+  - type: ObsMonitor
+eval_callbacks:
+  - type: ObsMonitor
+
+# processor
+processor:
+  type: CLIPProcessor
+  image_processor:
+    type: CLIPImageProcessor
+    image_resolution: 224  # input image size
+  tokenizer:
+    type: CLIPTokenizer
+    pad_token: '!' # corresponding token id is 0

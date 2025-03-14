@@ -13,7 +13,7 @@ mindformers.dataset.KeyWordGenDataset
 
     参数：
         - **dataset_config** (dict, 可选) - 数据集配置信息。当传入的 `dataset_config` 为空字典或 ``None`` 时， `dataset_config` 将由以下所有参数生成；否则以下所有参数被忽略。默认值： ``None`` 。
-        - **data_loader** (Union[dict, Callable]) - 必须是包含data loader配置信息的字典，或一个data loader实例。当 `data_loader` 为 `dict` 类型时，字典的键可以是"type"、"dataset_dir"、"dataset_files"、"phase"、"shuffle"、"origin_columns"和"version"。
+        - **data_loader** (Union[dict, Callable], 可选) - 必须是包含data loader配置信息的字典，或一个data loader实例。当 `data_loader` 为 `dict` 类型时，字典的键可以是"type"、"dataset_dir"、"dataset_files"、"phase"、"shuffle"、"origin_columns"和"version"。默认值： ``None`` 。
 
           - ``"type"`` - 必选。数据集的类型。必须是 `str` 或 `type` 类型。当 ``"type"`` 对应值为"MindDataset"时， ``"dataset_dir"`` 与 ``"dataset_files"`` 中必选两者之一，优先使用 ``"dataset_dir"`` ；否则必选 ``"dataset_dir"`` 。
           - ``"dataset_dir"`` - 数据集文件所在路径或目录。当 ``"type"`` 为"MindDataset"且 ``"dataset_dir"`` 表示一个目录时，将递归查找目录下所有 `mindrecord` 格式文件。
@@ -23,24 +23,24 @@ mindformers.dataset.KeyWordGenDataset
           - ``"origin_columns"`` - 必选。表示"prompt"和"answer"在数据文件中的对应列名。必须是两个字符串组成的列表。
           - ``"version"`` - 可选。映射函数的版本，可选值为"1"和"2"。未配置键时，默认为 ``1`` 。
 
-        - **tokenizer** (Union[dict, Callable]) - 必须是包含分词器配置信息的字典，或一个分词器实例。
-        - **input_columns** (list[str]) - 表示映射处理前的数据列名称。
-        - **batch_size** (int) - 每个批次的大小。默认值： ``8`` 。
-        - **drop_remainder** (bool) - 是否在最后一个批次的数据项数小于批次大小时，丢弃最后一个批次。默认值： ``True`` 。
-        - **num_parallel_workers** (int) - 并行执行数据映射处理的进程/线程数。默认值： ``8`` 。
-        - **repeat** (int) - 数据集重复的次数。默认值： ``1`` 。
-        - **ignore_pad_token_for_loss** (bool) - 是否忽略<pad>词元对应的损失。默认值：``True``。
-        - **max_source_length** (int) - 源序列的最大长度。
-        - **max_target_length** (int) - 目标序列的最大长度。
-        - **phase** (int) - 需要读取的数据集的子集，`data_loader` 为 `dict` 类型时忽略该参数。可选值为 'train' 或 'eval'。默认值： ``'train'``。
-        - **version** (int) - 映射函数的版本， `data_loader` 为 `dict` 类型时忽略该参数。可选值为 `1` 或 `2`。默认值：``1``。
-        - **seed** (int) - 随机数种子。默认值： ``0`` 。
-        - **prefetch_size** (int) - 流水线中每个数据处理操作的缓存队列大小。默认值： ``1`` 。
-        - **numa_enable** (bool) - 是否采用NUMA绑定函数。默认值： ``False`` 。
-        - **auto_tune** (bool) - 是否启用数据处理参数自动优化。默认值： ``False`` 。
-        - **autotune_per_step** (int) - 设置调整自动数据加速配置步骤的间隔。默认值： ``10`` 。
-        - **filepath_prefix** (str) - 保存优化参数配置的路径。默认值： ``'./autotune'`` 。
-        - **profile** (bool) - 是否启用数据收集。默认值： ``False`` 。
+        - **tokenizer** (Union[dict, Callable], 可选) - 必须是包含分词器配置信息的字典，或一个分词器实例。默认值： ``None`` 。
+        - **input_columns** (list[str], 可选) - 表示映射处理前的数据列名称。默认值： ``None`` 。
+        - **batch_size** (int, 可选) - 每个批次的大小。默认值： ``8`` 。
+        - **drop_remainder** (bool, 可选) - 是否在最后一个批次的数据项数小于批次大小时，丢弃最后一个批次。默认值： ``True`` 。
+        - **num_parallel_workers** (int, 可选) - 并行执行数据映射处理的进程/线程数。默认值： ``8`` 。
+        - **repeat** (int, 可选) - 数据集重复的次数。默认值： ``1`` 。
+        - **ignore_pad_token_for_loss** (bool, 可选) - 是否忽略<pad>词元对应的损失。默认值：``True``。
+        - **max_source_length** (int, 可选) - 源序列的最大长度。默认值： ``None`` 。
+        - **max_target_length** (int, 可选) - 目标序列的最大长度。默认值： ``None`` 。
+        - **phase** (int, 可选) - 需要读取的数据集的子集，`data_loader` 为 `dict` 类型时忽略该参数。可选值为 'train' 或 'eval'。默认值： ``'train'`` 。
+        - **version** (int, 可选) - 映射函数的版本， `data_loader` 为 `dict` 类型时忽略该参数。可选值为 `1` 或 `2`。默认值：``1`` 。
+        - **seed** (int, 可选) - 随机数种子。默认值： ``0`` 。
+        - **prefetch_size** (int, 可选) - 流水线中每个数据处理操作的缓存队列大小。默认值： ``1`` 。
+        - **numa_enable** (bool, 可选) - 是否采用NUMA绑定函数。默认值： ``False`` 。
+        - **auto_tune** (bool, 可选) - 是否启用数据处理参数自动优化。默认值： ``False`` 。
+        - **autotune_per_step** (int, 可选) - 设置调整自动数据加速配置步骤的间隔。默认值： ``10`` 。
+        - **filepath_prefix** (str, 可选) - 保存优化参数配置的路径。默认值： ``'./autotune'`` 。
+        - **profile** (bool, 可选) - 是否启用数据收集。默认值： ``False`` 。
 
     返回：
         `KeyWordGenDataset` 实例。

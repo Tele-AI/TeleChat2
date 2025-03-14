@@ -14,7 +14,7 @@
 # ============================================================================
 """Baichuan2 Base Model."""
 from mindformers.models.llama import LlamaConfig
-from research.baichuan2.baichuan2_13b import Baichuan13BV2ForCausalLM
+from research.baichuan2.baichuan2_13b_model import Baichuan13BV2ForCausalLM
 
 # copy from finetune_baichuan2_13b.yaml
 BASE_CONFIG = {

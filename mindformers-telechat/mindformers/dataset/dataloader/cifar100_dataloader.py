@@ -20,9 +20,11 @@ import numpy as np
 
 from mindspore.dataset import GeneratorDataset
 
+from mindformers.utils import deprecated
 from ...tools.register import MindFormerRegister, MindFormerModuleType
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.DATASET_LOADER)
 class Cifar100DataLoader:
     """Cifar100 Dataloader with class name as text column"""
@@ -99,6 +101,7 @@ class Cifar100DataLoader:
         return cifar100_dataloader
 
 
+@deprecated(version="1.5.0")
 class Cifar100DataSet:
     """Cifar100 dataSet with class name"""
     def __init__(self, dataset_dir: str, stage: Optional[str] = "train",

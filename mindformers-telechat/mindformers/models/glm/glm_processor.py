@@ -59,7 +59,7 @@ class GLMProcessor(ProcessorMixin):
     _support_list = MindFormerBook.get_processor_support_list()['glm']
 
     attributes = ["tokenizer"]
-    tokenizer_class = "ChatGLMTokenizer"
+    tokenizer_class = ("ChatGLMTokenizer", "ChatGLM2Tokenizer", "ChatGLM3Tokenizer")
 
     def __init__(self, tokenizer=None,
                  max_length=128, padding='max_length', return_tensors='ms'):

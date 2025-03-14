@@ -125,6 +125,13 @@ from .llama import (
     LlamaTokenizer,
     LlamaTokenizerFast
 )
+from .mllama import (
+    MllamaConfig,
+    MllamaTextModel,
+    MllamaProcessor,
+    MllamaTokenizer,
+    MllamaForConditionalGeneration
+)
 from .pangualpha import (
     PanguAlphaConfig,
     PanguAlphaHeadModel,
@@ -132,16 +139,6 @@ from .pangualpha import (
     PanguAlphaProcessor,
     PanguAlphaPromptTextClassificationModel,
     PanguAlphaTokenizer
-)
-from .bloom import (
-    BloomConfig,
-    BloomLMHeadModel,
-    BloomModel,
-    BloomProcessor,
-    BloomRewardModel,
-    BloomTokenizer,
-    BloomTokenizerFast,
-    VHead
 )
 from .sam import (
     ImageEncoderConfig,

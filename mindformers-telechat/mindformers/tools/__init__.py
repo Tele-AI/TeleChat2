@@ -42,7 +42,8 @@ from .utils import (
     get_output_subpath,
     set_output_path,
     set_strategy_save_path,
-    str2bool
+    str2bool,
+    calculate_pipeline_stage
 )
 from .generic import add_model_info_to_auto_map
 from .hub import (
@@ -58,7 +59,6 @@ from .hub import (
     convert_file_size_to_int,
     create_dynamic_module,
     custom_object_save,
-    download_url,
     extract_commit_hash,
     get_cached_module_file,
     get_checkpoint_shard_files,
@@ -72,7 +72,6 @@ from .hub import (
     http_user_agent,
     init_mf_modules,
     is_offline_mode,
-    is_remote_url,
     resolve_trust_remote_code
 )
 

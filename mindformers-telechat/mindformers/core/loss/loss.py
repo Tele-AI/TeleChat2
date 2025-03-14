@@ -13,8 +13,9 @@
 # limitations under the License.
 # ============================================================================
 """MindFormer Self-Define Loss."""
+import os
 
-from mindspore import nn, Tensor
+from mindspore import nn, Tensor, get_auto_parallel_context
 from mindspore import ops as P
 from mindspore.ops import functional as F
 from mindspore.common import dtype as mstype
@@ -24,15 +25,18 @@ from mindspore.context import ParallelMode
 from mindspore.parallel import set_algo_parameters
 
 from mindspore import log as logger
-from mindspore.parallel._utils import _get_device_num, _get_pipeline_stages, _get_parallel_mode, _is_sharding_propagation
+from mindspore.parallel._utils import _get_device_num, _get_pipeline_stages, _get_parallel_mode
 
 from mindformers.tools.logger import _LogActionOnce
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.tools.utils import get_real_rank
 from mindformers.modules.transformer.op_parallel_config import default_dpmp_config
+from mindformers.utils import deprecated
 
-__all__ = ['SoftTargetCrossEntropy', 'MSELoss', 'L1Loss', 'CrossEntropyLoss', 'CompareLoss']
+__all__ = ['SoftTargetCrossEntropy', 'MSELoss', 'L1Loss', 'CrossEntropyLoss']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.LOSS)
 class SoftTargetCrossEntropy(LossBase):
     """
@@ -52,7 +56,7 @@ class SoftTargetCrossEntropy(LossBase):
     """
 
     def __init__(self, parallel_config=default_dpmp_config):
-        super(SoftTargetCrossEntropy, self).__init__()
+        super().__init__()
         dp = parallel_config.data_parallel
         self.mean_ops = P.ReduceMean(keep_dims=False).shard(((1,),))
         self.sum_ops = P.ReduceSum(keep_dims=False).shard(((dp, 1),))
@@ -70,6 +74,7 @@ class SoftTargetCrossEntropy(LossBase):
         return self.mean_ops(loss)
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.LOSS)
 class MSELoss(nn.Cell):
     """
@@ -92,7 +97,7 @@ class MSELoss(nn.Cell):
     """
 
     def __init__(self, norm_pixel_loss=True, parallel_config=default_dpmp_config):
-        super(MSELoss, self).__init__()
+        super().__init__()
         dp = parallel_config.data_parallel
         self.add_loss = P.Add().shard(((dp, 1, 1), ()))
         self.sub = P.Sub().shard(((dp, 1, 1), (dp, 1, 1)))
@@ -141,11 +146,12 @@ class MSELoss(nn.Cell):
         return x_var
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.LOSS)
 class L1Loss(LossBase):
     """L1Loss for parallel."""
     def __init__(self, reduction='mean', parallel_config=default_dpmp_config):
-        super(L1Loss, self).__init__()
+        super().__init__()
         dp = parallel_config.data_parallel
 
         self.abs = P.Abs().shard(((dp, 1, 1, 1),))
@@ -210,22 +216,13 @@ class _LogSoftmax(nn.Cell):
         self.on_value = Tensor(1.0, mstype.float32)
         self.off_value = Tensor(0.0, mstype.float32)
 
-        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
-            self.sum = P.ReduceSum(keep_dims=True).shard(((dp, mp),))
-            self.max = P.ReduceMax(keep_dims=True).shard(
-                ((dp, mp),))
-            self.sub = P.Sub()
-            self.exp = P.Exp()
-            self.log = P.Log()
-            self.onehot = P.OneHot()
-        else:
-            self.sum = P.ReduceSum(keep_dims=True).shard(((dp, mp),))
-            self.max = P.ReduceMax(keep_dims=True).shard(
-                ((dp, mp),))
-            self.sub = P.Sub().shard(((dp, mp), (dp, 1)))
-            self.exp = P.Exp().shard(((dp, mp),))
-            self.log = P.Log().shard(((dp, 1),))
-            self.onehot = P.OneHot().shard(((dp, mp), (), ()))
+        self.sum = P.ReduceSum(keep_dims=True).shard(((dp, mp),))
+        self.max = P.ReduceMax(keep_dims=True).shard(
+            ((dp, mp),))
+        self.sub = P.Sub().shard(((dp, mp), (dp, 1)))
+        self.exp = P.Exp().shard(((dp, mp),))
+        self.log = P.Log().shard(((dp, 1),))
+        self.onehot = P.OneHot().shard(((dp, mp), (), ()))
 
     def construct(self, logits, label):
         """Forward process"""
@@ -273,14 +270,9 @@ class _NLLLoss(nn.Cell):
         # we need to eliminate this virtual div by adding a factor "mp".
         if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL, ParallelMode.SEMI_AUTO_PARALLEL):
             self.repeat_loss = mp
-        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
-            self.sum = P.ReduceSum()
-            self.mul = P.Mul()
-            self.neg = P.Neg()
-        else:
-            self.sum = P.ReduceSum().shard(((dp, mp),))
-            self.mul = P.Mul().shard(((dp, mp), (dp, mp)))
-            self.neg = P.Neg().shard(((dp, mp),))
+        self.sum = P.ReduceSum().shard(((dp, mp),))
+        self.mul = P.Mul().shard(((dp, mp), (dp, mp)))
+        self.neg = P.Neg().shard(((dp, mp),))
 
     def construct(self, log_softmax_result, one_hot_label):
         """Forward process"""
@@ -349,10 +341,11 @@ class CrossEntropyLoss(nn.Cell):
               \end{cases}
 
     Args:
-        parallel_config (mindformers.modules.transformer.op_parallel_config.OpParallelConfig): The parallel
-            configuration. Default default_dpmp_config.
-        check_for_nan_in_loss_and_grad (bool): Whether to print local loss. Default: False.
-        calculate_per_token_loss (bool): Whether to use Megatron loss. Default: False.
+        parallel_config (mindformers.modules.OpParallelConfig, optional): The parallel
+            configuration. Default: ``default_dpmp_config``.
+        check_for_nan_in_loss_and_grad (bool, optional): Whether to print local loss. Default: ``False``.
+        calculate_per_token_loss (bool, optional): Whether to use Megatron loss. Default: ``False``.
+        seq_split_num (int, optional): Sequence split number in sequence pipeline parallel mode. Default: ``1``.
 
     Inputs:
         - **logits** (Tensor) - Tensor of shape (N, C). Data type must be float16 or float32. The output logits of
@@ -383,10 +376,11 @@ class CrossEntropyLoss(nn.Cell):
     @_LogActionOnce(m_logger=logger, key='CrossEntropyLoss',
                     no_warning=_get_parallel_mode() in (ParallelMode.STAND_ALONE,))
     def __init__(self, parallel_config=default_dpmp_config, check_for_nan_in_loss_and_grad=False,
-                 calculate_per_token_loss=False, **kwargs):
+                 calculate_per_token_loss=False, seq_split_num=1, **kwargs):
         super(CrossEntropyLoss, self).__init__()
         dp = parallel_config.data_parallel
         mp = parallel_config.model_parallel
+        self.seq_pipe = seq_split_num > 1
         self.kwargs = kwargs
         self.enable_force_redistribute = False
         if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL, ParallelMode.SEMI_AUTO_PARALLEL):
@@ -399,6 +393,12 @@ class CrossEntropyLoss(nn.Cell):
         self.add2 = P.Add()
         self.div2 = P.RealDiv()
         self.relu = P.ReLU().shard(((1,),))
+        self.dump_local_loss = (bool(get_auto_parallel_context("dump_local_norm_path"))
+                                and check_for_nan_in_loss_and_grad)
+        if self.dump_local_loss:
+            self.dump = P.TensorDump()
+            self.dump_path = os.path.join(get_auto_parallel_context("dump_local_norm_path"), f"rank_{get_real_rank()}")
+            self.local_loss_filename = os.path.join(self.dump_path, "local_loss")
 
         self._log_softmax = _LogSoftmax(parallel_config)
         self._nllloss = _NLLLoss(parallel_config)
@@ -433,72 +433,15 @@ class CrossEntropyLoss(nn.Cell):
                 self.local_sum2(input_mask),
                 P.Cast()(F.tuple_to_array((1e-8,)), mstype.float32))
             local_loss = self.div2(local_numerator, local_denominator)
-            print("local loss: ", local_loss)
+            if self.dump_local_loss:
+                self.dump(self.local_loss_filename, local_loss)
+            else:
+                print("local loss: ", local_loss)
 
         numerator = self.sum2(self.mul2(loss_reduce, input_mask))
         denominator = self.add2(
             self.sum2(input_mask),
             P.Cast()(F.tuple_to_array((1e-8,)), mstype.float32))
-
-        if not self.calculate_per_token_loss:
+        if not self.calculate_per_token_loss and not self.seq_pipe:
             return self.div2(numerator, denominator)
         return numerator, denominator
-
-
-@MindFormerRegister.register(MindFormerModuleType.LOSS)
-class CompareLoss(nn.Cell):
-    """
-    Calculate the compare loss for reward model.
-
-    Args:
-        config (OpParallelConfig): The parallel configure. Default `default_dpmp_config`,
-            an instance of `OpParallelConfig` with default args.
-
-    Inputs:
-        - **rewards** (Tensor) - Tensor of shape (B, S, 1). Data type must be float16 or float32. The output logits of
-          the backbone.
-
-        - **loss_mask** (Tensor) - Tensor of shape (B, S, 1). The loss mask of the rewards.
-
-        - **end_ind** (Tensor) - Tensor of shape (B, ). end index of all tensors.
-
-    Returns:
-        The corresponding loss.
-    """
-    def __init__(self, config):
-        super(CompareLoss, self).__init__()
-        dp = config.data_parallel
-        mp = 1
-        self.gatherd = P.GatherD()
-        self.log = P.Log()
-        self.reduce_sum = P.ReduceSum(keep_dims=False)
-        self.slice = P.StridedSlice().shard(((1, 1),))
-        self.slice_ind = P.StridedSlice().shard(((1,),))
-        self.mul = P.Mul().shard(((dp, mp), (dp, mp)))
-        self.sub = P.Sub().shard(((dp, mp), (dp, mp)))
-
-    def construct(self, rewards, loss_mask, end_ind):
-        """Forward process"""
-        bs = rewards.shape[0] // 2 # a sample has two bs responses
-        seq_len = rewards.shape[-1]
-        chosen_rewards = self.slice(rewards, (0, 0), (bs, seq_len), (1, 1))
-        rejected_rewards = self.slice(rewards, (bs, 0), (2 * bs, seq_len), (1, 1))
-        end_ind_chosen = self.slice_ind(end_ind, (0,), (bs,), (1,))
-        end_ind_reject = self.slice_ind(end_ind, (bs,), (2 * bs,), (1,))
-        temp = P.Concat()((end_ind_chosen, end_ind_reject))
-        temp = temp.reshape((2, -1))
-        temp = P.Cast()(temp, mstype.float16)
-        end_ind_final, _ = P.max(temp, axis=0)
-        temp = P.Cast()(temp, mstype.float16)
-        end_ind_final = end_ind_final.reshape((-1, 1))
-        end_ind_final = P.Cast()(end_ind_final, mstype.int32)
-        loss_mask_final = loss_mask
-        c_truncated_reward = self.mul(chosen_rewards, loss_mask_final)
-        r_truncated_reward = self.mul(rejected_rewards, loss_mask_final)
-        chosen_end_scores = self.gatherd(chosen_rewards, 1, end_ind_final - 1)
-        reject_end_scores = self.gatherd(rejected_rewards, 1, end_ind_final - 1)
-        compare_len = self.reduce_sum(P.cast(loss_mask_final, mstype.float32), -1)
-        temp_loss = -self.log(P.sigmoid(self.sub(c_truncated_reward, r_truncated_reward)))
-        loss = self.reduce_sum(self.mul(temp_loss, loss_mask_final), -1) / compare_len
-        loss = loss.mean()
-        return loss, chosen_end_scores, reject_end_scores

@@ -29,11 +29,10 @@ from collections.abc import Mapping, Sized
 from contextlib import contextmanager
 from functools import lru_cache
 from packaging import version
-from inspect import isfunction
-from functools import lru_cache
 import yaml
 import numpy as np
 import mindspore as ms
+from mindformers.tools.check_rules import check_yaml_depth_before_loading
 from ..tools.logger import logger
 from ..tools.generic import add_model_info_to_auto_map
 from ..utils.import_utils import is_tokenizers_available
@@ -42,8 +41,7 @@ from .build_tokenizer import build_tokenizer
 from ..tools.download_tools import download_with_progress_bar
 from ..tools.utils import try_sync_file
 from ..mindformer_book import MindFormerBook, print_path_or_list
-from ..tools.hub import is_offline_mode, is_remote_url, cached_file, extract_commit_hash, download_url, \
-    custom_object_save, PushToHubMixin
+from ..tools.hub import is_offline_mode, cached_file, extract_commit_hash, custom_object_save, PushToHubMixin
 
 
 TOKENIZER_URL_SUPPORT_LIST = MindFormerBook.get_tokenizer_url_support_list()
@@ -124,393 +122,6 @@ def is_experimental_mode(path):
             experimental_mode = True
 
     return experimental_mode
-
-
-def _render_with_assistant_indices(
-        compiled_template, messages, tools, documents, add_generation_prompt, **template_kwargs
-):
-    rendered_blocks = []
-    generation_indices = []
-    with compiled_template.environment.activate_tracker(rendered_blocks, generation_indices):
-        for block in compiled_template.generate(
-                messages=messages,
-                tools=tools,
-                documents=documents,
-                add_generation_prompt=add_generation_prompt,
-                **template_kwargs,
-        ):
-            rendered_blocks.append(block)
-        rendered_chat = "".join(rendered_blocks)
-    return rendered_chat, generation_indices
-
-
-import jinja2
-from jinja2.ext import Extension
-from jinja2.sandbox import ImmutableSandboxedEnvironment
-from datetime import datetime
-@lru_cache
-def _compile_jinja_template(chat_template):
-    class AssistantTracker(Extension):
-        # This extension is used to track the indices of assistant-generated tokens in the rendered chat
-        tags = {"generation"}
-
-        def __init__(self, environment: ImmutableSandboxedEnvironment):
-            # The class is only initiated by jinja.
-            super().__init__(environment)
-            environment.extend(activate_tracker=self.activate_tracker)
-            self._rendered_blocks = None
-            self._generation_indices = None
-
-        def parse(self, parser: jinja2.parser.Parser) -> jinja2.nodes.CallBlock:
-            lineno = next(parser.stream).lineno
-            body = parser.parse_statements(["name:endgeneration"], drop_needle=True)
-            return jinja2.nodes.CallBlock(self.call_method("_generation_support"), [], [], body).set_lineno(lineno)
-
-        @jinja2.pass_eval_context
-        def _generation_support(self, context: jinja2.nodes.EvalContext, caller: jinja2.runtime.Macro) -> str:
-            rv = caller()
-            if self.is_active():
-                # Only track generation indices if the tracker is active
-                start_index = len("".join(self._rendered_blocks))
-                end_index = start_index + len(rv)
-                self._generation_indices.append((start_index, end_index))
-            return rv
-
-        def is_active(self) -> bool:
-            return self._rendered_blocks or self._generation_indices
-
-        @contextmanager
-        def activate_tracker(self, rendered_blocks: List[int], generation_indices: List[int]):
-            try:
-                if self.is_active():
-                    raise ValueError("AssistantTracker should not be reused before closed")
-                self._rendered_blocks = rendered_blocks
-                self._generation_indices = generation_indices
-
-                yield
-            finally:
-                self._rendered_blocks = None
-                self._generation_indices = None
-
-    if version.parse(jinja2.__version__) < version.parse("3.1.0"):
-        raise ImportError(
-            "apply_chat_template requires jinja2>=3.1.0 to be installed. Your version is " f"{jinja2.__version__}."
-        )
-
-    def raise_exception(message):
-        raise jinja2.exceptions.TemplateError(message)
-
-    def tojson(x, ensure_ascii=False, indent=None, separators=None, sort_keys=False):
-        # We override the built-in tojson filter because Jinja's default filter escapes HTML characters
-        # We also expose some options like custom indents and separators
-        return json.dumps(x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
-
-    def strftime_now(format):
-        return datetime.now().strftime(format)
-
-    jinja_env = ImmutableSandboxedEnvironment(
-        trim_blocks=True, lstrip_blocks=True, extensions=[AssistantTracker, jinja2.ext.loopcontrols]
-    )
-    jinja_env.filters["tojson"] = tojson
-    jinja_env.globals["raise_exception"] = raise_exception
-    jinja_env.globals["strftime_now"] = strftime_now
-    return jinja_env.from_string(chat_template)
-
-
-class DocstringParsingException(Exception):
-    """Exception raised for errors in parsing docstrings to generate JSON schemas"""
-
-    pass
-
-
-BASIC_TYPES = (int, float, str, bool, Any, type(None), ...)
-# Extracts the initial segment of the docstring, containing the function description
-description_re = re.compile(r"^(.*?)[\n\s]*(Args:|Returns:|Raises:|\Z)", re.DOTALL)
-# Extracts the Args: block from the docstring
-args_re = re.compile(r"\n\s*Args:\n\s*(.*?)[\n\s]*(Returns:|Raises:|\Z)", re.DOTALL)
-# Splits the Args: block into individual arguments
-args_split_re = re.compile(
-    r"""
-(?:^|\n)  # Match the start of the args block, or a newline
-\s*(\w+):\s*  # Capture the argument name and strip spacing
-(.*?)\s*  # Capture the argument description, which can span multiple lines, and strip trailing spacing
-(?=\n\s*\w+:|\Z)  # Stop when you hit the next argument or the end of the block
-""",
-    re.DOTALL | re.VERBOSE,
-)
-# Extracts the Returns: block from the docstring, if present. Note that most chat templates ignore the return type/doc!
-returns_re = re.compile(r"\n\s*Returns:\n\s*(.*?)[\n\s]*(Raises:|\Z)", re.DOTALL)
-
-
-from typing import Callable, get_type_hints, get_origin, get_args
-def parse_google_format_docstring(docstring: str) -> Tuple[Optional[str], Optional[Dict], Optional[str]]:
-    """
-    Parses a Google-style docstring to extract the function description,
-    argument descriptions, and return description.
-
-    Args:
-        docstring (str): The docstring to parse.
-
-    Returns:
-        The function description, arguments, and return description.
-    """
-
-    # Extract the sections
-    description_match = description_re.search(docstring)
-    args_match = args_re.search(docstring)
-    returns_match = returns_re.search(docstring)
-
-    # Clean and store the sections
-    description = description_match.group(1).strip() if description_match else None
-    docstring_args = args_match.group(1).strip() if args_match else None
-    returns = returns_match.group(1).strip() if returns_match else None
-
-    # Parsing the arguments into a dictionary
-    if docstring_args is not None:
-        docstring_args = "\n".join([line for line in docstring_args.split("\n") if line.strip()])  # Remove blank lines
-        matches = args_split_re.findall(docstring_args)
-        args_dict = {match[0]: re.sub(r"\s*\n+\s*", " ", match[1].strip()) for match in matches}
-    else:
-        args_dict = {}
-
-    return description, args_dict, returns
-
-class TypeHintParsingException(Exception):
-    """Exception raised for errors in parsing type hints to generate JSON schemas"""
-
-    pass
-
-def _get_json_schema_type(param_type: str) -> Dict[str, str]:
-    type_mapping = {
-        int: {"type": "integer"},
-        float: {"type": "number"},
-        str: {"type": "string"},
-        bool: {"type": "boolean"},
-        Any: {},
-    }
-    return type_mapping.get(param_type, {"type": "object"})
-
-def _parse_type_hint(hint: str) -> Dict:
-    origin = get_origin(hint)
-    args = get_args(hint)
-
-    if origin is None:
-        try:
-            return _get_json_schema_type(hint)
-        except KeyError:
-            raise TypeHintParsingException(
-                "Couldn't parse this type hint, likely due to a custom class or object: ", hint
-            )
-
-    elif origin is Union:
-        # Recurse into each of the subtypes in the Union, except None, which is handled separately at the end
-        subtypes = [_parse_type_hint(t) for t in args if t is not type(None)]
-        if len(subtypes) == 1:
-            # A single non-null type can be expressed directly
-            return_dict = subtypes[0]
-        elif all(isinstance(subtype["type"], str) for subtype in subtypes):
-            # A union of basic types can be expressed as a list in the schema
-            return_dict = {"type": sorted([subtype["type"] for subtype in subtypes])}
-        else:
-            # A union of more complex types requires "anyOf"
-            return_dict = {"anyOf": subtypes}
-        if type(None) in args:
-            return_dict["nullable"] = True
-        return return_dict
-
-    elif origin is list:
-        if not args:
-            return {"type": "array"}
-        else:
-            # Lists can only have a single type argument, so recurse into it
-            return {"type": "array", "items": _parse_type_hint(args[0])}
-
-    elif origin is tuple:
-        if not args:
-            return {"type": "array"}
-        if len(args) == 1:
-            raise TypeHintParsingException(
-                f"The type hint {str(hint).replace('typing.', '')} is a Tuple with a single element, which "
-                "we do not automatically convert to JSON schema as it is rarely necessary. If this input can contain "
-                "more than one element, we recommend "
-                "using a List[] type instead, or if it really is a single element, remove the Tuple[] wrapper and just "
-                "pass the element directly."
-            )
-        if ... in args:
-            raise TypeHintParsingException(
-                "Conversion of '...' is not supported in Tuple type hints. "
-                "Use List[] types for variable-length"
-                " inputs instead."
-            )
-        return {"type": "array", "prefixItems": [_parse_type_hint(t) for t in args]}
-
-    elif origin is dict:
-        # The JSON equivalent to a dict is 'object', which mandates that all keys are strings
-        # However, we can specify the type of the dict values with "additionalProperties"
-        out = {"type": "object"}
-        if len(args) == 2:
-            out["additionalProperties"] = _parse_type_hint(args[1])
-        return out
-
-    raise TypeHintParsingException("Couldn't parse this type hint, likely due to a custom class or object: ", hint)
-
-import inspect
-def _convert_type_hints_to_json_schema(func: Callable) -> Dict:
-    type_hints = get_type_hints(func)
-    signature = inspect.signature(func)
-    required = []
-    for param_name, param in signature.parameters.items():
-        if param.annotation == inspect.Parameter.empty:
-            raise TypeHintParsingException(f"Argument {param.name} is missing a type hint in function {func.__name__}")
-        if param.default == inspect.Parameter.empty:
-            required.append(param_name)
-
-    properties = {}
-    for param_name, param_type in type_hints.items():
-        properties[param_name] = _parse_type_hint(param_type)
-
-    schema = {"type": "object", "properties": properties}
-    if required:
-        schema["required"] = required
-
-    return schema
-
-
-def get_json_schema(func: Callable) -> Dict:
-    """
-    This function generates a JSON schema for a given function, based on its docstring and type hints. This is
-    mostly used for passing lists of tools to a chat template. The JSON schema contains the name and description of
-    the function, as well as the names, types and descriptions for each of its arguments. `get_json_schema()` requires
-    that the function has a docstring, and that each argument has a description in the docstring, in the standard
-    Google docstring format shown below. It also requires that all the function arguments have a valid Python type hint.
-
-    Although it is not required, a `Returns` block can also be added, which will be included in the schema. This is
-    optional because most chat templates ignore the return value of the function.
-
-    Args:
-        func: The function to generate a JSON schema for.
-
-    Returns:
-        A dictionary containing the JSON schema for the function.
-
-    Examples:
-    ```python
-    >>> def multiply(x: float, y: float):
-    >>>    '''
-    >>>    A function that multiplies two numbers
-    >>>
-    >>>    Args:
-    >>>        x: The first number to multiply
-    >>>        y: The second number to multiply
-    >>>    '''
-    >>>    return x * y
-    >>>
-    >>> print(get_json_schema(multiply))
-    {
-        "name": "multiply",
-        "description": "A function that multiplies two numbers",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "number", "description": "The first number to multiply"},
-                "y": {"type": "number", "description": "The second number to multiply"}
-            },
-            "required": ["x", "y"]
-        }
-    }
-    ```
-
-    The general use for these schemas is that they are used to generate tool descriptions for chat templates that
-    support them, like so:
-
-    ```python
-    >>> from transformers import AutoTokenizer
-    >>> from transformers.utils import get_json_schema
-    >>>
-    >>> def multiply(x: float, y: float):
-    >>>    '''
-    >>>    A function that multiplies two numbers
-    >>>
-    >>>    Args:
-    >>>        x: The first number to multiply
-    >>>        y: The second number to multiply
-    >>>    return x * y
-    >>>    '''
-    >>>
-    >>> multiply_schema = get_json_schema(multiply)
-    >>> tokenizer = AutoTokenizer.from_pretrained("CohereForAI/c4ai-command-r-v01")
-    >>> messages = [{"role": "user", "content": "What is 179 x 4571?"}]
-    >>> formatted_chat = tokenizer.apply_chat_template(
-    >>>     messages,
-    >>>     tools=[multiply_schema],
-    >>>     chat_template="tool_use",
-    >>>     return_dict=True,
-    >>>     return_tensors="pt",
-    >>>     add_generation_prompt=True
-    >>> )
-    >>> # The formatted chat can now be passed to model.generate()
-    ```
-
-    Each argument description can also have an optional `(choices: ...)` block at the end, such as
-    `(choices: ["tea", "coffee"])`, which will be parsed into an `enum` field in the schema. Note that this will
-    only be parsed correctly if it is at the end of the line:
-
-    ```python
-    >>> def drink_beverage(beverage: str):
-    >>>    '''
-    >>>    A function that drinks a beverage
-    >>>
-    >>>    Args:
-    >>>        beverage: The beverage to drink (choices: ["tea", "coffee"])
-    >>>    '''
-    >>>    pass
-    >>>
-    >>> print(get_json_schema(drink_beverage))
-    ```
-    {
-        'name': 'drink_beverage',
-        'description': 'A function that drinks a beverage',
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'beverage': {
-                    'type': 'string',
-                    'enum': ['tea', 'coffee'],
-                    'description': 'The beverage to drink'
-                    }
-                },
-            'required': ['beverage']
-        }
-    }
-    """
-    doc = inspect.getdoc(func)
-    if not doc:
-        raise DocstringParsingException(
-            f"Cannot generate JSON schema for {func.__name__} because it has no docstring!"
-        )
-    doc = doc.strip()
-    main_doc, param_descriptions, return_doc = parse_google_format_docstring(doc)
-
-    json_schema = _convert_type_hints_to_json_schema(func)
-    if (return_dict := json_schema["properties"].pop("return", None)) is not None:
-        if return_doc is not None:  # We allow a missing return docstring since most templates ignore it
-            return_dict["description"] = return_doc
-    for arg, schema in json_schema["properties"].items():
-        if arg not in param_descriptions:
-            raise DocstringParsingException(
-                f"Cannot generate JSON schema for {func.__name__} because the docstring has no description for the argument '{arg}'"
-            )
-        desc = param_descriptions[arg]
-        enum_choices = re.search(r"\(choices:\s*(.*?)\)\s*$", desc, flags=re.IGNORECASE)
-        if enum_choices:
-            schema["enum"] = [c.strip() for c in json.loads(enum_choices.group(1))]
-            desc = enum_choices.string[: enum_choices.start()].strip()
-        schema["description"] = desc
-
-    output = {"name": func.__name__, "description": main_doc, "parameters": json_schema}
-    if return_dict is not None:
-        output["return"] = return_dict
-    return {"type": "function", "function": output}
 
 
 TOKENIZER_CONFIG_NAME = 'tokenizer_config.json'
@@ -2088,271 +1699,107 @@ class PreTrainedTokenizerBase(SpecialTokensMixin, PushToHubMixin):
         raise NotImplementedError()
 
     def apply_chat_template(
-        self,
-        conversation: Union[List[Dict[str, str]], List[List[Dict[str, str]]]],
-        tools: Optional[List[Dict]] = None,
-        documents: Optional[List[Dict[str, str]]] = None,
-        chat_template: Optional[str] = None,
-        add_generation_prompt: bool = False,
-        continue_final_message: bool = False,
-        tokenize: bool = True,
-        padding: bool = False,
-        truncation: bool = False,
-        max_length: Optional[int] = None,
-        return_tensors: Optional[Union[str, TensorType]] = None,
-        return_dict: bool = False,
-        return_assistant_tokens_mask: bool = False,
-        tokenizer_kwargs: Optional[Dict[str, Any]] = None,
-        **kwargs,
-    ) -> Union[str, List[int], List[str], List[List[int]], BatchEncoding]:
-        """
-        Converts a list of dictionaries with `"role"` and `"content"` keys to a list of token
-        ids. This method is intended for use with chat models, and will read the tokenizer's chat_template attribute to
-        determine the format and control tokens to use when converting.
+            self,
+            conversation: Union[List[Dict[str, str]], "Conversation"],
+            chat_template: Optional[str] = None,
+            add_generation_prompt: bool = False,
+            tokenize: bool = True,
+            padding: bool = False,
+            truncation: bool = False,
+            max_length: Optional[int] = None,
+            return_tensors: Optional[Union[str, TensorType]] = None,
+            **tokenizer_kwargs,
+    ) -> Union[str, List[int]]:
+        """Converts a Conversation object or a list of dictionaries with `"role"` and `"content"` keys to a list
+        of token ids. This method is intended for use with chat models, and will read the tokenizer's
+        chat_template attribute to determine the format and control tokens to use when converting.
+        When chat_template is None, it will fall back to the default_chat_template specified at the class level.
 
-        Args:
-            conversation (Union[List[Dict[str, str]], List[List[Dict[str, str]]]]): A list of dicts
-                with "role" and "content" keys, representing the chat history so far.
-            tools (`List[Dict]`, *optional*):
-                A list of tools (callable functions) that will be accessible to the model. If the template does not
-                support function calling, this argument will have no effect. Each tool should be passed as a JSON Schema,
-                giving the name, description and argument types for the tool. See our
-                [chat templating guide](https://huggingface.co/docs/transformers/main/en/chat_templating#automated-function-conversion-for-tool-use)
-                for more information.
-            documents (`List[Dict[str, str]]`, *optional*):
-                A list of dicts representing documents that will be accessible to the model if it is performing RAG
-                (retrieval-augmented generation). If the template does not support RAG, this argument will have no
-                effect. We recommend that each document should be a dict containing "title" and "text" keys. Please
-                see the RAG section of the [chat templating guide](https://huggingface.co/docs/transformers/main/en/chat_templating#arguments-for-RAG)
-                for examples of passing documents with chat templates.
-            chat_template (`str`, *optional*):
-                A Jinja template to use for this conversion. It is usually not necessary to pass anything to this
-                argument, as the model's template will be used by default.
-            add_generation_prompt (bool, *optional*):
-                If this is set, a prompt with the token(s) that indicate
-                the start of an assistant message will be appended to the formatted output. This is useful when you want to generate a response from the model.
-                Note that this argument will be passed to the chat template, and so it must be supported in the
-                template for this argument to have any effect.
-            continue_final_message (bool, *optional*):
-                If this is set, the chat will be formatted so that the final
-                message in the chat is open-ended, without any EOS tokens. The model will continue this message
-                rather than starting a new one. This allows you to "prefill" part of
-                the model's response for it. Cannot be used at the same time as `add_generation_prompt`.
-            tokenize (`bool`, defaults to `True`):
-                Whether to tokenize the output. If `False`, the output will be a string.
-            padding (`bool`, defaults to `False`):
-                Whether to pad sequences to the maximum length. Has no effect if tokenize is `False`.
-            truncation (`bool`, defaults to `False`):
-                Whether to truncate sequences at the maximum length. Has no effect if tokenize is `False`.
-            max_length (`int`, *optional*):
-                Maximum length (in tokens) to use for padding or truncation. Has no effect if tokenize is `False`. If
-                not specified, the tokenizer's `max_length` attribute will be used as a default.
-            return_tensors (`str` or [`~utils.TensorType`], *optional*):
-                If set, will return tensors of a particular framework. Has no effect if tokenize is `False`. Acceptable
-                values are:
-                - `'tf'`: Return TensorFlow `tf.Tensor` objects.
-                - `'pt'`: Return PyTorch `torch.Tensor` objects.
-                - `'np'`: Return NumPy `np.ndarray` objects.
-                - `'jax'`: Return JAX `jnp.ndarray` objects.
-            return_dict (`bool`, defaults to `False`):
-                Whether to return a dictionary with named outputs. Has no effect if tokenize is `False`.
-            tokenizer_kwargs (`Dict[str: Any]`, *optional*): Additional kwargs to pass to the tokenizer.
-            return_assistant_tokens_mask (`bool`, defaults to `False`):
-                Whether to return a mask of the assistant generated tokens. For tokens generated by the assistant,
-                the mask will contain 1. For user and system tokens, the mask will contain 0.
-                This functionality is only available for chat templates that support it via the `{% generation %}` keyword.
-            **kwargs: Additional kwargs to pass to the template renderer. Will be accessible by the chat template.
+            Args:
+                conversation (Union[List[Dict[str, str]], "Conversation"]): A Conversation object or list of dicts
+                    with "role" and "content" keys, representing the chat history so far.
+                chat_template (str, *optional*): A Jinja template to use for this conversion. If
+                    this is not passed, the model's default chat template will be used instead.
+                add_generation_prompt (bool, *optional*): Whether to end the prompt with the token(s) that indicate
+                    the start of an assistant message. This is useful when you want to generate a response from
+                    the model. Note that this argument will be passed to the chat template, and so it must be
+                    supported in the template for this argument to have any effect.
+                tokenize (`bool`, defaults to `True`):
+                    Whether to tokenize the output. If `False`, the output will be a string.
+                padding (`bool`, defaults to `False`):
+                    Whether to pad sequences to the maximum length. Has no effect if tokenize is `False`.
+                truncation (`bool`, defaults to `False`):
+                    Whether to truncate sequences at the maximum length. Has no effect if tokenize is `False`.
+                max_length (`int`, *optional*):
+                    Maximum length (in tokens) to use for padding or truncation. Has no effect if tokenize
+                    is `False`. If not specified, the tokenizer's `max_length` attribute will be used as a default.
+                return_tensors (`str` or [`~utils.TensorType`], *optional*):
+                    If set, will return tensors of a particular framework. Has no effect if tokenize is `False`.
+                    Acceptable values are:
+                        - `'tf'`: Return TensorFlow `tf.Tensor` objects.
+                        - `'pt'`: Return PyTorch `torch.Tensor` objects.
+                        - `'np'`: Return NumPy `np.ndarray` objects.
+                        - `'jax'`: Return JAX `jnp.ndarray` objects.
+                **tokenizer_kwargs: Additional kwargs to pass to the tokenizer.
 
-        Returns:
-            `Union[List[int], Dict]`: A list of token ids representing the tokenized chat so far, including control tokens. This
-            output is ready to pass to the model, either directly or via methods like `generate()`. If `return_dict` is
-            set, will return a dict of tokenizer outputs instead.
+            Returns:
+                `List[int]`: A list of token ids representing the tokenized chat so far, including control tokens.
+        This output is ready to pass to the model, either directly or via methods like `generate()`.
         """
 
-        if return_dict and not tokenize:
-            raise ValueError(
-                "`return_dict=True` is incompatible with `tokenize=False`, because there is no dict "
-                "of tokenizer outputs to return."
-            )
+        if hasattr(conversation, "messages"):
+            # Indicates it's a Conversation object
+            conversation = conversation.messages
 
-        if return_assistant_tokens_mask and not return_dict:
-            raise ValueError("`return_assistant_tokens_mask=True` is incompatible with `return_dict=False`")
-
-        if tokenizer_kwargs is None:
-            tokenizer_kwargs = {}
-
-        chat_template = self.get_chat_template(chat_template, tools)
-
-        if return_assistant_tokens_mask and not re.search(r"\{\%-?\s*generation\s*-?\%\}", chat_template):
-            logger.warning_once(
-                "return_assistant_tokens_mask==True but chat template does not contain `{% generation %}` keyword."
-            )
-
-        # Compilation function uses a cache to avoid recompiling the same template
-        compiled_template = _compile_jinja_template(chat_template)
-
-        if isinstance(conversation, (list, tuple)) and (
-            isinstance(conversation[0], (list, tuple)) or hasattr(conversation[0], "messages")
-        ):
-            conversations = conversation
-            is_batched = True
-        else:
-            conversations = [conversation]
-            is_batched = False
-
-        if continue_final_message:
-            if add_generation_prompt:
-                raise ValueError(
-                    "continue_final_message and add_generation_prompt are not compatible. Use continue_final_message when you want the model to continue the final message, and add_generation_prompt when you want to add a header that will prompt it to start a new assistant message instead."
-                )
-            if return_assistant_tokens_mask:
-                raise ValueError("continue_final_message is not compatible with return_assistant_tokens_mask.")
-
-        # We accept either JSON schemas or functions for tools. If we get functions, we convert them to schemas
-        if tools is not None:
-            tool_schemas = []
-            for tool in tools:
-                if isinstance(tool, dict):
-                    tool_schemas.append(tool)
-                elif isfunction(tool):
-                    tool_schemas.append(get_json_schema(tool))
-                else:
-                    raise ValueError(
-                        "Tools should either be a JSON schema, or a callable function with type hints "
-                        "and a docstring suitable for auto-conversion to a schema."
-                    )
-        else:
-            tool_schemas = None
-
-        if documents is not None:
-            for document in documents:
-                if not isinstance(document, dict):
-                    raise TypeError("Documents should be a list of dicts with 'title' and 'text' keys!")
-
-        rendered = []
-        all_generation_indices = []
-        template_kwargs = {**self.special_tokens_map, **kwargs}  # kwargs overwrite special tokens if both are present
-        for chat in conversations:
-            if hasattr(chat, "messages"):
-                # Indicates it's a Conversation object
-                chat = chat.messages
-            if return_assistant_tokens_mask:
-                rendered_chat, generation_indices = _render_with_assistant_indices(
-                    compiled_template=compiled_template,
-                    messages=chat,
-                    tools=tool_schemas,
-                    documents=documents,
-                    add_generation_prompt=add_generation_prompt,
-                    **template_kwargs,
-                )
-                all_generation_indices.append(generation_indices)
-            else:
-                rendered_chat = compiled_template.render(
-                    messages=chat,
-                    tools=tool_schemas,
-                    documents=documents,
-                    add_generation_prompt=add_generation_prompt,
-                    **template_kwargs,
-                )
-            if continue_final_message:
-                final_message = chat[-1]["content"]
-                if isinstance(final_message, (list, tuple)):
-                    final_message = final_message[-1]["text"]
-                final_message = final_message.strip()
-                rendered_chat = rendered_chat[: rendered_chat.rindex(final_message) + len(final_message)].rstrip()
-            rendered.append(rendered_chat)
-
-        if not is_batched:
-            rendered = rendered[0]
-
-        if tokenize:
-            out = self(
-                rendered,
-                padding=padding,
-                truncation=truncation,
-                max_length=max_length,
-                add_special_tokens=False,
-                return_tensors=return_tensors,
-                **tokenizer_kwargs,
-            )
-            if return_dict:
-                if return_assistant_tokens_mask:
-                    assistant_masks = []
-                    if is_batched or return_tensors:
-                        input_ids = out["input_ids"]
-                    else:
-                        input_ids = [out["input_ids"]]
-                    for i in range(len(input_ids)):
-                        current_mask = [0] * len(input_ids[i])
-                        for assistant_start_char, assistant_end_char in all_generation_indices[i]:
-                            start_token = out.char_to_token(i, assistant_start_char)
-                            end_token = out.char_to_token(i, assistant_end_char - 1)
-                            if start_token is None:
-                                # start_token is out of bounds maybe due to truncation.
-                                break
-                            for token_id in range(start_token, end_token + 1 if end_token else len(input_ids[i])):
-                                current_mask[token_id] = 1
-                        assistant_masks.append(current_mask)
-                    out["assistant_masks"] = assistant_masks if is_batched else assistant_masks[0]
-                return out
-            else:
-                return out["input_ids"]
-        else:
-            return rendered
-
-    def get_chat_template(self, chat_template: Optional[str] = None, tools: Optional[List[Dict]] = None) -> str:
-        """
-        Retrieve the chat template string used for tokenizing chat messages. This template is used
-        internally by the `apply_chat_template` method and can also be used externally to retrieve the model's chat
-        template for better generation tracking.
-
-        Args:
-            chat_template (`str`, *optional*):
-                A Jinja template or the name of a template to use for this conversion.
-                It is usually not necessary to pass anything to this argument,
-                as the model's template will be used by default.
-            tools (`List[Dict]`, *optional*):
-                A list of tools (callable functions) that will be accessible to the model. If the template does not
-                support function calling, this argument will have no effect. Each tool should be passed as a JSON Schema,
-                giving the name, description and argument types for the tool. See our
-                [chat templating guide](https://huggingface.co/docs/transformers/main/en/chat_templating#automated-function-conversion-for-tool-use)
-                for more information.
-
-        Returns:
-            `str`: The chat template string.
-        """
-        # First, handle the cases when the model has a dict of multiple templates
-        if isinstance(self.chat_template, dict):
-            template_dict = self.chat_template
-            if chat_template is not None and chat_template in template_dict:
-                # The user can pass the name of a template to the chat template argument instead of an entire template
-                chat_template = template_dict[chat_template]
-            elif chat_template is None:
-                if tools is not None and "tool_use" in template_dict:
-                    chat_template = template_dict["tool_use"]
-                elif "default" in template_dict:
-                    chat_template = template_dict["default"]
-                else:
-                    raise ValueError(
-                        "This model has multiple chat templates with no default specified! Please either pass a chat "
-                        "template or the name of the template you wish to use to the `chat_template` argument. Available "
-                        f"template names are {sorted(template_dict.keys())}."
-                    )
-
-        elif chat_template is None:
-            # These are the cases when the model has a single template
-            # priority: `chat_template` argument > `tokenizer.chat_template`
+        # priority: `chat_template` argument > `tokenizer.chat_template` > `tokenizer.default_chat_template`
+        if chat_template is None:
             if self.chat_template is not None:
                 chat_template = self.chat_template
             else:
-                raise ValueError(
-                    "Cannot use chat template functions because tokenizer.chat_template is not set and no template "
-                    "argument was passed! For information about writing templates and setting the "
-                    "tokenizer.chat_template attribute, please see the documentation at "
-                    "https://huggingface.co/docs/transformers/main/en/chat_templating"
-                )
+                chat_template = self.default_chat_template
 
-        return chat_template
+        # Compilation function uses a cache to avoid recompiling the same template
+        compiled_template = self._compile_jinja_template(chat_template)
+
+        rendered = compiled_template.render(
+            messages=conversation, add_generation_prompt=add_generation_prompt, **self.special_tokens_map
+        )
+
+        if padding is True:
+            padding = "max_length"  # There's only one sequence here, so "longest" makes no sense
+        if tokenize:
+            return self.encode(
+                rendered,
+                add_special_tokens=False,
+                padding=padding,
+                truncation=truncation,
+                max_length=max_length,
+                return_tensors=return_tensors,
+                **tokenizer_kwargs,
+            )
+        return rendered
+
+    @lru_cache(128)
+    def _compile_jinja_template(self, chat_template):
+        """_compile_jinja_template"""
+        try:
+            import jinja2
+            from jinja2.exceptions import TemplateError
+            from jinja2.sandbox import ImmutableSandboxedEnvironment
+        except ImportError as e:
+            raise ImportError("apply_chat_template requires jinja2 to be installed.") from e
+
+        if version.parse(jinja2.__version__) <= version.parse("3.0.0"):
+            raise ImportError(
+                "apply_chat_template requires jinja2>=3.0.0 to be installed. Your version is " f"{jinja2.__version__}."
+            )
+
+        def raise_exception(message):
+            raise TemplateError(message)
+
+        jinja_env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
+        jinja_env.globals["raise_exception"] = raise_exception
+        return jinja_env.from_string(chat_template)
 
     @property
     def default_chat_template(self):
@@ -2427,7 +1874,7 @@ class PreTrainedTokenizerBase(SpecialTokensMixin, PushToHubMixin):
                 yaml_list = [file for file in os.listdir(name_or_path) if file.endswith(".yaml")]
                 if len(yaml_list) > 1:
                     logger.warning("There should be only one yaml file under the directory %s, "
-                                   "but followings are found: %s", name_or_path, yaml_list)
+                                   "but following are found: %s", name_or_path, yaml_list)
             if yaml_list:
                 yaml_file = os.path.join(name_or_path, yaml_list[0])
                 logger.info("config in the yaml file %s are used for tokenizer building.", yaml_file)
@@ -2566,7 +2013,7 @@ class PreTrainedTokenizerBase(SpecialTokensMixin, PushToHubMixin):
             if os.path.isfile(path):
                 file = None
                 try:
-                    file = open(path, 'r')
+                    file = open(path, 'r', encoding="utf-8")
                     read_tokenizer_file_dict[item] = json.load(file)
                 except FileNotFoundError as file_not_found_error:
                     logger.error(file_not_found_error)
@@ -2691,7 +2138,7 @@ class PreTrainedTokenizerBase(SpecialTokensMixin, PushToHubMixin):
 
         is_local = os.path.isdir(pretrained_model_name_or_path)
         single_file_id = None
-        if os.path.isfile(pretrained_model_name_or_path) or is_remote_url(pretrained_model_name_or_path):
+        if os.path.isfile(pretrained_model_name_or_path):
             if len(cls.vocab_files_names) > 1:
                 raise ValueError(
                     f"Calling {cls.__name__}.from_pretrained() with the path to a single file or url is not "
@@ -2752,8 +2199,6 @@ class PreTrainedTokenizerBase(SpecialTokensMixin, PushToHubMixin):
             elif single_file_id == file_id:
                 if os.path.isfile(file_path):
                     resolved_vocab_files[file_id] = file_path
-                elif is_remote_url(file_path):
-                    resolved_vocab_files[file_id] = download_url(file_path, proxies=proxies)
             else:
                 resolved_vocab_files[file_id] = cached_file(
                     pretrained_model_name_or_path,
@@ -3129,6 +2574,8 @@ class PreTrainedTokenizerBase(SpecialTokensMixin, PushToHubMixin):
             yaml_file = os.path.join(save_directory, save_name + '.yaml')
             if os.path.exists(yaml_file):
                 with open(yaml_file, 'r') as file_reader:
+                    check_yaml_depth_before_loading(file_reader)
+                    file_reader.seek(0)
                     merged_dict = yaml.safe_load(file_reader.read())
                     if merged_dict is None:
                         merged_dict = dict()
@@ -4893,4 +4340,3 @@ def get_fast_tokenizer_file(tokenization_files: List[str]) -> str:
             break
 
     return tokenizer_file
-

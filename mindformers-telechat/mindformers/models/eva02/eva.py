@@ -25,6 +25,8 @@ from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 from mindformers.models.modeling_utils import PreTrainedModel
 from mindformers.models.llama.llama_layer import LlamaRMSNorm
 from mindformers.modules.layers import LayerNorm
+from mindformers.models.utils import LayerSetting
+from mindformers.tools.logger import logger
 
 from .eva_config import EVA02Config
 from .eva_module import PatchEmbed, RotaryEmbeddingCat, EvaBlock
@@ -67,6 +69,11 @@ class EVAModel(EVA02PreTrainedModel):
                                       out_features=config.hidden_size,
                                       compute_dtype=config.compute_dtype)
         num_patches = self.patch_embed.num_patches
+        if config.stage_num != 0:
+            self.patch_embed.pipeline_stage = config.start_stage
+        else:
+            self.patch_embed.pipeline_stage = 0
+        logger.info(f"patch_embed pipeline_stage: {self.patch_embed.pipeline_stage}")
 
         self.cls_token = None
         if config.class_token:
@@ -74,6 +81,11 @@ class EVAModel(EVA02PreTrainedModel):
                 Tensor(np.zeros(shape=(1, 1, config.hidden_size)), config.param_init_type),
                 requires_grad=True, name='cls_token'
             )
+            if config.stage_num != 0:
+                self.cls_token.pipeline_stage = config.start_stage
+            else:
+                self.cls_token.pipeline_stage = 0
+            logger.info(f"cls_token pipeline_stage: {self.cls_token.pipeline_stage}")
 
         self.pos_embed = None
         if config.use_abs_pos_emb:
@@ -82,6 +94,11 @@ class EVAModel(EVA02PreTrainedModel):
                 Tensor(np.zeros(shape=pos_shape), config.param_init_type),
                 requires_grad=True, name='pos_embed'
             )
+            if config.stage_num != 0:
+                self.pos_embed.pipeline_stage = config.start_stage
+                logger.info(f"pos_embed pipeline_stage: {self.pos_embed.pipeline_stage}")
+            else:
+                self.pos_embed.pipeline_stage = 0
 
         self.rope = None
         if config.use_rot_pos_emb:
@@ -120,10 +137,25 @@ class EVAModel(EVA02PreTrainedModel):
                      param_init_type=config.param_init_type)
             for i in range(config.num_hidden_layers)])
 
+
+        if config.stage_num != 0:
+            self.layer_setting = LayerSetting(config.num_hidden_layers,
+                                              config.offset,
+                                              config.parallel_config,
+                                              1,
+                                              config.start_stage,
+                                              config.stage_num)
+            for layer_id, block in zip(range(config.num_hidden_layers), self.blocks):
+                self.layer_setting(block, layer_id)
+
         if self.post_norm:
             self.norm = nn.Identity()
         else:
             self.norm = LlamaRMSNorm((config.hidden_size,))
+        if config.stage_num > 0:
+            self.norm.pipeline_stage = config.start_stage + config.stage_num - 1
+        else:
+            self.norm.pipeline_stage = 0
 
         self.tile = P.Tile()
         self.cat = P.Concat(axis=1)

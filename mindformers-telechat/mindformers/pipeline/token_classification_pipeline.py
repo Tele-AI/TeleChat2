@@ -18,7 +18,9 @@
 """TokenClassificationPipeline"""
 
 import numpy as np
+
 from mindspore import ops
+from mindformers.utils import deprecated
 from ..mindformer_book import MindFormerBook
 from .base_pipeline import Pipeline
 from ..tools.register import MindFormerRegister, MindFormerModuleType
@@ -26,6 +28,7 @@ from ..tools.register import MindFormerRegister, MindFormerModuleType
 __all__ = ['TokenClassificationPipeline']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="token_classification")
 class TokenClassificationPipeline(Pipeline):
     """Pipeline for token classification

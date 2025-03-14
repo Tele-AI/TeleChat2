@@ -18,6 +18,7 @@ import zipfile
 import subprocess
 import tempfile
 from enum import Enum
+from typing import Optional
 from glob import glob
 from pathlib import Path
 import argparse
@@ -41,6 +42,14 @@ def convert_path(src_path, save_path):
     file_path = os.path.join(save_path, file_name)
     return src_path, file_path
 
+
+class EncodingFormat(Enum):
+    """
+    Encoding Format Enumeration Class
+    """
+    UTF_8 = "utf-8"
+
+
 DATASET_TYPES = ['wiki', 'alpaca']
 
 
@@ -57,8 +66,7 @@ class SupportedDatasets(Enum):
     WIKITEXT2 = (
         "Wikitext2",
         (
-            "https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com/"
-            "MindFormers/dataset/wikitext-2/wikitext-2-v1.zip"
+            "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
         ),
         DatasetType.ZIP
     )
@@ -80,15 +88,6 @@ class SupportedDatasets(Enum):
         ),
         DatasetType.JSON
     )
-
-    ADGEN = (
-        "ADGEN",
-        (
-            "https://cloud.tsinghua.edu.cn/f/b3f119a008264b1cabd1/?dl=1"
-        ),
-        DatasetType.ZIP
-    )
-
 
     def __init__(self, dataset_name, url, dtype):
         self.dataset_name = dataset_name
@@ -238,7 +237,7 @@ class ModelPretrain(BaseInitModel):
                     project_root,
                     'research',
                     'llama3',
-                    'llama_preprocess.py'
+                    'llama3_preprocess.py'
                 )
                 output_file = os.path.join(temp_dir, dataset_name)
             else:
@@ -296,7 +295,7 @@ class ModelPretrain(BaseInitModel):
                     project_root,
                     'research',
                     'llama3',
-                    'llama_preprocess.py'
+                    'llama3_preprocess.py'
                 )
                 output_file = os.path.join(temp_dir, dataset_name)
             else:
@@ -332,17 +331,46 @@ class ModelPretrain(BaseInitModel):
 
         raise ValueError(f"Invalid dataset type: {dataset_type}. Must be one of {DATASET_TYPES}.")
 
-    def download_file(self, url, save_path):
-        """download_file"""
-        flags_ = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    def download_file(self, url: str, save_path: str, encoding: Optional[EncodingFormat] = None) -> str:
+        """
+        Downloads a file from the specified URL and saves it to the given path.
+        If an encoding is specified, the file is saved using that encoding.
+        Otherwise, the file is saved in binary mode.
+
+        Args:
+            url (str): The URL of the file to download.
+            save_path (str): The local path where the file will be saved.
+            encoding (Optional[EncodingFormat]): The encoding format to use when saving the file. Defaults to None.
+
+        Returns:
+            str: The path where the file was saved.
+
+        Raises:
+            Exception: If the file download fails.
+        """
         try:
-            with requests.get(url, stream=True, verify=False) as r:
-                r.raise_for_status()
-                with os.fdopen(os.open(save_path, flags_, 0o750), 'wb', encoding='utf-8') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
+            with requests.get(url, stream=True, verify=False) as response:
+                response.raise_for_status()
+
+                if encoding is None:
+                    # Binary mode: Write bytes to the file
+                    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                    with os.fdopen(os.open(save_path, flags, 0o750), 'wb') as file:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:  # Filter out keep-alive chunks
+                                file.write(chunk)
+                else:
+                    # Text mode: Decode content using the specified encoding and write as text
+                    text_content = response.content.decode(encoding.value)
+                    with open(save_path, 'w', encoding=encoding.value) as file:
+                        file.write(text_content)
+
         except requests.exceptions.RequestException as e:
-            raise Exception(f"Failed to download the file，URL:{url}: {e}") from e
+            raise Exception(f"Failed to download the file. URL: {url}. Error: {e}") from e
+        except UnicodeDecodeError as e:
+            raise Exception(f"Failed to decode the file using encoding {encoding.name}. Error: {e}") from e
+        except OSError as e:
+            raise Exception(f"Failed to write the file to {save_path}. Error: {e}") from e
 
         return save_path
 

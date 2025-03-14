@@ -1,7 +1,7 @@
 mindformers.wrapper.MFPipelineWithLossScaleCell
 ===============================================
 
-.. py:class:: mindformers.wrapper.MFPipelineWithLossScaleCell(network, optimizer, use_clip_grad=True, max_grad_norm=1.0, scale_sense=1.0, micro_batch_num=1, local_norm=False, **kwargs)
+.. py:class:: mindformers.wrapper.MFPipelineWithLossScaleCell(network, optimizer, use_clip_grad=True, max_grad_norm=1.0, scale_sense=1.0, micro_batch_num=1, local_norm=False, calculate_per_token_loss=False, **kwargs)
 
     为MindFormers的单步训练单元扩充流水线并行的损失缩放功能。
 
@@ -13,10 +13,11 @@ mindformers.wrapper.MFPipelineWithLossScaleCell
         - **scale_sense** (Union[Tensor, Cell], 可选) - 用于损失缩放的 Cell 实例或 Tensor。默认值： ``1.0`` 。
         - **micro_batch_num** (int, 可选) - 流水线并行的微批次数。默认值： ``1`` 。
         - **local_norm** (bool, 可选) - 是否计算局部范数。默认值： ``False`` 。
-        - **kwargs** (Any) - 其他参数。
+        - **calculate_per_token_loss** (bool, 可选) - 是否计算每个token的损失。默认值： ``False`` 。
+        - **\*\*kwargs** (Any) - 其他参数。
 
     输入：
-        - **(\*inputs)** (Tuple(Tensor)) - 形状为 :math:`(N, \ldots)` 的输入张量元组。
+        - **\*inputs** (Tuple(Tensor)) - 形状为 :math:`(N, \ldots)` 的输入张量元组。
 
     输出：
         5个或7个张量的元组，包括损失值、溢出标志，当前的损失缩放值，优化器学习率，全局梯度norm，局部梯度norm和对应分组size：

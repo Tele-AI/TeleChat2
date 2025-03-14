@@ -23,7 +23,7 @@ runner_config:
 optimizer:
   type: AdamW
   betas: [0.9, 0.95]
-  eps: 1.e-5
+  eps: 1.e-8
   weight_decay: 0.1
 
 # lr sechdule
@@ -119,7 +119,6 @@ callbacks:
 context:
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "58GB"
   save_graphs: False
@@ -130,6 +129,7 @@ context:
 model:
   model_config:
     type: TelechatConfig
+    auto_register: telechat_config.TelechatConfig
     batch_size: 1 # add for increase predict
     seq_length: 8192
     hidden_size: 8192
@@ -159,7 +159,8 @@ model:
     block_size: 16
     num_blocks: 512
     is_dynamic: True
-    wo_has_bias: True 
+    out_proj_has_bias: True
+    qkv_concat: False
     use_past_shard: False
     repetition_penalty: 1
     max_decode_length: 512
@@ -172,6 +173,7 @@ model:
       AutoTokenizer: [telechat_tokenizer.TelechatTokenizer, null]
   arch:
     type: TelechatForCausalLM
+    auto_register: telechat.TelechatForCausalLM
 
 processor:
   return_tensors: ms
@@ -182,6 +184,8 @@ processor:
     eos_token: '<_end>'
     pad_token: '<_pad>'
     type: TelechatTokenizer
+    auto_register: telechat_tokenizer.TelechatTokenizer
+
 
 # metric
 metric:

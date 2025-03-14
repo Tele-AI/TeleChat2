@@ -20,6 +20,7 @@ import mindspore
 from mindspore import Tensor, Model
 
 from mindformers.mindformer_book import MindFormerBook
+from mindformers.utils import deprecated
 from .base_pipeline import Pipeline
 from ..tools.register import MindFormerRegister, MindFormerModuleType
 from ..models import PreTrainedModel, PreTrainedTokenizer
@@ -27,6 +28,7 @@ from ..models import PreTrainedModel, PreTrainedTokenizer
 __all__ = ['TranslationPipeline']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="translation")
 class TranslationPipeline(Pipeline):
     """Pipeline for Translation

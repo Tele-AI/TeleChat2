@@ -46,7 +46,7 @@ def convert_pt_to_ms(input_path, output_path, dtype=None, **kwargs):
     print(f"Trying to convert huggingface checkpoint in '{input_path}'.", flush=True)
     try:
         from transformers import AutoModelForCausalLM
-        model_hf = AutoModelForCausalLM.from_pretrained(input_path, trust_remote_code=True)
+        model_hf = AutoModelForCausalLM.from_pretrained(input_path)
         args_hf = read_json(os.path.join(input_path, "config.json"))
     # pylint: disable=W0703
     except Exception as e:

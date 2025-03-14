@@ -25,7 +25,7 @@ import numpy as np
 
 from mindspore.mindrecord import FileWriter
 
-from qwen2_tokenizer import Qwen2Tokenizer
+from research.qwen2.qwen2_tokenizer import Qwen2Tokenizer
 
 IGNORE_TOKEN_ID = -100
 

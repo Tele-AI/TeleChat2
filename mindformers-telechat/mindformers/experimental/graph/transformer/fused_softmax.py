@@ -19,6 +19,8 @@ Fused softmax for transformer.
 from typing import Callable
 from mindspore import nn, dtype, Tensor
 from mindspore.ops import operations as P
+from mindspore.context import ParallelMode
+from mindspore.parallel._utils import _get_parallel_mode, _is_sharding_propagation
 from mindformers.experimental.graph.transformer.transformer_config import TransformerConfig
 from mindformers.experimental.graph.transformer.enums import AttnMaskType
 
@@ -77,7 +79,10 @@ class FusedScaleMaskSoftmax(nn.Cell):
         if self.scale is not None and not self.softmax_in_fp32:
             raise ValueError("softmax should be in fp32 when scaled")
 
-        self.shard(config)
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.sharding_propagation(config)
+        else:
+            self.shard(config)
 
     def construct(self, input_: Tensor, mask: Tensor = None) -> Tensor:
         """Forward pass of softmax with masked input.
@@ -119,3 +124,6 @@ class FusedScaleMaskSoftmax(nn.Cell):
         cp = config.context_parallel if config and config.context_parallel is not None else 1
         tp = config.tensor_parallel if config and config.tensor_parallel is not None else 1
         self.softmax.shard(((dp, tp, cp, 1),))
+
+    def sharding_propagation(self, config: TransformerConfig):
+        pass

@@ -1,0 +1,157 @@
+seed: 0
+run_mode: 'train'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+resume_training: False
+
+# ==== context config ====
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  max_device_memory: "57GB" # 59GB for Atlas 800T A2
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  jit_config:
+    jit_level: "O1"
+  memory_optimize_level: "O1"
+
+# ==== model config ====
+model:
+  model_config:
+    type: YiZhaoConfig
+    batch_size: 1   # only for incremental infer
+    num_layers: 54
+    padded_vocab_size: 151552
+    hidden_size: 4096
+    ffn_hidden_size: 13696
+    kv_channels: 128
+    num_attention_heads: 32
+    seq_length: 4096
+    hidden_dropout: 0.0
+    attention_dropout: 0.05
+    layernorm_epsilon: 1.e-5
+    rmsnorm: True
+    apply_residual_connection_post_layernorm: False
+    post_layer_norm: True
+    add_bias_linear: False
+    add_qkv_bias: True
+    bias_dropout_fusion: True
+    multi_query_attention: True
+    multi_query_group_num: 2
+    apply_query_key_layer_scaling: True
+    attention_softmax_in_fp32: True
+    fp32_residual_connection: False
+    quantization_bit: 0
+    pre_seq_len: None
+    prefix_projection: False
+    param_init_type: "float32"
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    rotary_dtype: "float32"
+    use_past: False
+    use_flash_attention: True # when use FlashAttention, seq_length should be multiple of 16
+    use_prompt_flash_attention: False
+    use_incre_flash_attention: False
+    eos_token_id: 151329
+    pad_token_id: 151329
+    repetition_penalty: 1.0
+    max_decode_length: 256
+    checkpoint_name_or_path: ""
+    offset: [-1,2,2,-1]
+    top_k: 1
+    top_p: 1
+    do_sample: True
+    # refactor param
+    qkv_concat: False
+    mlp_concat: False
+    use_llama_rope: True
+    alpha: 1.0  # coef for dpo loss
+    beta: 1.0   # coef for sft loss
+    auto_register: yizhao_config.YiZhaoConfig
+  arch:
+    type: YiZhaoDPO
+    auto_register: yizhao.YiZhaoDPO
+
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'yizhao_12b'
+
+# ==== dataset config ====
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: False #True
+  input_columns: ["chosen_input_ids","chosen_labels","chosen_attention_mask", "chosen_loss_mask","chosen_ref_logps","rejected_input_ids", "rejected_labels", "rejected_attention_mask", "rejected_loss_mask", "rejected_ref_logps"]
+  output_columns: ["input_ids", "labels", "attention_mask", "loss_mask","ref_chosen_logps", "ref_rejected_logps"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+  seed: 0
+  micro_batch: 4
+
+train_dataset_task:
+  type: YiZhaoDPODataset
+  dataset_config: *train_dataset
+  auto_register: yizhao_dataset.YiZhaoDPODataset
+
+# ==== runner config ====
+runner_config:
+  epochs: 1 # train 10B tokens
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense: 1
+  use_clip_grad: True
+  local_norm: True
+
+lr_schedule:
+  type: MegatronLR
+  learning_rate: 1.e-5
+  lr_end: 1.e-6
+  warmup_ratio: 0.02
+  decay_ratio: 0.9
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+  auto_register: yizhao_scheduler.MegatronLR
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9,0.95]
+  eps: 1.e-8
+  weight_decay: 0.1
+
+# parallel config
+use_parallel: True
+parallel:
+  loss_repeated_mean: True
+  full_batch: True
+  enable_parallel_optimizer: True  # optimizer shard
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False #True
+    parallel_optimizer_threshold: 64
+parallel_config:
+  data_parallel: 2
+  model_parallel: 1
+  pipeline_stage: 4
+  micro_batch_num: 4
+  vocab_emb_dp: False
+  use_seq_parallel: True
+micro_batch_interleave_num: 1
+
+# recompute
+recompute_config:
+  recompute: True
+  select_recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: False
+

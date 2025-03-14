@@ -1,0 +1,94 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+use_parallel: True
+run_mode: 'predict'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'internlm2_20b'
+
+# default parallel of device num = 2 for Atlas 800T A2
+parallel_config:
+  model_parallel: 2
+  pipeline_stage: 1
+
+# recompute config
+recompute_config:
+  recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: False
+  recompute_slice_activation: False
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_id: 0
+  max_device_memory: "59GB"
+
+# parallel context config
+parallel:
+  full_batch: True
+  enable_parallel_optimizer: True
+
+
+# model config
+model:
+  model_config:
+    type: InternLM2Config
+    auto_register: internlm2_model.InternLM2Config
+    batch_size: 1 # add for increase predict
+    seq_length: 4096
+    hidden_size: 6144
+    num_layers: 48
+    num_heads: 48
+    n_kv_heads: 8
+    vocab_size: 92544
+    rms_norm_eps: 1.0e-5
+    intermediate_size: 16384
+    theta: 1000000
+    bos_token_id: 1
+    eos_token_id: [2, 92542]
+    pad_token_id: 2
+    ignore_token_id: -100
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float32"
+    param_init_type: "bfloat16"
+    qkv_concat: True
+    use_past: True
+    use_flash_attention: True
+    block_size: 16
+    num_blocks: 512
+    is_dynamic: False
+    scaling_factor: 1.0
+    extend_method: "None"
+    offset: 0
+    checkpoint_name_or_path: "internlm2_20b"
+    repetition_penalty: 1.00
+    max_decode_length: 512
+    top_k: 3
+    top_p: 0.8
+    do_sample: False
+    auto_map:
+      AutoModel: internlm2.InternLM2ForCausalLM
+      AutoConfig: internlm2_config.InternLM2Config
+      AutoTokenizer: [internlm2_tokenizer.InternLM2Tokenizer, null]
+  arch:
+    type: InternLM2ForCausalLM
+    auto_register: internlm2_model.InternLM2ForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    unk_token: '<unk>'
+    bos_token: '<s>'
+    eos_token: '</s>'
+    pad_token: '</s>'
+    type: InternLM2Tokenizer
+    auto_register: internlm2_tokenizer.InternLM2Tokenizer
+    vocab_file: './internlm2-20b-chat/tokenizer.model'
+  type: LlamaProcessor

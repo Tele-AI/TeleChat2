@@ -34,22 +34,30 @@ TeleChat2-7b:
 
 | config                                              | task                  | Datasets   | SeqLength | phase           | performance  |
 |-----------------------------------------------------| --------------------- |------------|-----------|-----------------|--------------|
-| [TeleChat2_7b](./run_telechat_115b_finetune.yaml) | text_generation       | example_dataset | 8192      | [finetune](#微调) | 2950 tokens/s/p |
-| [TeleChat2_7b](./run_telechat_115b_predict.yaml)  | text_generation       | example_dataset     | 8192      | [predict](#推理)  | 54.1 tokens/s   |
+| [TeleChat2_7b](./finetune_telechat_7b.yaml) | text_generation       | example_dataset | 8192      | [finetune](#微调) | 2950 tokens/s/p |
+| [TeleChat2_7b](./predict_telechat_7b.yaml)  | text_generation       | example_dataset     | 8192      | [predict](#推理)  | 54.1 tokens/s   |
+
+
+TeleChat2-39b-a12:
+
+| config                                              | task                  | Datasets   | SeqLength | phase           | performance  |
+|-----------------------------------------------------| --------------------- |------------|-----------|-----------------|--------------|
+| [TeleChat2_39b-a12](./finetune_telechat_39b_a12b.yaml) | text_generation       | example_dataset | 8192      | [finetune](#微调) | 2950 tokens/s/p |
+| [TeleChat2_39b-a12](./predict_telechat_39b_a12b.yaml)  | text_generation       | example_dataset     | 8192      | [predict](#推理)  | 54.1 tokens/s   |
 
 TeleChat2-35b:
 
 | config                                              | task                  | Datasets   | SeqLength | phase           | performance  |
 |-----------------------------------------------------| --------------------- |------------|-----------|-----------------|--------------|
-| [TeleChat2_35b](./run_telechat_115b_finetune.yaml) | text_generation       | example_dataset | 8192      | [finetune](#微调) | 516 tokens/s/p |
-| [TeleChat2_35b](./run_telechat_115b_predict.yaml)  | text_generation       | example_dataset     | 8192      | [predict](#推理)  | 27.7 tokens/s   |
+| [TeleChat2_35b](./finetune_telechat_35b.yaml) | text_generation       | example_dataset | 8192      | [finetune](#微调) | 516 tokens/s/p |
+| [TeleChat2_35b](./predict_telechat_35b.yaml)  | text_generation       | example_dataset     | 8192      | [predict](#推理)  | 27.7 tokens/s   |
 
 TeleChat2-115b:
 
 | config                                              | task                  | Datasets   | SeqLength | phase           | performance  |
 |-----------------------------------------------------| --------------------- |------------|-----------|-----------------|--------------|
 | [TeleChat2_115b](./run_telechat_115b_finetune.yaml) | text_generation       | example_dataset | 8192      | [finetune](#微调) | 158 tokens/s/p |
-| [TeleChat2_115b](./run_telechat_115b_predict.yaml)  | text_generation       | example_dataset     | 8192      | [predict](#推理)  | 26.5 tokens/s   |
+| [TeleChat2_115b](./predict_telechat_115b.yaml)  | text_generation       | example_dataset     | 8192      | [predict](#推理)  | 26.5 tokens/s   |
 
 ## 模型文件
 
@@ -77,10 +85,15 @@ TeleChat2-115b:
    telechat
        ├── finetune_telechat_7b.yaml             # 7b全量微调启动配置
        ├── predict_telechat_7b.yaml              # 7b推理启动配置
+       ├── lora_telechat_7b.yaml                 # 7b lora微调配置
+       ├── finetune_telechat_39b_a12b.yaml       # 39b-a12b训练配置
+       ├── predict_telechat_39b_a12b.yaml        # 39b-a12b推理配置
        ├── finetune_telechat_35b.yaml            # 35b全量微调启动配置
        ├── predict_telechat_35b.yaml             # 35b推理启动配置
+       ├── lora_telechat_35b.yaml                # 35b lora微调配置
        ├── finetune_telechat_115b.yaml           # 115b全量微调启动配置
-       └── predict_telechat_115b.yaml            # 115b推理启动配置
+       ├── predict_telechat_115b.yaml            # 115b推理启动配置
+       └── lora_telechat_115b.yaml               # 115b lora启动配置
    ```
 
 3. 任务启动脚本：`mindformers/research/telechat2`
@@ -97,13 +110,12 @@ TeleChat2-115b:
 
 **MindFormers安装**以及**软硬件配套关系**参考[MindFormers安装](../../README.md#二MindFormers安装)和[版本匹配关系](../../README.md#三版本匹配关系)。
 
-> 注：Atlas 800T A2芯片支持telechat_115B单机多卡推理，至少使用8卡，全参微调至少需要8机64卡。
 
 ### 数据及权重准备
 
 #### 数据集下载
 
-TeleChat2全系列模型中7B，35B，115B所使用的微调数据集是由中电信人工智能科技有限公司所提供。
+TeleChat2全系列模型中7B，39B-A12, 35B，115B所使用的微调数据集是由中电信人工智能科技有限公司所提供。
 
 step 1. 获取数据集
 
@@ -145,6 +157,7 @@ MindFormers提供已经转换完成的预训练权重、词表文件用于预训
 1.torch模型权重及词模型下载链接：
 
 - [TeleChat2-7b](https://modelscope.cn/models/TeleAI/TeleChat2-7B)
+- [TeleChat2-39B-A12B](https://modelscope.cn/models/TeleAI/TeleChat2-39B-A12B)
 - [TeleChat2-35b](https://modelscope.cn/models/TeleAI/TeleChat2-35B)
 - [TeleChat2-115b](https://modelscope.cn/models/TeleAI/TeleChat2-115B)
 
@@ -164,9 +177,10 @@ mindspore_path: 权重保存文件名，可以指定自定义保存路径
 
 2.获取MindFormers提供的已转换权重，可直接从下面的链接获取。
 
-- [telechat-7B-ms](https://telechat-docker.obs.cn-north-4.myhuaweicloud.com/model_weight/Telechat_7B/TeleChat2-7B_ms.ckpt)
-- [telechat-35B-ms](https://telechat-docker.obs.cn-north-4.myhuaweicloud.com/model_weight/Telechat_35B/TeleChat2-35B_ms.tar)
-- [telechat-115B-ms](https://telechat-docker.obs.cn-north-4.myhuaweicloud.com/model_weight/Telechat_115B/Telechat_115B.zip)
+- [TeleChat2-7b](https://telechat-docker.obs.cn-north-4.myhuaweicloud.com/model_weight/Telechat_7B/Telechat_7B.zip)
+- [TeleChat2-39b-a12](https://telechat-docker.obs.cn-north-4.myhuaweicloud.com/model_weight/Telechat_7B/Telechat_39B_A12.zip)
+- [TeleChat2-35b](https://telechat-docker.obs.cn-north-4.myhuaweicloud.com/model_weight/Telechat_35B/Telechat_35B.zip)
+- [TeleChat2-115b](https://telechat-docker.obs.cn-north-4.myhuaweicloud.com/model_weight/Telechat_115B/Telechat_115B.zip)
 
 ### [分布式训练/微调权重合并](../../docs/feature_cards/Transform_Ckpt.md)
 
@@ -185,7 +199,7 @@ python transform_ckpt.py \
 --src_ckpt_strategy {path}/output/strategy/ \
 --src_ckpt_dir {path}/output/checkpoint/ \
 --dst_ckpt_dir {path}/target_checkpoint/ \
---prefix telechat_115B
+--prefix telechat_{size}
 ```
 
 ```text
@@ -237,7 +251,6 @@ export ENABLE_CELL_REUSE=1  #编译加速
 export MS_DEV_SIDE_EFFECT_LOAD_ELIM=3  # 去除TensorMove
 export MS_MEMORY_POOL_RECYCLE=1  # 内存优化
 export GE_NOT_CUT=1   # 内存优化
-export MS_INTERNAL_DISABLE_CUSTOM_KERNEL_LIST=InferenceMatmulSplit,PagedAttention
 ```
 
 - step 4. 执行运行脚本。
@@ -248,17 +261,19 @@ export MS_INTERNAL_DISABLE_CUSTOM_KERNEL_LIST=InferenceMatmulSplit,PagedAttentio
 cd mindformers/
 
 # 节点0，节点ip为192.168.1.1，作为主节点，总共16卡且每个节点8卡
-bash scripts/msrun_launcher.sh "python research/telechat2/run_telechat.py \
- --config research/telechat2/finetune_telechat_115b.yaml \
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+ --config research/telechat2/finetune_telechat_115b.yaml
  --train_dataset /{path}/dataset.mindrecord \
  --use_parallel True \
+ --register_path ./research/telechat2" \
   16 8 192.168.1.1 8118 0 output/msrun_log False 300
 
 # 节点1，节点ip为192.168.1.2，节点0与节点1启动命令仅参数NODE_RANK不同
-bash scripts/msrun_launcher.sh "python research/telechat2/run_telechat.py \
- --config research/telechat2/finetune_telechat_115b.yaml \
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+ --config research/telechat2/finetune_telechat_115b.yaml
  --train_dataset /{path}/dataset.mindrecord \
  --use_parallel True \
+ --register_path ./research/telechat2" \
   16 8 192.168.1.1 8118 1 output/msrun_log False 300
 ```
 
@@ -267,21 +282,14 @@ bash scripts/msrun_launcher.sh "python research/telechat2/run_telechat.py \
 config: 配置文件路径
 train_dataset: 训练数据集文件夹路径
 use_parallel：开启并行训练
+register_path: 外部模型注册路径
 ```
 
 ## 推理
 
-推理时所需的模型词表可在[模型权重下载与转换](#模型权重下载与转换)章节中下载得到，对应文件为`tokenizer.model`。此外，推理还需要用户自定义`input.json`文件，格式如下：
-
-```json
-{"input": "生抽和老抽的区别？"}
-```
+推理时所需的模型词表可在[模型权重下载与转换](#模型权重下载与转换)章节中下载得到，对应文件为`tokenizer.model`。
 
 ### 参数配置
-
-- 设置环境变量：
-
-export MS_INTERNAL_DISABLE_CUSTOM_KERNEL_LIST=InferenceMatmulSplit,PagedAttention
 
 - 7b模型支持单机**单卡推理**
 
@@ -321,47 +329,62 @@ processor:
 运行`run_mindformer.py`启动推理
 
 ```shell
-cd mindformers
-python research/telechat2/run_telechat_predict.py \
---yaml_file ./research/telechat2/predict_telechat_7b.yaml \
---checkpoint_path path/to/ckpt_path \
---use_parallel False \
---input_file input.json
+cd mindformers/
+python run_mindformer.py \
+--config ./research/telechat2/predict_telechat_7b.yaml \
+--load_checkpoint path/to/ckpt_path \
+--use_parallel False
+--predict_data "<_start><_user>生抽与老抽的区别？<_bot>" \
+--register_path ./research/telechat2
+```
+
+- 39b-a12模型2卡推理
+
+```shell
+cd mindformers/
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+--config ./research/telechat2/predict_telechat_39b_a12b.yaml \
+--load_checkpoint path/to/ckpt_path \
+--predict_data '<_start><_user>生抽与老抽的区别？<_bot>' \
+--auto_trans_ckpt True \
+--use_parallel True
+--register_path ./research/telechat2 2
 ```
 
 - 35b模型2卡推理
 
 ```shell
 cd mindformers/
-bash scripts/msrun_launcher.sh "python ./research/telechat2/run_telechat_predict.py \
---yaml_file ./research/telechat2/predict_telechat_35b.yaml \
---checkpoint_path path/to/ckpt_path \
---input_file input.json \
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+--config ./research/telechat2/predict_telechat_35b.yaml \
+--load_checkpoint path/to/ckpt_path \
+--predict_data '<_start><_user>生抽与老抽的区别？<_bot>' \
 --auto_trans_ckpt True \
---use_parallel True" \
-2
+--use_parallel True
+--register_path ./research/telechat2 2
 ```
 
 - 115b模型8卡推理
 
 ```shell
 cd mindformers/
-bash scripts/msrun_launcher.sh "python ./research/telechat2/run_telechat_predict.py \
---yaml_file ./research/telechat2/predict_telechat_115b.yaml \
---checkpoint_path path/to/ckpt_path \
---input_file input.json \
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+--config ./research/telechat2/predict_telechat_115b.yaml \
+--load_checkpoint path/to/ckpt_path \
+--predict_data '<_start><_user>生抽与老抽的区别？<_bot>' \
 --auto_trans_ckpt True \
---use_parallel True" \
-8
+--use_parallel True
+--register_path ./research/telechat2 8
 ```
 
 ```text
 # 参数说明
-yaml_file: 模型的配置文件
-checkpoint_path: 权重路径
-input_file: 输入的问题的文件路径
+config: 模型的配置文件
+load_checkpoint: 权重路径
+predict_data: 输入的问题
 auto_tans_ckpt: 权重自动转换开关
 use_parallel: 并行模式开关
+register_path: 外部模型注册路径
 ```
 
 ### 推理结果

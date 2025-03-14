@@ -19,7 +19,9 @@ How to run this:
 """
 import os
 from multiprocessing.pool import Pool
+
 import pytest
+
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -43,7 +45,6 @@ class TestLlama2Parallel:
 
     @staticmethod
     def setup_method():
-        os.environ['ASCEND_HOME_PATH'] = "/usr/local/Ascend/latest"
         os.environ['MS_MEMORY_POOL_RECYCLE'] = '1'
 
     @pytest.mark.level0
@@ -60,9 +61,6 @@ class TestLlama2Parallel:
              f"msrun --worker_num=4 --local_worker_num=4 --master_port=8118 --log_dir=log_train_mp2_pp2 --join=True "
              f"{cur_dir}/run_parallel.py --mode parallel_train_mp2_pp2", 'log_train_mp2_pp2/worker_2.log'),
             (f"export ASCEND_RT_VISIBLE_DEVICES=4,5 && "
-             f"msrun --worker_num=2 --local_worker_num=2 --master_port=8218 --log_dir=log_predict_mp2 --join=True "
-             f"{cur_dir}/run_parallel.py --mode parallel_predict_mp2", 'log_predict_mp2/worker_0.log'),
-            (f"export ASCEND_RT_VISIBLE_DEVICES=6,7 && "
              f"msrun --worker_num=2 --local_worker_num=2 --master_port=8318 --log_dir=log_train_dp2 --join=True "
              f"{cur_dir}/run_parallel.py --mode parallel_train_dp2", 'log_train_dp2/worker_0.log')
         ]
@@ -86,6 +84,42 @@ class TestLlama2Parallel:
              f"--join=True {cur_dir}/run_parallel.py --mode parallel_train_sapp_mp2_pp2",
              'log_train_sapp_mp2_pp2/worker_2.log')
         ]
+        with Pool(len(commands)) as pool:
+            results = list(pool.imap(run_command, commands))
+        check_results(commands, results)
+
+    def test_train_input_sliced(self):
+        """
+        Feature: Trainer.train()
+        Description: Test input has been processed to seq_length.
+        Expectation: AssertionError
+        """
+        commands = [
+            (f"export ASCEND_RT_VISIBLE_DEVICES=0,1 && msrun --worker_num=2 --local_worker_num=2 --master_port=8118 "
+             f"--log_dir=log_train_input_sliced --join=True "
+             f"{cur_dir}/run_parallel.py --mode train_input_sliced", 'log_train_input_sliced/worker_0.log'),
+        ]
+        with Pool(len(commands)) as pool:
+            results = list(pool.imap(run_command, commands))
+        check_results(commands, results)
+
+    @pytest.mark.level0
+    @pytest.mark.platform_arm_ascend910b_training
+    @pytest.mark.env_single
+    def test_ndtp_cases(self):
+        """
+        Feature: Trainer.train() and Trainer.predict()
+        Description: Test parallel trainer with use_3d_tensor_parallel.
+        Expectation: AssertionError
+        """
+        commands = [
+            (f"export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 && "
+             f"msrun --worker_num=8 --local_worker_num=8 --master_port=8118 "
+             f"--log_dir=parallel_train_ndtp_cp2x2y2z1 --join=True "
+             f"{cur_dir}/run_parallel.py --mode parallel_train_ndtp_cp2x2y2z1",
+             'parallel_train_ndtp_cp2x2y2z1/worker_2.log'),
+        ]
+
         with Pool(len(commands)) as pool:
             results = list(pool.imap(run_command, commands))
         check_results(commands, results)

@@ -26,6 +26,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 rank_*/
+toolkit/pipeline_balance/output/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

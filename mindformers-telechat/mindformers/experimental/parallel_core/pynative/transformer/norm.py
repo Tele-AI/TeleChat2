@@ -72,10 +72,10 @@ class RMSNorm(nn.Cell):
         - Tensor with shape (batch, seq_length, hidden_size).
     """
 
-    def __init__(self, dim, eps=1e-6, param_init_type=mstype.float32):
+    def __init__(self, dim, eps=1e-6, param_init_type=mstype.float32, scale=1.0):
         super(RMSNorm, self).__init__()
         self.eps = Tensor(float(eps), dtype=param_init_type)
-        self.weight = Parameter(initializer("ones", (dim,), dtype=param_init_type))
+        self.weight = Parameter(initializer("ones", (dim,), dtype=param_init_type) * scale)
 
     def construct(self, x):
         """Forward of RMSNorm."""
@@ -107,11 +107,11 @@ class FusedRMSNorm(nn.Cell):
         - Tensor with shape (batch, seq_length, hidden_size).
     """
 
-    def __init__(self, dim, eps=1.e-6, compute_type=mstype.float32):
+    def __init__(self, dim, eps=1.e-6, compute_type=mstype.float32, scale=1.0):
         super(FusedRMSNorm, self).__init__()
         self.eps = eps
         self.compute_type = compute_type
-        self.weight = Parameter(initializer("ones", (dim,), dtype=self.compute_type), parallel_optimizer=False)
+        self.weight = Parameter(initializer("ones", (dim,), dtype=self.compute_type) * scale, parallel_optimizer=False)
 
     def construct(self, x):
         """Forward of FusedRMSNorm."""
@@ -119,7 +119,7 @@ class FusedRMSNorm(nn.Cell):
         return output
 
 
-def get_norm(config):
+def get_norm(config, scale=1.0):
     r"""
     Get normalization layer.
 
@@ -135,8 +135,10 @@ def get_norm(config):
             eps=config.norm_epsilon)
     if config.normalization == "RMSNorm":
         return RMSNorm(dim=config.hidden_size,
-                       eps=config.norm_epsilon)
+                       eps=config.norm_epsilon,
+                       scale=scale)
     if config.normalization == "FusedRMSNorm":
-        return FusedRMSNorm(dim=config.hidden_size, eps=config.norm_epsilon, compute_type=config.compute_dtype)
+        return FusedRMSNorm(dim=config.hidden_size, eps=config.norm_epsilon, compute_type=config.compute_dtype,
+                            scale=scale)
 
     raise Exception(f"unsupported norm type '{config.normalization}'.")

@@ -20,7 +20,7 @@ import pytest
 class TestAttention:
     """A test class for testing ParallelAttention/CoreAttention."""
 
-    @pytest.mark.level0
+    @pytest.mark.level1
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.env_onecard
     def test_run_attention_single(self):

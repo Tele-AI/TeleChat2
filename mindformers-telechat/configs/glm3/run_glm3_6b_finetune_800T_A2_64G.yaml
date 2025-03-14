@@ -11,7 +11,6 @@ resume_training: False
 context:
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "59GB" # 59GB for Atlas 800T A2
   save_graphs: False

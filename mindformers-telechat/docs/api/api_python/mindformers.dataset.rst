@@ -11,6 +11,5 @@ mindformers.dataset
     :nosignatures:
 
     mindformers.dataset.CausalLanguageModelDataset
-    mindformers.dataset.ContrastiveLanguageImagePretrainDataset
     mindformers.dataset.KeyWordGenDataset
     mindformers.dataset.MultiTurnDataset

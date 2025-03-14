@@ -32,7 +32,6 @@ mindformers.core
     :nosignatures:
 
     mindformers.core.AdamW
-    mindformers.core.Came
 
 学习率
 ----------
@@ -62,6 +61,7 @@ mindformers.core
     mindformers.core.MFLossMonitor
     mindformers.core.ProfileMonitor
     mindformers.core.SummaryMonitor
+    mindformers.core.TrainingStateMonitor
 
 评估指标
 --------

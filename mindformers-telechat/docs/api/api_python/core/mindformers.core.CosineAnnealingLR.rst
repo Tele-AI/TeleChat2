@@ -27,7 +27,7 @@ mindformers.core.CosineAnnealingLR
     参数：
         - **base_lr** (float) - 初始学习率。
         - **t_max** (int) - 重启周期的最大周期数。
-        - **eta_min** (float) - 学习率的最小值。默认值： ``0`` 。
+        - **eta_min** (float, 可选) - 学习率的最小值。默认值： ``0.`` 。
 
     输入：
         - **global_step** (int) - 全局步数。

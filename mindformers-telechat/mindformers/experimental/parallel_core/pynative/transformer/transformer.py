@@ -628,10 +628,18 @@ class ParallelAttention(Module):
                 value = value.astype(mstype.float16)
             attention_mask = attention_mask.astype(mstype.uint8)
 
-            # SBND -> BNSD
-            query = query.transpose(1, 2, 0, 3)
-            key = key.transpose(1, 2, 0, 3)
-            value = value.transpose(1, 2, 0, 3)
+            if self.fa_config and hasattr(self.fa_config, 'input_layout') and self.fa_config.input_layout == 'SBH':
+                # SBND -> SBH
+                fa_use_sbh = True
+                query, key, value = [
+                    x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3]) for x in [query, key, value]
+                ]
+            else:
+                # SBND -> BNSD
+                fa_use_sbh = False
+                query = query.transpose(1, 2, 0, 3)
+                key = key.transpose(1, 2, 0, 3)
+                value = value.transpose(1, 2, 0, 3)
 
             if self.fa_config:
                 output = ops.flash_attention_score(
@@ -652,10 +660,13 @@ class ParallelAttention(Module):
                     attn_mask=attention_mask,
                     scalar_value=1.0 / self.norm_factor,
                 )
-            context_layer = _merge_heads(output)
+            if not fa_use_sbh:
+                context_layer = _merge_heads(output)
+                # BSH -> SBH
+                context_layer = context_layer.swapaxes(0, 1)
+            else:
+                context_layer = output
 
-            # BSH -> SBH
-            context_layer = context_layer.swapaxes(0, 1)
         else:
             if query.dtype == mstype.float32:
                 query = query.astype(mstype.float16)
@@ -805,6 +816,11 @@ class ParallelTransformerLayer(Module):
         # Normalize the input data.
         self.input_norm = get_norm(config)
 
+        self.use_sandwich_norm = config.use_sandwich_norm
+
+        if self.use_sandwich_norm:
+            self.attn_post_norm = get_norm(config, config.attn_post_norm_scale)
+
         # Attention.
         attention_config = copy.deepcopy(config)
         use_lora = config.lora_config.use_lora
@@ -827,6 +843,8 @@ class ParallelTransformerLayer(Module):
 
         # Normalize the attention output
         self.post_attention_norm = get_norm(config)
+        if self.use_sandwich_norm:
+            self.ffn_post_norm = get_norm(config, config.ffn_post_norm_scale)
 
         # Cross attention.
         if self.layer_type in (LayerType.decoder,
@@ -930,6 +948,10 @@ class ParallelTransformerLayer(Module):
 
         with get_rng_tracer().rng_fork():
             out = self.hidden_states_dropout(attention_output)
+
+        if self.use_sandwich_norm:
+            out = self.attn_post_norm(out)
+
         norm_input = residual + out
 
         # layernorm post attention.
@@ -951,6 +973,10 @@ class ParallelTransformerLayer(Module):
 
         with get_rng_tracer().rng_fork():
             out = self.hidden_states_dropout(mlp_output)
+
+        if self.use_sandwich_norm:
+            out = self.ffn_post_norm(out)
+
         output = residual + out
 
         return output
@@ -1012,16 +1038,18 @@ def _get_num_layers(config, model_type, is_decoder=False):
                                      f"but the sum of num_layer_list  "
                                      f"{config.parallel_config.num_layer_list} is {num_layer_array.sum()}.")
                 if not np.all(num_layer_array > 0):
-                    raise ValueError("num_layer_array has element <= 0")
+                    raise ValueError(f"All elements of num_layer_list should be larger than 0, "
+                                     f"but got {num_layer_array}.")
                 num_layers, offset = _get_custom_num_layers(config.parallel_config.num_layer_list,
                                                             pp_stage, pp_rank, vpp_stage, vpp_rank)
                 if vpp_stage is not None:
-                    logger.info("Custom num layer list is {}. "
-                                "Num_layers in vpp_rank:{}"
-                                ", pp_rank:{} is {}.\n".format(num_layer_array, vpp_rank, pp_rank, num_layers))
+                    logger.info(
+                        f"Custom num layer list is {num_layer_array}. "
+                        f"Num_layers in vpp_rank:{vpp_rank}, pp_rank:{pp_rank} is {num_layers}.")
                 else:
-                    logger.info("Custom num layer list is {}. "
-                                "Num_layers in pp_rank:{} is {}.\n".format(num_layer_array, pp_rank, num_layers))
+                    logger.info(
+                        f"Custom num layer list is {num_layer_array}. "
+                        f"Num_layers in pp_rank:{pp_rank} is {num_layers}.")
                 return num_layers, offset
 
             def divide_layers(num_layers, stage, rank):
@@ -1342,9 +1370,11 @@ class ParallelTransformer(Module):
         self.config.recompute_method = None
         self.config.recompute_granularity = None
         self.config.recompute_num_layers = None
+
         def _get_recompute_layer_nums(recompute_num_list):
             recompute_num_array = np.array(recompute_num_list)
-            assert np.all(recompute_num_array >= 0)
+            if not np.all(recompute_num_array >= 0):
+                raise ValueError("recompute_num_array has element < 0")
             if recompute_num_array.shape != pp_layout:
                 raise ValueError("The shape of recompute_num_list {} must equal to "
                                  "pp_layout {}".format(recompute_num_array.shape, pp_layout))
@@ -1371,14 +1401,18 @@ class ParallelTransformer(Module):
                              "select_recompute_layers {} + full_recompute_layers {} > "
                              "num_layers {}.".format(select_recompute_layers, full_recompute_layers, self.num_layers))
         if vpp_stage is not None:
-            logger.info("in vpp_rank:{}, pp_rank:{}, full_recompute_layers is {}, "
-                        "select_recompute_layers is {}, select_comm_recompute_layers is {}"
-                        .format(vpp_rank, pp_rank, full_recompute_layers, select_recompute_layers,
-                                select_comm_recompute_layers))
+            logger.info(
+                f"in vpp_rank:{vpp_rank}, "
+                f"pp_rank:{pp_rank}, "
+                f"full_recompute_layers is {full_recompute_layers}, "
+                f"select_recompute_layers is {select_recompute_layers}, "
+                f"select_comm_recompute_layers is {select_comm_recompute_layers}")
         else:
-            logger.info("in pp_rank:{}, full_recompute_layers is {}, "
-                        "select_recompute_layers is {}, select_comm_recompute_layers is {}"
-                        .format(pp_rank, full_recompute_layers, select_recompute_layers, select_comm_recompute_layers))
+            logger.info(
+                f"in pp_rank:{pp_rank}, "
+                f"full_recompute_layers is {full_recompute_layers}, "
+                f"select_recompute_layers is {select_recompute_layers}, "
+                f"select_comm_recompute_layers is {select_comm_recompute_layers}")
         return full_recompute_layers, select_recompute_layers, select_comm_recompute_layers
 
 
@@ -1464,7 +1498,6 @@ class ParallelLMLogits(nn.Cell):
     Args:
         config (dict): Parallel configuration.
         bias (bool): Specifies whether the layer uses a bias vector. Default: ``False``.
-        transpose_b (bool): Specifies whether the weight parameter will be initialized as a transposed shape.
         compute_dtype (dtype.Number): The computation type. Default: ``None``.
 
     Inputs:
@@ -1475,7 +1508,8 @@ class ParallelLMLogits(nn.Cell):
         - **bias** (Tensor) - The trainable bias parameter.
 
     Outputs:
-        Tensor of logits.
+        - **logits_parallel** (Tensor) - If ``parallel_output`` is ``True``, the output is a paralleled logits tensor
+          on each tensor parallel rank, else the output will be a logits tensor gathering all the parallel output.
 
     Supported Platforms:
         ``Ascend``

@@ -4,7 +4,7 @@
 
 configs统一在run_xxx.yaml中，排序按照修改频率的顺序和一般的模型训练流程顺序（数据集->模型->训练、评估、推理），具体顺序如下
 
-- 非模块参数：seed、run_mode、output_dir、load_checkpoint、resume_training、auto_trans_ckpt
+- 非模块参数：seed、run_mode、output_dir、load_checkpoint、resume_training、auto_trans_ckpt、use_graceful_exit
 - 环境参数：context
 - AICC：remote_save_url
 - 运行参数：runner_config、runner_wrapper
@@ -30,10 +30,10 @@ configs统一在run_xxx.yaml中，排序按照修改频率的顺序和一般的�
 - load_checkpoint: 加载权重的模型名或权重路径，若进行全参微调/推理，支持传入完整权重路径或离线切分完成的权重文件夹；对于Lora微调/推理，在支持上述传入方式以外，还支持同时传入Base、Lora权重，传入格式为`load_checkpoint=path/to/dir/`，其中dir路径下包含`{BASE_MODEL}.ckpt`、`{LORA_MODEL}.ckpt`。
 - auto_trans_ckpt: 是否开启自动在线权重切分或转换
 - resume_training: 加载方式，为True时会加载训练过程信息，如优化器、epochs数等
+- use_graceful_exit：是否开启优雅退出功能，开启时需要配置相应的callback函数
 - context: 环境配置，可以参考: [mindspore.set_context](https://www.mindspore.cn/docs/zh-CN/r2.3.0/api_python/mindspore/mindspore.set_context.html)
     - mode: 0代表Graph Mode， 1代表Pynative Mode
     - device_target: 设备类型，Ascend、CPU或GPU，默认为Ascend
-    - enable_graph_kernel: 是否开启图算融合
     - max_call_depth: 函数调用的最大深度
     - max_device_memory: 设置设备可用的最大内存。运行多机任务时需要适当减小，为设备间通信留出更多内存空间。
     - save_graphs: 是否保存图
@@ -82,6 +82,10 @@ configs统一在run_xxx.yaml中，排序按照修改频率的顺序和一般的�
     - capacity_factor: 专家能力因子
     - aux_loss_factor: loss贡献因子
     - num_experts_chosen: 每个token选择专家数目
+    - balance_via_topk_bias: 使能aux_loss_free负载均衡算法
+    - topk_bias_update_rate：aux_loss_free负载均衡算法bias更新步长
+    - comp_comm_parallel: 是否开启ffn的计算通信并行。默认值：False。
+    - comp_comm_parallel_degree: ffn计算通信的分割数。数字越大，重叠越多，但会消耗更多内存。此参数仅在comp_com_parallel启用时有效。
 - recompute_config：重计算配置，可以参考mindformers.modules.transformer.TransformerRecomputeConfig
     - recompute: 是否开启重计算
     - select_recompute: 是否开启选择重计算，只针对attention层的算子进行重计算
@@ -179,6 +183,7 @@ configs统一在run_xxx.yaml中，排序按照修改频率的顺序和一般的�
         - step_upload_frequence: 每隔多少个step上传一次，默认为100，表示每100个step执行一次数据上传；配置为大于0的数时，每隔配置数step后执行一次回传，小于0的数则表示禁用step回传
         - epoch_upload_frequence: 每隔多少个epoch上传一次，默认为-1，表示禁用epoch回传；设置大于0的值表示每隔所配置的epoch数后回传；注意：数据下沉模式下，epoch所包含的step数将从数据集大小变为sink size的大小，不建议在数据下沉模式下使用本项配置
         - keep_last: 检查obs的文件与AI计算中心平台是否一致，默认True，表示仅保留最后一次回传的内容，前面几次回传内容将会被移除；设为False则会保留每次回传的内容
+    - type: OnRequestExit: 开启优雅退出功能需要设置,可以参考[mindspore.train.OnRequestExit](https://www.mindspore.cn/docs/zh-CN/r2.4.0/api_python/train/mindspore.train.OnRequestExit.html)
 - metric: 评估指标配置
     - type: 评估指标类
 - processor: 推理时的数据处理

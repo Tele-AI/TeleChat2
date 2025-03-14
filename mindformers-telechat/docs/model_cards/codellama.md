@@ -80,11 +80,11 @@ MindFormers软硬件配套关系以及安装参考[环境安装指南](../../REA
 
 MindFormers提供`Wikitext2`作为[预训练](#预训练)数据集，`code-alpaca`作为[微调](#微调)数据集。
 
-| 数据集名称       |     适用模型      |   适用阶段   |                                                         下载链接                                                          |
-|:------------|:-------------:|:--------:|:---------------------------------------------------------------------------------------------------------------------:|
-| Wikitext2   | CodeLlama_34b | Pretrain | [Link](https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com/MindFormers/dataset/wikitext-2/wikitext-2-v1.zip) |
-| code-alpaca | CodeLlama_34b | Finetune |                [Link](https://github.com/sahil280114/codealpaca/blob/master/data/code_alpaca_20k.json)                |
-| HumanEval   | CodeLlama_34b | Evaluate |                                     [Link](https://github.com/openai/human-eval)                                      |
+| 数据集名称       |     适用模型      |   适用阶段   |                                          下载链接                                           |
+|:------------|:-------------:|:--------:|:---------------------------------------------------------------------------------------:|
+| Wikitext2   | CodeLlama_34b | Pretrain |    [Link](https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip)     |
+| code-alpaca | CodeLlama_34b | Finetune | [Link](https://github.com/sahil280114/codealpaca/blob/master/data/code_alpaca_20k.json) |
+| HumanEval   | CodeLlama_34b | Evaluate |                      [Link](https://github.com/openai/human-eval)                       |
 
 数据预处理中所用的`tokenizer.model`可以点击[链接](https://huggingface.co/codellama/CodeLlama-34b-hf/blob/main/tokenizer.model)进行下载。
 
@@ -142,14 +142,8 @@ MindFormers提供下载HuggingFace官方权重的下载链接，用户可通过�
 
 | 模型名称                        |                           HuggingFace权重                            |
 |:----------------------------|:------------------------------------------------------------------:|
-| CodeLlama-7b                |      [Link](https://huggingface.co/codellama/CodeLlama-7b-hf)      |
-| CodeLlama-13b               |     [Link](https://huggingface.co/codellama/CodeLlama-13b-hf)      |
 | CodeLlama-34b               |     [Link](https://huggingface.co/codellama/CodeLlama-34b-hf)      |
-| CodeLlama-7b-Python         |  [Link](https://huggingface.co/codellama/CodeLlama-7b-Python-hf)   |
-| CodeLlama-13b-Python        |  [Link](https://huggingface.co/codellama/CodeLlama-13b-Python-hf)  |
 | CodeLlama-34b-Python        |  [Link](https://huggingface.co/codellama/CodeLlama-34b-Python-hf)  |
-| CodeLlama-7b-Instruct       | [Link](https://huggingface.co/codellama/CodeLlama-7b-Instruct-hf)  |
-| CodeLlama_13b-Instruct      | [Link](https://huggingface.co/codellama/CodeLlama-13b-Instruct-hf) |
 | CodeLlama_34b-Instruct      | [Link](https://huggingface.co/codellama/CodeLlama-34b-Instruct-hf) |
 
 #### 模型权重转换

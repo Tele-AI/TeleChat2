@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional, Union
 import json
 import yaml
-
+from mindformers.tools.check_rules import check_yaml_depth_before_loading
 from ..mindformer_book import print_path_or_list, MindFormerBook
 from .build_processor import build_processor
 from .tokenization_utils import PreTrainedTokenizer
@@ -37,8 +37,6 @@ from ..tools.hub.dynamic_module_utils import custom_object_save
 from ..tools.hub.hub import (
     PushToHubMixin,
     is_offline_mode,
-    is_remote_url,
-    download_url,
     cached_file
 )
 from ..tools.generic import experimental_mode_func_checker
@@ -327,9 +325,6 @@ class ProcessorMixin(PushToHubMixin):
         if os.path.isfile(pretrained_model_name_or_path):
             resolved_processor_file = pretrained_model_name_or_path
             is_local = True
-        elif is_remote_url(pretrained_model_name_or_path):
-            processor_file = pretrained_model_name_or_path
-            resolved_processor_file = download_url(pretrained_model_name_or_path)
         else:
             processor_file = PROCESSOR_NAME
             try:
@@ -470,6 +465,8 @@ class ProcessorMixin(PushToHubMixin):
         meraged_dict = {}
         if os.path.exists(config_path):
             with open(config_path, 'r') as file_reader:
+                check_yaml_depth_before_loading(file_reader)
+                file_reader.seek(0)
                 meraged_dict = yaml.safe_load(file_reader.read())
             file_reader.close()
         meraged_dict.update(wraped_config)

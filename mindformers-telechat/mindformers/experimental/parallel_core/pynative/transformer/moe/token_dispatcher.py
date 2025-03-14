@@ -94,7 +94,7 @@ class MoEAlltoAllTokenDispatcher():
 
     def preprocess(self, indices):
         """
-        This function will calculate the input and output splits for alltoall communitcation.
+        this function will calculate the input and output splits for alltoall communitcation.
 
         Args:
             indices (ms.Tensor): indicates every token was dispatched to which expert.
@@ -180,7 +180,7 @@ class MoEAlltoAllTokenDispatcher():
 
     def token_permutation(self, hidden_states, probs, indices):
         """
-        Performs dp -> ep permutation.
+        Performs dp -> ep permutation
 
         Args:
             hidden_states (ms.Tensor): hidden_states.

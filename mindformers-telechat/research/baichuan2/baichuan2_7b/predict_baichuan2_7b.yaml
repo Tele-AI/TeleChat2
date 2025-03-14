@@ -1,0 +1,86 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+run_mode: 'predict'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'baichuan2_7b'
+
+# runner config
+runner_config:
+  epochs: 1
+  batch_size: 2
+  sink_mode: True
+  sink_size: 2
+
+use_parallel: False
+
+parallel:
+  enable_parallel_optimizer: True
+
+# default parallel of device num = 8 for Atlas 800T A2
+parallel_config:
+  model_parallel: 1
+  pipeline_stage: 1
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_id: 0
+  max_device_memory: "59GB"
+
+# model config
+model:
+  model_config:
+    type: LlamaConfig
+    batch_size: 1 # add for increase predict
+    seq_length: 4096
+    hidden_size: 4096
+    num_layers: 32
+    num_heads: 32
+    vocab_size: 125696
+    multiple_of: 256
+    rms_norm_eps: 1.0e-6
+    bos_token_id: 1
+    eos_token_id: 2
+    pad_token_id: 0
+    ignore_token_id: -100
+    compute_dtype: "float16"
+    layernorm_compute_type: "float16"
+    softmax_compute_type: "float16"
+    param_init_type: "float16"
+    use_past: True
+    use_flash_attention: True
+    block_size: 16
+    num_blocks: 512
+    is_dynamic: True
+    extend_method: "None" # support "None", "PI", "NTK"
+    offset: 0
+    checkpoint_name_or_path: "path/to/baichuan2-7B-Chat.ckpt"
+    repetition_penalty: 1
+    temperature: 1.0
+    max_decode_length: 512
+    top_k: 3
+    top_p: 1
+    do_sample: False
+    auto_map:
+      AutoModel: baichuan2_7b_model.Baichuan7BV2ForCausalLM
+      AutoTokenizer: [baichuan2_tokenizer.Baichuan2Tokenizer, null]
+  arch:
+    type: Baichuan7BV2ForCausalLM
+    auto_register: baichuan2_7b_model.Baichuan7BV2ForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    vocab_file: "/path/to/tokenizer.model"
+    unk_token: '<unk>'
+    bos_token: '<s>'
+    eos_token: '</s>'
+    pad_token: '<unk>'
+    type: Baichuan2Tokenizer
+    auto_register: baichuan2_tokenizer.Baichuan2Tokenizer
+  type: LlamaProcessor

@@ -62,6 +62,14 @@ class TelechatTokenizer(PreTrainedTokenizer):
             bos_token="<_start>",
             eos_token="<_end>",
             pad_token="<_pad>",
+            usr_token="<_user>",
+            bot_token="<_bot>",
+            sys_token="<_system>",
+            call_start_token="<tool_call>",
+            call_end_token="</tool_call>",
+            repo_start_token="<tool_response>",
+            repo_end_token="</tool_response>",
+            chat_template=None,
             sp_model_kwargs: Optional[Dict[str, Any]] = None,
             add_bos_token=False,
             add_eos_token=False,
@@ -71,24 +79,33 @@ class TelechatTokenizer(PreTrainedTokenizer):
         self.sp_model_kwargs = {} if sp_model_kwargs is None else sp_model_kwargs
         unk_token = AddedToken(unk_token, lstrip=False, rstrip=False, single_word=False, normalized=False) \
             if isinstance(unk_token, str) else unk_token
-        bos_token, eos_token, pad_token, usr_token, bot_token, sys_token, call_start_token, call_end_token, repo_start_token, repo_end_token = "<_start>", "<_end>", "<_pad>", "<_user>", "<_bot>", "<_system>", "<tool_call>", "</tool_call>", "<tool_response>", "</tool_response>"
-        bos_token = AddedToken(bos_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        eos_token = AddedToken(eos_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        pad_token = AddedToken(pad_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        usr_token = AddedToken(usr_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        bot_token = AddedToken(bot_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        sys_token = AddedToken(sys_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        call_start_token = AddedToken(call_start_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        call_end_token = AddedToken(call_end_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        repo_start_token = AddedToken(repo_start_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
-        repo_end_token = AddedToken(repo_end_token, lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        bos_token = AddedToken(bos_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        eos_token = AddedToken(eos_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        pad_token = AddedToken(pad_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        usr_token = AddedToken(usr_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        bot_token = AddedToken(bot_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        sys_token = AddedToken(sys_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        call_start_token = AddedToken(call_start_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        call_end_token = AddedToken(call_end_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        repo_start_token = AddedToken(repo_start_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
+        repo_end_token = AddedToken(repo_end_token, \
+            lstrip=False, rstrip=False, single_word=False, normalized=False, special=True)
         self.vocab_file = vocab_file
         self.add_bos_token = add_bos_token
         self.add_eos_token = add_eos_token
         self.sp_model = spm.SentencePieceProcessor(**self.sp_model_kwargs)
         self.sp_model.Load(vocab_file)
 
-        self.chat_template = "{%- if tools %}\n    {%- if messages[0]['role'] == 'system' %}\n        {{-'<_system>'+messages[0]['content'] }}\n    {%- else %}\n        {{- '<_system>'+'你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。' }}\n    {%- endif %}\n    {{- '\\n\\n# 可用工具\\n你可以调用<tools></tools>标签中包含的一个或多个工具来辅助你回答问题,以下是可用工具详情：\\n<tools>\\n' }}\n    {%- for tool in tools %}\n        {{- tool | tojson }}\n        {{-'\\n'}}\n    {%- endfor %}\n    {{- '</tools>\\n\\n# 调用方法\\n你需要遵循工具的要求，使用json格式返回工具名称及参数，并用<tool_call></tool_call>包含。下方是一个调用模板：\\n<tool_call>\\n{\\\"name\\\": <function-name>, \\\"arguments\\\": <args-json-object>}\\n</tool_call>\\n\\n' }}\n{%- else %}\n    {%- if messages[0]['role'] == 'system' %}\n        {{- '<_system>' + messages[0]['content'] + '\\n' }}\n    {%- else %}\n        {{- '<_system>'+'你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。\\n' }}\n    {%- endif %}\n{%- endif %}\n{%- for message in messages %}\n    {%- if (message.role == 'user') %}\n        {{- '<_user>' + message.content }}\n    {%- elif message.role == 'bot' or message.role == 'assistant' %}\n        {{- '<_bot>' }}\n        {%- if message.content %}\n            {{- message.content }}\n        {%- endif %}\n        {%- for tool_call in message.tool_calls %}\n            {%- if tool_call.function is defined %}\n                {%- set tool_call = tool_call.function %}\n            {%- endif %}\n            {%- if loop.index0 == 0 %}\n                {{-'<tool_call>'}}\n            {%- else %}\n                {{-'\\n<tool_call>'}}\n            {%- endif %}\n            {{- '\\n{\"name\": \"' }}{{ tool_call.name }}\n            {{- '\", \"arguments\": ' }}\n            {{- tool_call.arguments | tojson }}\n            {{- '}\\n</tool_call>' }}\n        {%- endfor %}\n        {{- '<_end>\\n' }}\n    {%- elif message.role == 'tool' %}\n        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != 'tool') %}\n            {{- '<_user>'+'<tool_response>\\n' }}\n        {%- else %}\n            {{- '\\n<tool_response>\\n' }}\n        {%- endif %}\n        {{- message.content }}\n        {{- '\\n</tool_response>' }}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<_bot>' }}\n{%- endif %}"
+        self.chat_template = chat_template
 
         super().__init__(
             bos_token=bos_token,
@@ -102,7 +119,8 @@ class TelechatTokenizer(PreTrainedTokenizer):
             chat_template=self.chat_template,
             **kwargs,
         )
-        self.add_tokens([bos_token, eos_token, pad_token, usr_token, bot_token, sys_token, call_start_token, call_end_token, repo_start_token, repo_end_token])
+        self.add_tokens([bos_token, eos_token, pad_token, usr_token, bot_token, sys_token, \
+            call_start_token, call_end_token, repo_start_token, repo_end_token])
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -142,18 +160,13 @@ class TelechatTokenizer(PreTrainedTokenizer):
         """Converts a sequence of tokens (string) in a single string."""
         current_sub_tokens = []
         out_string = ""
-        # prev_is_special = False
-        for i, token in enumerate(tokens):
+        for token in tokens:
             # make sure that special tokens are not decoded using sentencepiece model
             if token in self.all_special_tokens:
-                # if not prev_is_special and i != 0:
-                #    out_string += " "
                 out_string += self.sp_model.decode(current_sub_tokens) + token
-                # prev_is_special = True
                 current_sub_tokens = []
             else:
                 current_sub_tokens.append(token)
-                # prev_is_special = False
         out_string += self.sp_model.decode(current_sub_tokens)
         return out_string
 

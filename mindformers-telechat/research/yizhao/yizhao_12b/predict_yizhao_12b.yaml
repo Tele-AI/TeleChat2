@@ -1,0 +1,108 @@
+seed: 0
+run_mode: 'predict'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+
+# ==== context config ====
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  max_call_depth: 10000
+  max_device_memory: "59GB" # 59GB for Atlas 800T A2
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  memory_optimize_level: "O1"
+
+# ==== model config ====
+model:
+  model_config:
+    type: YiZhaoConfig
+    batch_size: 1  # only for incremental infer
+    num_layers: 54
+    padded_vocab_size: 151552
+    hidden_size: 4096
+    ffn_hidden_size: 13696
+    kv_channels: 128
+    num_attention_heads: 32
+    seq_length: 8192
+    hidden_dropout: 0.0
+    attention_dropout: 0.0
+    layernorm_epsilon: 1.e-05
+    rope_ratio: 1
+    rmsnorm: True
+    apply_residual_connection_post_layernorm: False
+    post_layer_norm: True
+    add_bias_linear: False
+    add_qkv_bias: True
+    bias_dropout_fusion: True
+    multi_query_attention: True
+    multi_query_group_num: 2
+    apply_query_key_layer_scaling: True
+    attention_softmax_in_fp32: True
+    fp32_residual_connection: False
+    quantization_bit: 0
+    pre_seq_len: None
+    prefix_projection: False
+    param_init_type: "bfloat16"
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    rotary_dtype: "float32"
+    use_past: True
+    is_dynamic: True
+    block_size: 16
+    num_blocks: 4096
+    use_flash_attention: True # when use FlashAttention, seq_length should be multiple of 16
+    eos_token_id: [151329,151336]
+    pad_token_id: 151329
+    repetition_penalty: 1.0
+    max_length: 8192
+    max_decode_length: 8192
+    checkpoint_name_or_path: ""
+    top_k: 1
+    top_p: 1
+    do_sample: False
+    qkv_concat: False
+    mlp_concat: False
+    use_llama_rope: True
+    lm_head_dp: False
+    pp_interleave_num: 1
+    use_rearrange_rope: True
+    auto_map:
+      AutoTokenizer: [ yizhao_tokenizer.YiZhaoTokenizer, null ]
+  arch:
+    type: YiZhaoForCausalLM
+
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'YiZhao'
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    type: YiZhaoTokenizer
+    eos_token: '<|endoftext|>'
+    pad_token: '<|endoftext|>'
+    vocab_file: '/path/to/tokenizer.model'
+    chat_template: "{{ '[gMASK]<sop>' }}{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}{% endif %}{% if system_message is defined %}{{ '<|system|>' + system_message }}{% endif %}{% for message in loop_messages %}{% set content = message['content'] %}{% if message['role'] == 'user' %}{{ '<|user|>' + content + '<|assistant|>' }}{% elif message['role'] == 'assistant' %}{{ content }}{% endif %}{% endfor %}"
+  type: YiZhaoProcessor
+
+# parallel config
+use_parallel: False
+parallel:
+  loss_repeated_mean: True
+  full_batch: True   # 默认为True, 数据并行模式必须设置为False
+  enable_parallel_optimizer: False  # optimizer shard, 等价于zero2
+parallel_config:
+  data_parallel: 1
+  model_parallel: 1
+  pipeline_stage: 1
+  expert_parallel: 1
+  micro_batch_num: 16
+  vocab_emb_dp: True
+  use_seq_parallel: False
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+

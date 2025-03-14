@@ -6,9 +6,9 @@ mindformers.core.init_context
     初始化运行环境的context。
 
     参数：
-        - **use_parallel** (bool) - 是否并行。默认值： ``False`` 。
-        - **context_config** (Union[dict, ContextConfig]) - contex的配置。默认值： ``None`` 。
-        - **parallel_config** (Union[dict, ParallelContextConfig]) - 并行配置。默认值： ``None`` 。
+        - **use_parallel** (bool, 可选) - 是否并行。默认值： ``False`` 。
+        - **context_config** (Union[dict, ContextConfig], 可选) - contex的配置。默认值： ``None`` 。
+        - **parallel_config** (Union[dict, ParallelContextConfig], 可选) - 并行配置。默认值： ``None`` 。
 
     返回：
         - Int，local_rank序号。

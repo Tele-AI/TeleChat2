@@ -44,6 +44,8 @@ class TestBaichuan2Predict:
         model_config.batch_size = runner.batch_size  # set batch size for prediction
         model_config.vocab_size = 32000  # default to use gpt2 tokenizer
         model_config.use_flash_attention = False  # if set True, cause error
+        model_config.use_past = True
+        model_config.is_dynamic = False
 
         model = get_model(model_config)
 

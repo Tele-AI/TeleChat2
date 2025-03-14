@@ -13,7 +13,6 @@ context:
     jit_level: "O2" # GE
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "59GB"
   save_graphs: False

@@ -164,12 +164,13 @@ class VocabParallelCrossEntropy(nn.Cell):
 
         exp_logits, loss = self._calculate_cross_entropy_loss(exp_logits, predicted_logits, sum_exp_logits)
         vocab_size = exp_logits.shape[-1]
-        if label_smoothing > 0.0:
-            assert 1.0 > label_smoothing > 0.0
+        if 0.0 < label_smoothing < 1.0:
             smoothing = label_smoothing * vocab_size / (vocab_size - 1)
             log_probs = mint.log(exp_logits)
             mean_log_probs = log_probs.mean(dim=-1)
             loss = (1.0 - smoothing) * loss - smoothing * mean_log_probs
+        elif label_smoothing >= 1.0:
+            raise Exception("label_smoothing >= 1.0")
 
         self.label_smoothing = label_smoothing
         self.vocab_size = vocab_size

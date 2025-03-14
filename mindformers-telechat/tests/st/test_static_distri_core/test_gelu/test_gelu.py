@@ -28,7 +28,7 @@ def build_msrun_command(device_num, dp, cp, tp):
 class TestGELU:
     """A test class for testing GELU"""
 
-    @pytest.mark.level0
+    @pytest.mark.level1
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.env_onecard
     def test_gelu_on_single(self):

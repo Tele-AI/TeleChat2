@@ -26,6 +26,7 @@ from mindformers.models import PreTrainedModel, PreTrainedTokenizerBase
 from mindformers.tools.logger import logger
 from mindformers.tools.register import MindFormerRegister, \
     MindFormerModuleType, MindFormerConfig
+from mindformers.utils import deprecated
 from ..base_trainer import BaseTrainer
 from ..config_args import ConfigArguments
 from ..training_args import TrainingArguments
@@ -33,6 +34,7 @@ from ..training_args import TrainingArguments
 __all__ = ['QuestionAnsweringTrainer']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER)
 class QuestionAnsweringTrainer(BaseTrainer):
     """
@@ -48,7 +50,7 @@ class QuestionAnsweringTrainer(BaseTrainer):
     """
 
     def __init__(self, model_name: str = None):
-        super(QuestionAnsweringTrainer, self).__init__("question_answering", model_name)
+        super().__init__("question_answering", model_name)
 
     def train(self,
               config: Optional[Union[dict, MindFormerConfig, ConfigArguments, TrainingArguments]] = None,

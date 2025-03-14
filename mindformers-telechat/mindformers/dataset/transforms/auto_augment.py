@@ -17,13 +17,14 @@
 import math
 import random
 import re
-
 import numpy as np
 import PIL
 from PIL import Image, ImageOps, ImageEnhance
+
 from mindspore.dataset.vision.transforms import PyTensorOperation
 
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.utils import deprecated
 
 _PIL_VER = tuple([int(x) for x in PIL.__version__.split('.')[:2]])
 
@@ -73,6 +74,7 @@ def _check_args_tf(kwargs):
     kwargs['resample'] = _interpolation(kwargs)
 
 
+@deprecated(version="1.5.0")
 class PolicyHelper:
     """ auto_augment Policy helper """
 
@@ -177,6 +179,7 @@ class PolicyHelper:
         return ImageEnhance.Sharpness(img).enhance(factor)
 
 
+@deprecated(version="1.5.0")
 class LevelHelper:
     """Level helper """
 
@@ -320,6 +323,7 @@ NAME_TO_OP = {
 }
 
 
+@deprecated(version="1.5.0")
 class AugmentOp:
     """AugmentOp"""
 
@@ -360,6 +364,7 @@ class AugmentOp:
         return self.aug_fn(img, *level_args, **self.kwargs)
 
 
+@deprecated(version="1.5.0")
 def auto_augment_policy_v0(hparams):
     """auto_augment_policy_v0"""
     # ImageNet v0 policy from TPU EfficientNet impl, cannot find a paper reference.
@@ -394,6 +399,7 @@ def auto_augment_policy_v0(hparams):
     return pc
 
 
+@deprecated(version="1.5.0")
 def auto_augment_policy_v0r(hparams):
     """auto_augment_policy_v0r"""
     # ImageNet v0 policy from TPU EfficientNet impl, with variation of Posterize used
@@ -429,6 +435,7 @@ def auto_augment_policy_v0r(hparams):
     return pc
 
 
+@deprecated(version="1.5.0")
 def auto_augment_policy_original(hparams):
     """auto_augment_policy_original"""
     policy = [
@@ -462,6 +469,7 @@ def auto_augment_policy_original(hparams):
     return pc
 
 
+@deprecated(version="1.5.0")
 def auto_augment_policy_originalr(hparams):
     """auto_augment_policy_originalr"""
     # ImageNet policy from https://arxiv.org/abs/1805.09501 with research posterize variation
@@ -496,6 +504,7 @@ def auto_augment_policy_originalr(hparams):
     return pc
 
 
+@deprecated(version="1.5.0")
 def auto_augment_policy(name='v0', hparams=None):
     """auto_augment_policy"""
     hparams = hparams or _HPARAMS_DEFAULT
@@ -512,6 +521,7 @@ def auto_augment_policy(name='v0', hparams=None):
     return func
 
 
+@deprecated(version="1.5.0")
 class AutoAugment:
     """AutoAugment"""
 
@@ -526,6 +536,7 @@ class AutoAugment:
         return img
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRANSFORMS)
 def auto_augment_transform(config_str, hparams):
     """
@@ -626,6 +637,7 @@ def _select_rand_weights(weight_idx=0, transforms=None):
     return probs
 
 
+@deprecated(version="1.5.0")
 def rand_augment_ops(magnitude=10, hparams=None, transforms=None):
     """rand_augment_ops"""
     hparams = hparams or _HPARAMS_DEFAULT
@@ -634,6 +646,7 @@ def rand_augment_ops(magnitude=10, hparams=None, transforms=None):
         name, prob=0.5, magnitude=magnitude, hparams=hparams) for name in transforms]
 
 
+@deprecated(version="1.5.0")
 class RandAugment(PyTensorOperation):
     """RandAugment"""
 
@@ -652,6 +665,7 @@ class RandAugment(PyTensorOperation):
         return img
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRANSFORMS)
 def rand_augment_transform(config_str, hparams):
     """
@@ -721,6 +735,7 @@ _AUGMIX_TRANSFORMS = [
 ]
 
 
+@deprecated(version="1.5.0")
 def augmix_ops(magnitude=10, hparams=None, transforms=None):
     """augmix_ops"""
     hparams = hparams or _HPARAMS_DEFAULT
@@ -729,6 +744,7 @@ def augmix_ops(magnitude=10, hparams=None, transforms=None):
         name, prob=1.0, magnitude=magnitude, hparams=hparams) for name in transforms]
 
 
+@deprecated(version="1.5.0")
 class AugMixAugment:
     """ AugMix Transform
     Adapted and improved from impl here
@@ -800,6 +816,7 @@ class AugMixAugment:
         return mixed
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRANSFORMS)
 def augment_and_mix_transform(config_str, hparams):
     """ Create AugMix MindSpore transform

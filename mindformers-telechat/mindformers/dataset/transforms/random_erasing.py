@@ -10,11 +10,11 @@
 """Random Erasing (Cutout) for MindSpore"""
 import math
 import random
-
 import numpy as np
 
 from mindspore.dataset.vision.transforms import PyTensorOperation
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.utils import deprecated
 
 
 def _get_pixels(per_pixel, rand_color, patch_size, dtype=np.float32):
@@ -28,6 +28,7 @@ def _get_pixels(per_pixel, rand_color, patch_size, dtype=np.float32):
     return func
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRANSFORMS)
 class RandomErasing(PyTensorOperation):
     """ Randomly selects a rectangle region in an image and erases its pixels.
@@ -51,7 +52,7 @@ class RandomErasing(PyTensorOperation):
 
     def __init__(self, probability=0.5, min_area=0.02, max_area=1 / 3, min_aspect=0.3,
                  max_aspect=None, mode='const', min_count=1, max_count=None, num_splits=0):
-        super(RandomErasing, self).__init__()
+        super().__init__()
         self.probability = probability
         self.min_area = min_area
         self.max_area = max_area

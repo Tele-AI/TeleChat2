@@ -64,8 +64,10 @@ class LoraConfig(PetConfig):
             Refers to (https://www.mindspore.cn/docs/en/master/api_python/mindspore.common.initializer.html). Default: ``normal``.
         lora_b_init (str, optional): The initialization strategy of LoRA B matrix.
             Refers to (https://www.mindspore.cn/docs/en/master/api_python/mindspore.common.initializer.html). Default: ``zero``.
-        param_init_type (str, optional): The type of data in initialized tensor. Default: ``float16``.
-        compute_dtype (str, optional): The compute type of data. Default: ``float16``.
+        param_init_type (str, optional): The type of data in initialized tensor. If set to None,
+            it inherits the type from the replaced layer. Default: ``None``.
+        compute_dtype (str, optional): The compute type of data. If set to None,
+            it inherits the type from the replaced layer. Default: ``None``.
         target_modules (str, optional): The layers that require replacement with LoRA algorithm. Default: ``None``.
         exclude_layers (str, optional): The layers that do not require
             replacement with the LoRA algorithm. Default: ``None``.
@@ -93,8 +95,8 @@ class LoraConfig(PetConfig):
                  lora_dropout: float = 0.01,
                  lora_a_init: str = 'normal',
                  lora_b_init: str = 'zero',
-                 param_init_type: str = 'float16',
-                 compute_dtype: str = 'float16',
+                 param_init_type: str = None,
+                 compute_dtype: str = None,
                  target_modules: str = None,
                  exclude_layers: str = None,
                  freeze_include: List[str] = None,
@@ -106,8 +108,14 @@ class LoraConfig(PetConfig):
         self.lora_dropout = lora_dropout
         self.lora_a_init = lora_a_init
         self.lora_b_init = lora_b_init
-        self.param_init_type = convert_mstype(param_init_type)
-        self.compute_dtype = convert_mstype(compute_dtype)
+        if param_init_type:
+            self.param_init_type = convert_mstype(param_init_type)
+        else:
+            self.param_init_type = None
+        if compute_dtype:
+            self.compute_dtype = convert_mstype(compute_dtype)
+        else:
+            self.compute_dtype = None
         self.target_modules = target_modules
         self.exclude_layers = exclude_layers
         self.freeze_include = freeze_include

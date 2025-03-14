@@ -101,6 +101,9 @@ class ParallelMLP(Module):
         )
 
         self.bias_gelu_fusion = False
+
+        if self.act_type == "swiglu" and config.apply_swiglu_fusion:
+            self.act_type = "fused_swiglu"
         self.act_func = get_act_func(self.act_type)
 
         # Project back to h.

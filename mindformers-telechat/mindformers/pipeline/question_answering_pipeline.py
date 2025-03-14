@@ -24,6 +24,7 @@ from mindspore import Tensor
 from mindspore.common import dtype as mstype
 from mindformers.mindformer_book import MindFormerBook
 from mindformers.models import BasicTokenizer
+from mindformers.utils import deprecated
 from ..dataset.dataloader.squad_dataloader import convert_examples_to_features, SquadExample
 from .base_pipeline import Pipeline
 from ..tools.register import MindFormerRegister, MindFormerModuleType
@@ -31,6 +32,7 @@ from ..tools.register import MindFormerRegister, MindFormerModuleType
 __all__ = ['QuestionAnsweringPipeline']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="question_answering")
 class QuestionAnsweringPipeline(Pipeline):
     r"""Pipeline for token classification

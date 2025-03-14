@@ -45,17 +45,17 @@ class TestLlama:
         os.environ['ASCEND_HOME_PATH'] = "/usr/local/Ascend/latest"
         os.environ['MS_MEMORY_POOL_RECYCLE'] = '1'
 
-    @pytest.mark.level0
+    @pytest.mark.level1
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.env_onecard
-    def test_single_train(self):
+    def test_graph_single_train(self):
         """
         Feature: Trainer.train()
-        Description: Test trainer for training
+        Description: Test trainer for training graph mode
         Expectation: AssertionError
         """
         commands = [
-            (f"python {cur_dir}/run_tests.py --mode single_train --use-new-loss", '')
+            (f"python {cur_dir}/run_test_llama.py --mode single_train --use-new-loss --ms-run-mode 0", '')
         ]
 
         with Pool(len(commands)) as pool:
@@ -65,22 +65,72 @@ class TestLlama:
     @pytest.mark.level1
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.env_single
-    def test_parallel_train(self):
+    def test_pynative_single_train(self):
         """
         Feature: Trainer.train()
-        Description: Test parallel trainer for training
+        Description: Test trainer for training pynative mode
+        Expectation: AssertionError
+        """
+        commands = [
+            (f"msrun --worker_num=1 --local_worker_num=1 --master_port=61374 "
+             f"--log_dir=log_pynative_single_train --join=True "
+             f"{cur_dir}/run_test_llama.py --mode single_train --use-new-loss --ms-run-mode 1", '')
+        ]
+
+        with Pool(len(commands)) as pool:
+            results = list(pool.imap(run_command, commands))
+        check_results(commands, results)
+
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend910b_training
+    @pytest.mark.env_single
+    def test_graph_parallel_train(self):
+        """
+        Feature: Trainer.train()
+        Description: Test parallel trainer for training graph mode
         Expectation: AssertionError
         """
         commands = [
             (f"export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 && "
              f"msrun --worker_num=4 --local_worker_num=4 --master_port=61374 --log_dir=log_train_dp2_mp2 --join=True "
-             f"{cur_dir}/run_tests.py --mode parallel_train_dp2_mp2", 'log_train_dp2_mp2/worker_0.log'),
+             f"{cur_dir}/run_test_llama.py --mode parallel_train_dp2_mp2 --ms-run-mode 0",
+             'log_train_dp2_mp2/worker_0.log'),
             (f"export ASCEND_RT_VISIBLE_DEVICES=4,5 && "
              f"msrun --worker_num=2 --local_worker_num=2 --master_port=61375 --log_dir=log_train_mp2 --join=True "
-             f"{cur_dir}/run_tests.py --mode parallel_train_mp2", 'log_train_mp2/worker_0.log'),
+             f"{cur_dir}/run_test_llama.py --mode parallel_train_mp2 --ms-run-mode 0",
+             'log_train_mp2/worker_0.log'),
             (f"export ASCEND_RT_VISIBLE_DEVICES=6,7 && "
              f"msrun --worker_num=2 --local_worker_num=2 --master_port=61376 --log_dir=log_train_dp2 --join=True "
-             f"{cur_dir}/run_tests.py --mode parallel_train_dp2", 'log_train_dp2/worker_0.log')
+             f"{cur_dir}/run_test_llama.py --mode parallel_train_dp2 --ms-run-mode 0",
+             'log_train_dp2/worker_0.log')
+        ]
+
+        with Pool(len(commands)) as pool:
+            results = list(pool.imap(run_command, commands))
+        check_results(commands, results)
+
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend910b_training
+    @pytest.mark.env_single
+    def test_pynative_parallel_train(self):
+        """
+        Feature: Trainer.train()
+        Description: Test parallel trainer for training pynative mode
+        Expectation: AssertionError
+        """
+        commands = [
+            (f"export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 && "
+             f"msrun --worker_num=4 --local_worker_num=4 --master_port=61374 --log_dir=log_train_dp2_mp2 --join=True "
+             f"{cur_dir}/run_test_llama.py --mode parallel_train_dp2_mp2 --ms-run-mode 1",
+             'log_train_dp2_mp2/worker_0.log'),
+            (f"export ASCEND_RT_VISIBLE_DEVICES=4,5 && "
+             f"msrun --worker_num=2 --local_worker_num=2 --master_port=61375 --log_dir=log_train_mp2 --join=True "
+             f"{cur_dir}/run_test_llama.py --mode parallel_train_mp2 --ms-run-mode 1",
+             'log_train_mp2/worker_0.log'),
+            (f"export ASCEND_RT_VISIBLE_DEVICES=6,7 && "
+             f"msrun --worker_num=2 --local_worker_num=2 --master_port=61376 --log_dir=log_train_dp2 --join=True "
+             f"{cur_dir}/run_test_llama.py --mode parallel_train_dp2 --ms-run-mode 1",
+             'log_train_dp2/worker_0.log')
         ]
 
         with Pool(len(commands)) as pool:

@@ -409,71 +409,73 @@ class PreTrainedTokenizer(PreTrainedTokenizerBase):
         2. Use Trie structure to store tokens.
 
     Args:
-        model_max_length (int, optional):
-            The maximum length (in number of tokens) for the inputs to the transformer model.
-            Set when the tokenizer is loaded with ``from_pretrained()`` based on the model's
-            ``max_model_input_sizes`` attribute. Default: ``1e-30`` .
-        padding_side (str, optional):
-            Specifies the side on which the model should have padding applied. Options are
-            ['right', 'left']. The default value is picked from the class attribute of the
-            same name.
-        truncation_side (str, optional):
-            Specifies the side on which the model should have truncation applied.
-            Options are ['right', 'left']. The default value is picked from the class
-            attribute of the same name.
-        chat_template (str, optional):
-            A Jinja template string used to format lists of chat messages.
-            Default: ``"{% for message in messages %}{{'<|im_start|>' + message['role'] +
-            '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{
-            '<|im_start|>assistant\n' }}{% endif %}"`` .
-        model_input_names (List[str], optional):
-            Lists the names of inputs accepted by the forward pass of the model,
-            such as "token_type_ids" or "attention_mask". Defaults to values picked
-            from the class attribute of the same name. Default: ``None`` .
-        bos_token (Union[str, tokenizers.AddedToken], optional):
-            Represents the beginning of a sentence and is associated with
-            ``self.bos_token`` and ``self.bos_token_id``. Default: ``None`` .
-        eos_token (Union[str, tokenizers.AddedToken], optional):
-            Represents the end of a sentence and is associated with ``self.eos_token``
-            and ``self.eos_token_id``. Default: ``None`` .
-        unk_token (Union[str, tokenizers.AddedToken], optional):
-            Represents an out-of-vocabulary token and is associated with
-            ``self.unk_token`` and ``self.unk_token_id``. Default: ``None`` .
-        sep_token (Union[str, tokenizers.AddedToken], optional):
-            A special token separating two different sentences in the same input
-            (used by BERT, for example) and is associated with ``self.sep_token``
-            and ``self.sep_token_id``. Default: ``None`` .
-        pad_token (Union[str, tokenizers.AddedToken], optional):
-            Used to make arrays of tokens the same size for batching purposes and
-            will be ignored by attention mechanisms or loss computation. It is
-            associated with ``self.pad_token`` and ``self.pad_token_id``. Default: ``None`` .
-        cls_token (Union[str, tokenizers.AddedToken], optional):
-            Represents the class of the input (used by BERT, for example) and is
-            associated with ``self.cls_token`` and ``self.cls_token_id``. Default: ``None`` .
-        mask_token (Union[str, tokenizers.AddedToken], optional):
-            Represents a masked token (used by masked-language modeling pretraining
-            objectives like BERT) and is associated with ``self.mask_token`` and
-            ``self.mask_token_id``. Default: ``None`` .
-        additional_special_tokens (Union[tuple, list, tokenizers.AddedToken], optional):
-            Lists additional special tokens that are ensured to be skipped when
-            decoding with ``skip_special_tokens`` set to True. They will be added
-            at the end of the vocabulary if not already part of it. Default: ``None`` .
-        clean_up_tokenization_spaces (bool, optional):
-            Determines whether to clean-up spaces that were added when splitting the
-            input text during the tokenization process. Default: ``True`` .
-        split_special_tokens (bool, optional):
-            Specifies whether special tokens should be split during the tokenization
-            process. This affects the internal state of the tokenizer. By default, special
-            tokens are not split. For example, if '<s>' is the bos_token, then
-            ``tokenizer.tokenize("<s>")`` results in ['<s>']. If ``split_special_tokens``
-            is True, then ``tokenizer.tokenize("<s>")`` would result in ['<','s', '>']. Default: ``False`` .
+        **kwargs (Any): Keyword arguments.
+
+            - model_max_length (int, optional):
+              The maximum length (in number of tokens) for the inputs to the transformer model.
+              Set when the tokenizer is loaded with ``from_pretrained()`` based on the model's
+              ``max_model_input_sizes`` attribute. Default: ``1e-30``.
+            - padding_side (str, optional):
+              Specifies the side on which the model should have padding applied. Options are
+              ['right', 'left']. The default value is picked from the class attribute of the
+              same name.
+            - truncation_side (str, optional):
+              Specifies the side on which the model should have truncation applied.
+              Options are ['right', 'left']. The default value is picked from the class
+              attribute of the same name.
+            - chat_template (str, optional):
+              A Jinja template string used to format lists of chat messages.
+              Default: ``"{% for message in messages %}{{'<|im_start|>' + message['role'] +
+              '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{
+              '<|im_start|>assistant\n' }}{% endif %}"``.
+            - model_input_names (List[str], optional):
+              Lists the names of inputs accepted by the forward pass of the model,
+              such as "token_type_ids" or "attention_mask". Defaults to values picked
+              from the class attribute of the same name. Default: ``None``.
+            - bos_token (Union[str, tokenizers.AddedToken], optional):
+              Represents the beginning of a sentence and is associated with
+              ``self.bos_token`` and ``self.bos_token_id``. Default: ``None``.
+            - eos_token (Union[str, tokenizers.AddedToken], optional):
+              Represents the end of a sentence and is associated with ``self.eos_token``
+              and ``self.eos_token_id``. Default: ``None``.
+            - unk_token (Union[str, tokenizers.AddedToken], optional):
+              Represents an out-of-vocabulary token and is associated with
+              ``self.unk_token`` and ``self.unk_token_id``. Default: ``None``.
+            - sep_token (Union[str, tokenizers.AddedToken], optional):
+              A special token separating two different sentences in the same input
+              (used by BERT, for example) and is associated with ``self.sep_token``
+              and ``self.sep_token_id``. Default: ``None``.
+            - pad_token (Union[str, tokenizers.AddedToken], optional):
+              Used to make arrays of tokens the same size for batching purposes and
+              will be ignored by attention mechanisms or loss computation. It is
+              associated with ``self.pad_token`` and ``self.pad_token_id``. Default: ``None``.
+            - cls_token (Union[str, tokenizers.AddedToken], optional):
+              Represents the class of the input (used by BERT, for example) and is
+              associated with ``self.cls_token`` and ``self.cls_token_id``. Default: ``None``.
+            - mask_token (Union[str, tokenizers.AddedToken], optional):
+              Represents a masked token (used by masked-language modeling pretraining
+              objectives like BERT) and is associated with ``self.mask_token`` and
+              ``self.mask_token_id``. Default: ``None``.
+            - additional_special_tokens (Union[tuple, list, tokenizers.AddedToken], optional):
+              Lists additional special tokens that are ensured to be skipped when
+              decoding with ``skip_special_tokens`` set to True. They will be added
+              at the end of the vocabulary if not already part of it. Default: ``None``.
+            - clean_up_tokenization_spaces (bool, optional):
+              Determines whether to clean-up spaces that were added when splitting the
+              input text during the tokenization process. Default: ``True``.
+            - split_special_tokens (bool, optional):
+              Specifies whether special tokens should be split during the tokenization
+              process. This affects the internal state of the tokenizer. By default, special
+              tokens are not split. For example, if '<s>' is the bos_token, then
+              ``tokenizer.tokenize("<s>")`` results in ['<s>']. If ``split_special_tokens``
+              is True, then ``tokenizer.tokenize("<s>")`` would result in ['<','s', '>']. Default: ``False``.
 
     Returns:
         PreTrainedTokenizer instance.
 
     Examples:
         >>> from mindformers import LlamaTokenizer
-        >>> tokenizer = LlamaTokenizer.from_pretrained("llama_7b")
+        >>> tokenizer = LlamaTokenizer.from_pretrained("llama2_7b")
         >>> res = tokenizer("hello world")
         >>> print(res)
         {'input_ids': [1, 27701, 924], 'attention_mask': [1, 1, 1]}
@@ -671,7 +673,7 @@ class PreTrainedTokenizer(PreTrainedTokenizerBase):
 
         Args:
             pair (bool, optional): Whether the number of added tokens should be computed in the case of
-                a sequence pair or a single sequence. Default: ``False`` .
+                a sequence pair or a single sequence. Default: ``False``.
 
         Returns:
             Number of special tokens added to sequences.
@@ -691,9 +693,9 @@ class PreTrainedTokenizer(PreTrainedTokenizerBase):
 
         Args:
             text (TextInput): The sequence to be encoded.
-            pair (str, optional): A second sequence to be encoded with the first. Default: ``None`` .
+            pair (str, optional): A second sequence to be encoded with the first. Default: ``None``.
             add_special_tokens (bool, optional): Whether to add the special tokens associated with
-                the corresponding model. Default: ``False`` .
+                the corresponding model. Default: ``False``.
             kwargs (Any, optional): Will be passed to the underlying model specific
                 encode method. See details in `~PreTrainedTokenizerBase.__call__`.
 
@@ -1091,7 +1093,7 @@ class PreTrainedTokenizer(PreTrainedTokenizerBase):
             ids (Union[int, list[int]]):
                 The token id (or token ids) to convert to tokens.
             skip_special_tokens (bool, optional):
-                Whether to remove special tokens in the decoding. Default: ``False`` .
+                Whether to remove special tokens in the decoding. Default: ``False``.
 
         Returns:
             Str or List[str], the decoded token(s).

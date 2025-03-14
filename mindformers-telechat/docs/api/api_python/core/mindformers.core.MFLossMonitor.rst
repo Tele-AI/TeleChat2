@@ -6,15 +6,15 @@ mindformers.core.MFLossMonitor
     监控训练过程中loss等相关参数的回调函数。
 
     参数：
-        - **learning_rate** (Union[float, LearningRateSchedule], optional) - 学习率调度器。默认值： ``None`` 。
-        - **per_print_times** (int) - 每多少次step打印日志信息。默认值： ``1`` 。
-        - **micro_batch_num** (int) - 流水线并行时设置的MicroBatch大小。默认值： ``None`` 。
-        - **micro_batch_interleave_num** (int) - interleaved pipeline流水线并行时设置的MicroBatch大小。默认值： ``1`` 。
-        - **origin_epochs** (int) - 训练的epoch数量。默认值： ``None`` 。
-        - **dataset_size** (int) - 训练的数据集数量。默认值： ``None`` 。
-        - **initial_epoch** (int) - 训练开始的epoch数。默认值： ``0`` 。
-        - **initial_step** (int) - 训练开始的step数。默认值： ``0`` 。
-        - **global_batch_size** (int) - 总BatchSize大小。默认值： ``0`` 。
-        - **gradient_accumulation_steps** (int) - 梯度累加步数。默认值： ``1`` 。
-        - **check_for_nan_in_loss_and_grad** (bool) - 是否检查损失和梯度存在Nan。默认值： ``False`` 。
-        - **calculate_per_token_loss** (bool) - 是否计算每个token的loss。默认值： ``False`` 。
+        - **learning_rate** (Union[float, LearningRateSchedule], 可选) - 学习率调度器。默认值： ``None`` 。
+        - **per_print_times** (int, 可选) - 每多少次step打印日志信息。默认值： ``1`` 。
+        - **micro_batch_num** (int, 可选) - 流水线并行时设置的MicroBatch大小。默认值： ``1`` 。
+        - **micro_batch_interleave_num** (int, 可选) - interleaved pipeline流水线并行时设置的MicroBatch大小。默认值： ``1`` 。
+        - **origin_epochs** (int, 可选) - 训练的epoch数量。默认值： ``None`` 。
+        - **dataset_size** (int, 可选) - 训练的数据集数量。默认值： ``None`` 。
+        - **initial_epoch** (int, 可选) - 训练开始的epoch数。默认值： ``0`` 。
+        - **initial_step** (int, 可选) - 训练开始的step数。默认值： ``0`` 。
+        - **global_batch_size** (int, 可选) - 总BatchSize大小。默认值： ``0`` 。
+        - **gradient_accumulation_steps** (int, 可选) - 梯度累加步数。默认值： ``1`` 。
+        - **check_for_nan_in_loss_and_grad** (bool, 可选) - 是否检查损失和梯度存在Nan。默认值： ``False`` 。
+        - **calculate_per_token_loss** (bool, 可选) - 是否计算每个token的loss。默认值： ``False`` 。

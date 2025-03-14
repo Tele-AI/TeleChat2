@@ -18,6 +18,7 @@ from typing import Optional, Union, Callable
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 from mindformers.tools.logger import logger
 from mindformers.version_control import get_dataset_map
+from mindformers.utils import deprecated
 
 from .dataloader import build_dataset_loader
 from ..models.build_tokenizer import build_tokenizer
@@ -26,6 +27,7 @@ from .sampler import build_sampler
 from .base_dataset import BaseDataset
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.DATASET)
 class TokenClassificationDataset(BaseDataset):
     """

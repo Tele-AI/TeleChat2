@@ -8,10 +8,10 @@ mindformers.models.multi_modal.ModalContentTransformTemplate
     参数：
         - **output_columns** (List[str], 可选) - 指定要输出的列。默认值： ``None`` 。
         - **tokenizer** (Tokenizer, 可选) - 构建好的模型tokenizer。默认值： ``None`` 。
-        - **mode** (str) - 运行模式，推理 ``predict`` 或者训练 ``train`` 。默认值： ``predict`` 。
+        - **mode** (str, 可选) - 运行模式，推理 ``predict`` 或者训练 ``train`` 。默认值： ``predict`` 。
         - **vstack_columns** (List[str], 可选) - 指定批处理数据时将使用vstack的列。默认值： ``None`` 。
-        - **modal_content_padding_size** (int) - 在训练模式下使用，给继承的 ``Template`` 子类使用，通常表示一个训练样本内支持的模态内容（例如图片）的最大数量，当一个训练样本的模态内容数量小于该值时，会将模态内容扩增至该值。
-        - **max_length** (int) - 在训练模式下使用，给继承的Template子类使用，通常表示一个训练样本在分词之后的内容掩码完之后补齐到的最大长度。
+        - **modal_content_padding_size** (int, 可选) - 在训练模式下使用，给继承的 ``Template`` 子类使用，通常表示一个训练样本内支持的模态内容（例如图片）的最大数量，当一个训练样本的模态内容数量小于该值时，会将模态内容扩增至该值。默认值： ``1`` 。
+        - **max_length** (int, 可选) - 在训练模式下使用，给继承的Template子类使用，通常表示一个训练样本在分词之后的内容掩码完之后补齐到的最大长度。默认值： ``2048`` 。
         - **kwargs** (dict, 可选) - 一个可变数量的关键字参数，为待扩展的关键字参数预留。
 
     .. py:method:: batch(data_list, token_padding_length, **kwargs)
@@ -29,14 +29,14 @@ mindformers.models.multi_modal.ModalContentTransformTemplate
     .. py:method:: build_conversation_input_text(raw_inputs, result_recorder: DataRecord)
         :classmethod:
 
-        在推理模式下，将传入的数据组装成一个对话，通常被子类继承使用。
+        在推理模式下，将传入的文本数据处理成对话的形式，通常被子类继承使用。
 
         参数：
             - **raw_inputs** (str) - 输入的数据。
             - **result_recorder** (DataRecord) -  结果数据记录器，用于记录在推理过程中想要保存的数据，数值通过调用 ``DataRecord`` 的 ``put`` 方法进行数据存储。
 
         返回：
-            字符串类型，一个组装好的对话。
+            字符串类型，一个处理好的对话形式文本。
 
     .. py:method:: build_labels(text_id_list, result_recorder, **kwargs)
 

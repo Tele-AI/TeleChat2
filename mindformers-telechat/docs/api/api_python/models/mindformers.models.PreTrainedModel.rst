@@ -52,5 +52,5 @@ mindformers.models.PreTrainedModel
 
         参数：
             - **save_directory** (Union[str, os.PathLike]) - 保存模型权重和配置文件的路径。可以通过 ``MindFormerBook.get_default_checkpoint_save_folder()`` 获取路径。
-            - **save_name** (str) - 文件存储的名称，包括模型权重和配置文件，默认值： ``mindspore_model`` 。
+            - **save_name** (str, 可选) - 文件存储的名称，包括模型权重和配置文件，默认值： ``mindspore_model`` 。
             - **kwargs** (dict, 可选) - 一个可变数量的关键字参数，为待扩展的关键字参数预留。

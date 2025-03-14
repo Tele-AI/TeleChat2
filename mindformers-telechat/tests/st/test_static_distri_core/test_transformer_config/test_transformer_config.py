@@ -30,11 +30,15 @@ class ParallelConfig:
                  data_parallel: int = 1,
                  model_parallel: int = 1,
                  context_parallel: int = 1,
+                 context_parallel_algo: str = "colossalai_cp",
+                 ulysses_degree_in_cp=1,
                  vocab_emb_dp: bool = True):
         super(ParallelConfig, self).__init__()
         self.data_parallel = data_parallel
         self.model_parallel = model_parallel
         self.context_parallel = context_parallel
+        self.context_parallel_algo = context_parallel_algo
+        self.ulysses_degree_in_cp = ulysses_degree_in_cp
         self.vocab_emb_dp = vocab_emb_dp
 
 
@@ -44,7 +48,7 @@ class TestConfig(PretrainedConfig):
                  vocab_size: int = 1,
                  hidden_size: int = 1,
                  a: int = 0,
-                 parallel_config: ParallelConfig = ParallelConfig(2, 2, 2),
+                 parallel_config: ParallelConfig = ParallelConfig(2, 1, 2),
                  ):
         super(TestConfig, self).__init__()
         self.vocab_size = vocab_size
@@ -56,7 +60,7 @@ class TestConfig(PretrainedConfig):
 class TestTransformerConfig:
     """A test class for testing TransformerConfig"""
 
-    @pytest.mark.level0
+    @pytest.mark.level1
     @pytest.mark.platform_x86_cpu
     def test_transformer_config(self):
         """
@@ -71,11 +75,12 @@ class TestTransformerConfig:
         assert not hasattr(transformer_config, "vocab_size")
         assert transformer_config.padded_vocab_size != config.vocab_size
         assert not hasattr(transformer_config, "a")
-        assert transformer_config.tensor_parallel != config.parallel_config.model_parallel
+        assert transformer_config.tensor_parallel == config.parallel_config.model_parallel
         transformer_config = convert_to_transformer_config(config, transformer_config)
         assert transformer_config.hidden_size == config.hidden_size
         assert transformer_config.ffn_hidden_size == 4 * transformer_config.hidden_size
-        assert not hasattr(transformer_config, "vocab_size")
         assert transformer_config.padded_vocab_size == config.vocab_size
         assert transformer_config.a == config.a
+        assert transformer_config.ulysses_degree_in_cp == config.parallel_config.ulysses_degree_in_cp
+        assert transformer_config.context_parallel_algo == config.parallel_config.context_parallel_algo
         assert transformer_config.tensor_parallel == config.parallel_config.model_parallel

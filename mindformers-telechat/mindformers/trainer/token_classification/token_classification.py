@@ -14,6 +14,7 @@
 # ============================================================================
 """Token Classification Trainer."""
 from typing import Optional, List, Union
+
 from mindspore.train import Callback
 from mindspore.dataset import GeneratorDataset
 from mindspore.nn import TrainOneStepCell, Optimizer, Cell
@@ -23,12 +24,14 @@ from mindformers.models import PreTrainedModel, PreTrainedTokenizerBase
 from mindformers.tools.logger import logger
 from mindformers.tools.register import MindFormerRegister, \
     MindFormerModuleType, MindFormerConfig
+from mindformers.utils import deprecated
 from ..base_trainer import BaseTrainer
 from ..config_args import ConfigArguments
 from ..training_args import TrainingArguments
 from ...dataset.labels import cluener_labels
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER)
 class TokenClassificationTrainer(BaseTrainer):
     """
@@ -44,7 +47,7 @@ class TokenClassificationTrainer(BaseTrainer):
     """
 
     def __init__(self, model_name: str = None):
-        super(TokenClassificationTrainer, self).__init__("token_classification", model_name)
+        super().__init__("token_classification", model_name)
 
     def train(self,
               config: Optional[Union[dict, MindFormerConfig, ConfigArguments, TrainingArguments]] = None,

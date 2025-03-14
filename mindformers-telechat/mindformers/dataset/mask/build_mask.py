@@ -14,8 +14,10 @@
 # ============================================================================
 """Build Mask API."""
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType, MindFormerConfig
+from mindformers.utils import deprecated
 
 
+@deprecated(version="1.5.0")
 def build_mask(
         config: dict = None, default_args: dict = None,
         module_type: str = 'mask_policy', class_name: str = None, **kwargs):

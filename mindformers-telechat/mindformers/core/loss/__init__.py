@@ -15,7 +15,6 @@
 """MindFormers Loss."""
 from .build_loss import build_loss
 from .loss import (
-    CompareLoss,
     CrossEntropyLoss,
     L1Loss,
     MSELoss,

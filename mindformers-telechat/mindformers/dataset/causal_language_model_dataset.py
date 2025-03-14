@@ -18,20 +18,23 @@ import copy
 import re
 from typing import Union, Optional, Callable, List
 import numpy as np
+
 import mindspore.common.dtype as mstype
-from mindspore.dataset.transforms import TypeCast
-from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindspore.dataset.transforms.transforms import TypeCast
+
+from mindformers.tools.register.register import MindFormerRegister, MindFormerModuleType
 from mindformers.tools.logger import logger
 from mindformers.version_control import get_dataset_map
-from .dataloader import build_dataset_loader
-from .base_dataset import BaseDataset
 
+from .dataloader.build_dataloader import build_dataset_loader
+from .base_dataset import BaseDataset
 
 CAST_TO_INT_COLUMNS = ["input_ids", "labels"]
 
 
 def dyn_batch_wrapper(divisor, remainder, pad_token_id=0):
-    "Generate dynamic batch process function for padding each batch data."
+    """Generate dynamic batch process function for padding each batch data."""
+
     def batch_map_process(*cols):
         max_length = max([len(c) for c in cols[0]])
         if divisor and remainder:
@@ -54,6 +57,7 @@ def dyn_batch_wrapper(divisor, remainder, pad_token_id=0):
                     res.append(c)
             output.append(res)
         return tuple(output)
+
     return batch_map_process
 
 
@@ -68,7 +72,7 @@ def get_input_data_batch_slice_map(input_ids, eod_token_id, dis, rank_id: int = 
         rank_id: the current rank id
     Returns:
         batch_input_ids: the input token ids
-        batch_position_ids: the position ids cosidering eod reset
+        batch_position_ids: the position ids considering eod reset
         batch_attention_mask: the attention mask considering eod reset
     """
     rank = int(rank_id)
@@ -107,10 +111,11 @@ class CausalLanguageModelDataset(BaseDataset):
     Args:
         dataset_config (dict, optional):
             Config for dataset. When `dataset_config` is an empty dict or is None, all arguments below
-            will build a non-empty `dataset_config`. Otherwise, they will be ignored. Default: None.
-        data_loader (Union[dict, Callable]):
+            will build a non-empty `dataset_config`. Otherwise, they will be ignored. Default: ``None``.
+        data_loader (Union[dict, Callable], optional):
             Config for data loader or a data loader object. When `data_loader` is a `dict`,
             the string "type", "dataset_dir", "dataset_files" and "shuffle" are the keys can be parsed.
+            Default: ``None``.
 
             - type: Required. Indicates the type of dataset. The value must be string or class type.
               When the value is "MindDataset" or "TFRecordDataset",
@@ -127,41 +132,41 @@ class CausalLanguageModelDataset(BaseDataset):
 
             - shuffle: Optional. Whether to perform shuffle on the dataset. Must be `bool`.
 
-        input_columns (list[str]):
-            Column names before the map function.
-        output_columns (list[str]):
+        input_columns (list[str], optional):
+            Column names before the map function. Default: ``None``.
+        output_columns (list[str], optional):
             Column names after the map function.
-            Reuired when `eod_reset` is True; otherwise ignored. Default: None.
-        batch_size (int):
-            Size of each batch. Default: 8.
-        drop_remainder (bool):
+            Reuired when `eod_reset` is True; otherwise ignored. Default: ``None``.
+        batch_size (int, optional):
+            Size of each batch. Default: ``8``.
+        drop_remainder (bool, optional):
             Whether to discard the last batch when the number of data items contained in the last batch is smaller
-            than batch_size. Default: True.
-        num_parallel_workers (int):
+            than batch_size. Default: ``True``.
+        num_parallel_workers (int, optional):
             Specifies the number of concurrent processes or threads for map operations
-            to accelerate processing. Default: 8.
-        python_multiprocessing (bool):
-            Enabling the Python Multi-Process Mode to Accelerate Map Operations. Default: False.
-        repeat (int):
-            Number of times this dataset is repeated. Default: 1.
-        seed (int):
-            Random seed number. Default: 0.
-        prefetch_size (int):
-            Buffer queue size of each data processing operation in the pipeline. Default: 1.
-        numa_enable (bool):
-            Indicates whether to use the NUMA binding function. Default: False.
-        eod_reset (bool):
-            Specifies whether to reset the EOD. Default: False.
+            to accelerate processing. Default: ``8``.
+        python_multiprocessing (bool, optional):
+            Enabling the Python Multi-Process Mode to Accelerate Map Operations. Default: ``False``.
+        repeat (int, optional):
+            Number of times this dataset is repeated. Default: ``1``.
+        seed (int, optional):
+            Random seed number. Default: ``0``.
+        prefetch_size (int, optional):
+            Buffer queue size of each data processing operation in the pipeline. Default: ``1``.
+        numa_enable (bool, optional):
+            Indicates whether to use the NUMA binding function. Default: ``False``.
+        eod_reset (bool, optional):
+            Specifies whether to reset the EOD. Default: ``False``.
         eod_token_id (int, optional):
-            Indicates the token id of the EOD. Default: None, don't set the token id of the EOD manually.
-        auto_tune (bool):
-            Indicates whether to enable automatic optimization of data processing parameters. Default: False.
-        autotune_per_step (int):
-            Specifies the interval for adjusting the configuration step of automatic data acceleration. Default: 10.
-        filepath_prefix (str):
-            Path for saving optimized parameter configurations. Default: './autotune'.
-        profile (bool):
-            Whether to enable data collection. Default: False.
+            Indicates the token id of the EOD. Default: ``None``, don't set the token id of the EOD manually.
+        auto_tune (bool, optional):
+            Indicates whether to enable automatic optimization of data processing parameters. Default: ``False``.
+        autotune_per_step (int, optional):
+            Specifies the interval for adjusting the configuration step of automatic data acceleration. Default: ``10``.
+        filepath_prefix (str, optional):
+            Path for saving optimized parameter configurations. Default: ``'./autotune'``.
+        profile (bool, optional):
+            Whether to enable data collection. Default: ``False``.
 
     Returns:
         Instance of CausalLanguageModelDataset.
@@ -208,9 +213,9 @@ class CausalLanguageModelDataset(BaseDataset):
         dataset_config = cls.check_dataset_config(dataset_config, locals())
         dataset_config = copy.deepcopy(dataset_config)
         cls.init_dataset_config(dataset_config)
-        rank_id, device_num = cls._generate_shard_info()
-        dataset_config.rank_id = rank_id
-        dataset_config.device_num = device_num
+        shard_id, num_shards = cls._generate_shard_info()
+        dataset_config.shard_id = shard_id
+        dataset_config.num_shards = num_shards
         pad_token_id = 0 if dataset_config.pad_token_id is None else dataset_config.pad_token_id
 
         if isinstance(dataset_config.data_loader, dict):
@@ -225,15 +230,15 @@ class CausalLanguageModelDataset(BaseDataset):
         type_cast_op = TypeCast(mstype.int32)
         if dataset_config.eod_reset:
             if cls._is_semi_full_batch() or cls._is_data_parallel():
-                rank_id = 0
+                shard_id = 0
                 dis = dataset_config.batch_size
             else:
                 # Each card slice a small batch from the full batch
-                dis = dataset_config.batch_size // device_num
-                if dataset_config.batch_size % device_num != 0:
+                dis = dataset_config.batch_size // num_shards
+                if dataset_config.batch_size % num_shards != 0:
                     raise ValueError(
-                        f"batch size {dataset_config.batch_size} should be a multiple of device number {device_num}."
-                        " You should change the args: per_batch_size.")
+                        f"batch size {dataset_config.batch_size} should be a multiple of dataset shard number "
+                        f"{num_shards}. You should change the args: per_batch_size.")
 
             if dataset_config.dynamic_batch:
                 dataset = dataset.batch(dataset_config.batch_size,
@@ -248,7 +253,7 @@ class CausalLanguageModelDataset(BaseDataset):
                                         output_columns=dataset_config.input_columns)
             map_func = lambda input_ids: get_input_data_batch_slice_map(input_ids,
                                                                         eod_token_id=dataset_config.eod_token_id,
-                                                                        rank_id=rank_id,
+                                                                        rank_id=shard_id,
                                                                         dis=dis)
             dataset = get_dataset_map(dataset, map_func,
                                       input_columns=dataset_config.input_columns,
@@ -288,9 +293,9 @@ class CausalLanguageModelDataset(BaseDataset):
         dataset_dir = dataset_config.data_loader.pop("dataset_dir", None)
         dataset = build_dataset_loader(
             dataset_config.data_loader, default_args={'dataset_dir': dataset_dir,
-                                                      'num_shards': dataset_config.device_num,
+                                                      'num_shards': dataset_config.num_shards,
                                                       'column_names': dataset_config.input_columns,
-                                                      'shard_id': dataset_config.rank_id})
+                                                      'shard_id': dataset_config.shard_id})
         return dataset
 
     @classmethod
@@ -317,9 +322,26 @@ class CausalLanguageModelDataset(BaseDataset):
             raise ValueError(f"data_loader must contain dataset_dir or dataset_files,"
                              f"but get {dataset_config.data_loader}.")
 
+        if not cls._is_full_batch():
+            dataset_config = cls._reset_num_samples(dataset_config)
+
         dataset = build_dataset_loader(
             dataset_config.data_loader, default_args={'dataset_files': dataset_files,
-                                                      'num_shards': dataset_config.device_num,
-                                                      'shard_id': dataset_config.rank_id,
+                                                      'num_shards': dataset_config.num_shards,
+                                                      'shard_id': dataset_config.shard_id,
                                                       'columns_list': dataset_config.input_columns})
         return dataset
+
+    @classmethod
+    def _reset_num_samples(cls, dataset_config):
+        """reset num_samples for full_batch=False"""
+        num_samples = dataset_config.data_loader.get('num_samples')
+        if num_samples is None:
+            return dataset_config
+
+        # dataset_config.device_num is equal to dp
+        cur_num_samples = num_samples // dataset_config.num_shards
+        logger.info(f"If set full_batch=False and num_samples, "
+                    f"num_samples will reset from {num_samples} to {cur_num_samples}.")
+        dataset_config.data_loader.num_samples = cur_num_samples
+        return dataset_config

@@ -1,0 +1,101 @@
+{
+    "test_rotary_pos_embedding": [
+        {
+            "rotary_param": {
+                "kv_channels": 8,
+                "rotary_percent": 1.0
+            },
+            "chatglm": false,
+            "rotary_base": 100000,
+            "seq": 2,
+            "expected": [
+                [
+                    [
+                        [
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0
+                        ],
+                        [
+                            1.0,
+                            5.6234e-2,
+                            3.1623e-3,
+                            1.7783e-4,
+                            1.0,
+                            5.6234e-2,
+                            3.1623e-3,
+                            1.7783e-4
+                        ]
+                    ]
+                ]
+            ]
+        },
+        {
+            "rotary_param": {
+                "kv_channels": 8,
+                "rotary_percent": 0.5
+            },
+            "chatglm": false,
+            "rotary_base": null,
+            "seq": 2,
+            "expected": [
+                [
+                    [
+                        [
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0
+                        ],
+                        [
+                            1.0,
+                            0.01,
+                            1.0,
+                            0.01
+                        ]
+                    ]
+                ]
+            ]
+        },
+        {
+            "rotary_param": {
+                "kv_channels": 8,
+                "rotary_percent": 1.0
+            },
+            "chatglm": false,
+            "rotary_base": null,
+            "seq": 2,
+            "expected": [
+                [
+                    [
+                        [
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0
+                        ],
+                        [
+                            1.0,
+                            1.0e-1,
+                            1.0e-2,
+                            1.0e-3,
+                            1.0,
+                            1.0e-1,
+                            1.0e-2,
+                            1.0e-3
+                        ]
+                    ]
+                ]
+            ]
+        }
+    ]
+}

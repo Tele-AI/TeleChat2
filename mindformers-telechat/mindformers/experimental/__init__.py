@@ -17,7 +17,11 @@
 
 from .infer import core, models
 from .parallel_core import pynative
+from .model import LlamaForCausalLM
+from . import model
 
 __all__ = []
 __all__.extend(infer.__all__)
 __all__.extend(parallel_core.__all__)
+__all__.extend(models.__all__)
+__all__.extend(model.__all__)

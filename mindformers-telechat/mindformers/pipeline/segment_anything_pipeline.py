@@ -44,11 +44,13 @@ from mindformers.models.sam import (
     box_area,
     nms
 )
+from mindformers.utils import deprecated
 from .base_pipeline import Pipeline
 
 __all__ = ['SegmentAnythingPipeline']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="segment_anything")
 class SegmentAnythingPipeline(Pipeline):
     r"""Pipeline for image segment

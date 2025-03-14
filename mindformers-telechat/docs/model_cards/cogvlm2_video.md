@@ -132,7 +132,6 @@ MindFormers支持对`CogVLM2-Video-Chat-13B`进行LoRA微调，微调数据集�
 3. 启动微调脚本
 
    ```shell
-   export USE_ROPE_SELF_DEFINE=True
    python run_mindformer.py \
     --config configs/cogvlm2/finetune_cogvlm2_video_llama3_chat_13b_lora.yaml \
     --run_mode finetune \
@@ -166,7 +165,6 @@ MindFormers提供`CogVLM2-Video-Chat-13B`的推理示例，支持单卡推理、
 2. 启动推理脚本
 
    ```shell
-   export USE_ROPE_SELF_DEFINE=True
    python run_mindformer.py \
     --config configs/cogvlm2/predict_cogvlm2_video_llama3_chat_13b.yaml \
     --run_mode predict \
@@ -215,7 +213,6 @@ MindFormers提供`CogVLM2-Video-Chat-13B`的推理示例，支持单卡推理、
 2. 启动推理脚本
 
    ```shell
-   export USE_ROPE_SELF_DEFINE=True
    bash scripts/msrun_launcher.sh "run_mindformer.py \
     --config configs/cogvlm2/predict_cogvlm2_video_llama3_chat_13b.yaml \
     --run_mode predict \

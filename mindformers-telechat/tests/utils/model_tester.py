@@ -21,10 +21,13 @@ from mindspore import set_seed
 from mindspore.dataset import GeneratorDataset
 
 from mindformers.trainer import Trainer, TrainingArguments
+from mindformers.models import ChatGLM4Tokenizer, WhisperTokenizer
 from mindformers.models.build_tokenizer import build_tokenizer
 from mindformers.models.auto import AutoTokenizer
+from research.qwenvl.qwenvl_tokenizer import QwenVLTokenizer
 
 from tests.st.training_checker import TrainingChecker
+
 
 def create_tokenizer(auto_tokenizer=None):
     """build tokenizer from name."""
@@ -43,6 +46,27 @@ def create_tokenizer(auto_tokenizer=None):
         tokenizer = build_tokenizer(config=tokenizer_config)
     else:
         tokenizer = AutoTokenizer.from_pretrained(auto_tokenizer)
+    return tokenizer
+
+
+def create_qwenvl_tokenizer():
+    """build qwenvl tokenizer."""
+    vocab_file = "/home/workspace/mindspore_vocab/qwenvl/qwen.tiktoken"
+    tokenizer = QwenVLTokenizer(vocab_file=vocab_file)
+    return tokenizer
+
+
+def create_glm4_tokenizer():
+    """build glm4 tokenizer."""
+    vocab_file = "/home/workspace/mindspore_vocab/GLM4/tokenizer.model"
+    tokenizer = ChatGLM4Tokenizer(vocab_file=vocab_file)
+    return tokenizer
+
+
+def create_whisper_tokenizer():
+    """build whisper tokenizer."""
+    tokenizer_dir = "/home/workspace/mindspore_vocab/whisper"
+    tokenizer = WhisperTokenizer.from_pretrained(tokenizer_dir, language="Hindi", task="transcribe")
     return tokenizer
 
 
@@ -82,6 +106,7 @@ class ModelTester:
                  num_train_epochs: int = 1,
                  use_label: bool = False,
                  experiment_mode: bool = False,
+                 input_sliced_sig: bool = False,
                  **kwargs):
         os.environ['ASCEND_HOME_PATH'] = "/usr/local/Ascend/latest"
         set_seed(0)
@@ -91,6 +116,7 @@ class ModelTester:
         self.step_num = step_num
         self.use_label = use_label
         self.experiment_mode = experiment_mode
+        self.input_sliced_sig = input_sliced_sig
 
         optimizer_config = {
             # optimizer config
@@ -137,7 +163,7 @@ class ModelTester:
 
     def get_dataset(self, config):
         """build dataset for model training."""
-        if self.run_mode == 'train':
+        if self.run_mode == 'train' and not self.input_sliced_sig:
             seq_length = config.seq_length + 1
         else:
             seq_length = config.seq_length
@@ -158,7 +184,7 @@ class ModelTester:
         return dataset
 
     def set_train(self, model, config, dataset=None, loss_std=None, avg_time_std=None,
-                  checker_config=None, parallel_config=None, task='text_generation'):
+                  checker_config=None, parallel_config=None, task='text_generation', input_sliced_sig=False):
         """set model train."""
         if not self.experiment_mode:
             assert isinstance(loss_std, list) and self.step_num == len(loss_std)
@@ -183,6 +209,10 @@ class ModelTester:
         task_trainer.config.runner_config.sink_mode = False
         task_trainer.config.runner_wrapper.scale_sense.loss_scale_value = 1024
         task_trainer.config.callbacks = task_trainer.config.callbacks[:1]
+        task_trainer.config.model.model_config.use_flash_attention = config.use_flash_attention
+
+        if input_sliced_sig:
+            task_trainer.config.model.model_config.input_sliced_sig = input_sliced_sig
 
         if parallel_config is not None:
             task_trainer.set_parallel_config(**parallel_config)

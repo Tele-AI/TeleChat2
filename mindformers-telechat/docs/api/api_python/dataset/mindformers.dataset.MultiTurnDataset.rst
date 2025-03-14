@@ -1,7 +1,7 @@
 mindformers.dataset.MultiTurnDataset
 ====================================
 
-.. py:class:: mindformers.dataset.MultiTurnDataset(dataset_config: dict = None)
+.. py:class:: mindformers.dataset.MultiTurnDataset(dataset_config: dict)
 
     多轮对话数据集。
     生成的数据集有两列 `[input_ids, labels]` 。列 `input_ids` 为int32类型。列 `labels` 为int32类型。

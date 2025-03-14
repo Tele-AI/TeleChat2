@@ -53,8 +53,9 @@ Call）和长文本推理（支持最大 128K 上下文）等高级功能。 本
 
     ```text
     configs/glm4
-        ├── predict_glm4_9b_chat.yaml        # Atlas 800T A2推理配置
-        └── finetune_glm4_9b.yaml            # Atlas 800T A2微调配置
+        ├── predict_glm4_9b_chat.yaml          # Atlas 800T A2推理配置
+        ├── predict_glm4_9b_chat_800I_A2.yaml  # Atlas 800I A2(32G)推理配置
+        └── finetune_glm4_9b.yaml              # Atlas 800T A2微调配置
     ```
 
 ## 环境及数据准备
@@ -120,15 +121,39 @@ MindFormers提供已经转换完成的预训练权重、词表文件用于微调
 
 #### 模型权重转换
 
-执行`convert_weight.py`转换脚本，将HuggingFace的权重转换为完整的ckpt权重。
+1. 如果使能高性能模式（enable_high_performance=True)，需要按如下方式修改yaml
 
-```shell
-python convert_weight.py --torch_ckpt_path TORCH_CKPT_DIR --mindspore_ckpt_path {path}/MS_CKPT_NAME
+   ```yaml
+   model:
+     model_config:
+       qkv_concat: False
+       mlp_concat: False
+   ```
 
-# 参数说明
-torch_ckpt_path:  下载HuggingFace权重的文件夹路径
-mindspore_ckpt_path: 转换后的MindSpore权重文件保存路径
-```
+2. 执行`convert_weight.py`转换脚本，将HuggingFace的权重转换为完整的ckpt权重。
+
+   ```shell
+   python convert_weight.py --torch_ckpt_path TORCH_CKPT_DIR --mindspore_ckpt_path MS_CKPT_NAME --dtype DTYPE --config YAML_PATH
+
+   # 参数说明
+   torch_ckpt_path:     下载HuggingFace权重的文件夹路径
+   mindspore_ckpt_path: 转换后的MindSpore权重文件保存路径
+   dtype:               权重的数值类型，一般有float16、float32、bfloat16
+   config:              yaml文件路径
+   ```
+
+3. 如果使能高性能模式，需要额外执行如下转换。
+
+   ```shell
+   python convert_weight.py --ms_not_concat_ckpt_path PRE_CKPT_DIR --mindspore_ckpt_path MS_CKPT_NAME --dtype DTYPE --config YAML_PATH --concat True
+
+   # 参数说明
+   ms_not_concat_ckpt_path:    Mindspore权重文件路径（qkv和ffn not concat)
+   mindspore_ckpt_path:        转换后的MindSpore权重文件保存路径 (qkv和ffn concat)
+   dtype:                      权重的数值类型，一般有float16、float32、bfloat16
+   config:                     yaml文件路径
+   concat:                     指定开启qkv、ffn concat
+   ```
 
 ## 全参微调
 
@@ -157,26 +182,37 @@ bash scripts/msrun_launcher.sh "run_mindformer.py \
 
 ## 推理
 
-MindFormers提供`GLM-4-9B-Chat`的快速推理脚本，脚本主要通过generate高阶接口实现，支持单卡多batch推理。
-注意：需添加环境变量使能atb的PA算子：export MS_INTERNAL_DISABLE_CUSTOM_KERNEL_LIST=PagedAttention;
-                               export MS_LLM_SEQ_LENGTH_INDEX=1;
-                               export MS_LLM_FORCE_RESIZE_KERNELS=PagedAttention
+MindFormers提供`GLM-4-9B-Chat`的快速推理脚本，脚本主要通过generate高阶接口实现，支持单卡、双卡多batch推理。
 
 ```shell
-bash scripts/examples/glm4/run_glm4_predict.sh CONFIG_PATH CKPT_PATH TOKENIZER
+bash scripts/examples/glm4/run_glm4_predict.sh PARALLEL CONFIG_PATH CKPT_PATH TOKENIZER DEVICE_NUM
 
 # 参数说明
+PARALLEL：   单卡推理or多卡推理，单卡为single，多卡为parallel
 CONFIG_PATH: 模型配置文件路径
-CKPT_PATH:   模型权重文件路径
+CKPT_PATH:   模型权重文件路径，单卡为完整权重，双卡为分布式权重
 TOKENIZER:   模型tokenizer文件路径
+DEVICE_NUM： 多卡推理的卡数
 ```
 
 运行如下命令进行推理：
 
 ```shell
+# 单卡推理
 bash scripts/examples/glm4/run_glm4_predict.sh \
- path/to/glm4/predict_glm4_9b_chat.yaml \
- path/to/glm4.ckpt
+ single \
+ /path/to/glm4/predict_glm4_9b_chat.yaml \
+ /path/to/glm4.ckpt \
+ /path/to/tokenizer.model \
+ 1
+
+# 双卡推理
+bash scripts/examples/glm4/run_glm4_predict.sh \
+ parallel \
+ /path/to/glm4/predict_glm4_9b_800I_A2.yaml \
+ /path/to/glm4_ckpt_dir \
+ /path/to/tokenizer.model \
+ 2
 
 # 推理结果
 # [gMASK] <sop> <|user|>

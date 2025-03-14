@@ -21,7 +21,7 @@ runner_config:
   epochs: 2
   batch_size: 1
   sink_mode: True
-  sink_size: 4
+  sink_size: 1
 # optimizer
 optimizer:
   type: FP32StateAdamWeightDecay
@@ -118,7 +118,6 @@ callbacks:
 context:
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "56GB"
   save_graphs: False

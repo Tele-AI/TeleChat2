@@ -24,11 +24,13 @@ from mindformers.dataset import BaseDataset
 from mindformers.models import PreTrainedModel, PreTrainedTokenizerBase
 from mindformers.tools.register import MindFormerRegister,\
     MindFormerModuleType, MindFormerConfig
+from mindformers.utils import deprecated
 from ..base_trainer import BaseTrainer
 from ..config_args import ConfigArguments
 from ..training_args import TrainingArguments
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER)
 class TranslationTrainer(BaseTrainer):
     """
@@ -43,7 +45,7 @@ class TranslationTrainer(BaseTrainer):
         NotImplementedError: If train method, evaluate method or predict method not implemented.
     """
     def __init__(self, model_name: str = None):
-        super(TranslationTrainer, self).__init__("translation", model_name)
+        super().__init__("translation", model_name)
 
     def train(self,
               config: Optional[Union[dict, MindFormerConfig, ConfigArguments, TrainingArguments]] = None,

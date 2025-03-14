@@ -28,14 +28,12 @@ import mindspore as ms
 from mindspore import nn
 from mindspore import load_checkpoint, load_param_into_net
 from mindspore import context, Model
-
+from mindformers.tools.check_rules import check_yaml_depth_before_loading
 from mindformers.tools.hub import (
     PushToHubMixin,
     cached_file,
-    download_url,
     extract_commit_hash,
     is_offline_mode,
-    is_remote_url,
     get_checkpoint_shard_files,
     convert_file_size_to_int,
     has_file
@@ -329,8 +327,8 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
 
         Args:
             save_directory (Union[str, os.PathLike]): A directory to save the model weight and configuration.
-            save_name (str): The name of saved files, including model weight and configuration file.
-                Default: ``mindspore_model`` .
+            save_name (str, optional): The name of saved files, including model weight and configuration file.
+                Default: ``mindspore_model``.
             kwargs (dict, optional): A variable number of keyword parameters reserved
                 for the keyword parameters to be expanded.
 
@@ -562,6 +560,8 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
         meraged_dict = {}
         if os.path.exists(config_path):
             with open(config_path, 'r') as file_reader:
+                check_yaml_depth_before_loading(file_reader)
+                file_reader.seek(0)
                 meraged_dict = yaml.safe_load(file_reader.read())
             file_reader.close()
         meraged_dict.update(wraped_config)
@@ -1073,9 +1073,6 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
             elif os.path.isfile(os.path.join(subfolder, pretrained_model_name_or_path)):
                 archive_file = pretrained_model_name_or_path
                 is_local = True
-            elif is_remote_url(pretrained_model_name_or_path):
-                filename = pretrained_model_name_or_path
-                resolved_archive_file = download_url(pretrained_model_name_or_path)
             else:
                 filename = _add_variant(WEIGHTS_NAME, variant)
 
@@ -1427,7 +1424,7 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
 
         Args:
             auto_class (Union[str, type], optional):
-                The auto class to register this new model with. Default: ``AutoModel`` .
+                The auto class to register this new model with. Default: ``AutoModel``.
         """
         if not isinstance(auto_class, str):
             auto_class = auto_class.__name__
@@ -1529,14 +1526,30 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
         """
         return ckpt_dict
 
-    def convert_name(self, weight_name):
+    @classmethod
+    def convert_name(cls, weight_name):
         """convert HuggingFace weight name to MindFormers weight name"""
-        raise RuntimeError(f"{self.__class__.__name__} does not implemented convert_name method.")
+        raise RuntimeError(f"{cls.__name__} does not implemented convert_name method.")
 
-    def convert_weight_dict(self, source_dict):
+    @classmethod
+    def convert_weight_dict(cls, source_dict, **kwargs):
         """convert HuggingFace weight dict to MindFormers weight dict"""
-        raise RuntimeError(f"{self.__class__.__name__} does not implemented convert_weight_dict method.")
+        raise RuntimeError(f"{cls.__name__} does not implemented convert_weight_dict method.")
 
-    def convert_map_dict(self, source_dict):
+    @classmethod
+    def convert_map_dict(cls, source_dict, **kwargs):
         """convert HuggingFace map dict to MindFormers map dict"""
-        raise RuntimeError(f"{self.__class__.__name__} does not implemented convert_map_dict method.")
+        raise RuntimeError(f"{cls.__name__} does not implemented convert_map_dict method.")
+
+    @classmethod
+    def obtain_qkv_ffn_concat_keys(cls):
+        """
+        Obtain key list generated during weight concatenation of qkv/ffn concat operation.
+        For example:
+        When qkv/ffn concat weight conversion operation is performed on llama model,
+        new keys containing "w_qkv" and "w_gate_hidden" are generated.
+
+        Returns:
+            key_list (list): key word list of concat weights.
+        """
+        logger.info(f"{cls.__name__} does not support qkv concat check, skipping...")
