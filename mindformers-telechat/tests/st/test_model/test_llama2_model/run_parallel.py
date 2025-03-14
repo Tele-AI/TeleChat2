@@ -18,13 +18,15 @@ How to run this:
     pytest tests/st/test_model/test_llama2_model/test_parallel.py
 """
 import argparse
+import copy
 
 import mindspore as ms
 from mindformers import build_context
 from mindformers.modules.transformer.transformer import TransformerOpParallelConfig
+from mindformers.models.llama import LlamaConfig
 
 from tests.utils.model_tester import ModelTester
-from base_model import get_config, get_model
+from base_model import get_config, get_model, BASE_CONFIG
 
 ms.set_context(mode=ms.GRAPH_MODE)
 
@@ -87,28 +89,6 @@ def parallel_train_dp2():
     time_std = 280
 
     runner.set_train(model, model_config, loss_std=loss_std, avg_time_std=time_std)
-
-
-def parallel_predict_mp2():
-    """test llama2 predict in model_parallel=2."""
-    # dp=1, mp=4, pp=1
-    parallel_config = {
-        'use_parallel': True,
-        'model_parallel': 2,
-        'use_seq_parallel': False
-    }
-    ms.set_context(jit_config={"jit_level": "O0", "infer_boost": "on"})
-    runner = ModelTester(run_mode='predict', batch_size=2, experiment_mode=False, **parallel_config)
-    build_context(runner.args)
-
-    model_config = get_config()
-    model_config.parallel_config = runner.args.get_parallel_config()
-    model_config.batch_size = runner.batch_size  # set batch size for prediction
-
-    model = get_model(model_config)
-
-    outputs = r"hello world.ýedeshapeenty BritainAfter przyowy französ夏 très befindethape정dot programa"
-    runner.set_predict(model=model, expect_outputs=outputs)
 
 
 def parallel_train_mp2_cp2():
@@ -179,12 +159,73 @@ def parallel_train_sapp_mp2_pp2():
                      checker_config=checker_config)
 
 
+def train_input_sliced():
+    """test llama2 train when input has been processed to seq_length."""
+    # dp=2, parallel_optimizer
+    parallel_config = {
+        'use_parallel': True,
+        'data_parallel': 2,
+        'model_parallel': 1,
+        'pipeline_stage': 1,
+        'micro_batch_num': 1,
+    }
+    runner = ModelTester(run_mode='train', batch_size=8, input_sliced_sig=True, use_label=True, **parallel_config)
+    build_context(runner.args)
+
+    model_config = get_config()
+    model_config.input_sliced_sig = True
+    model_config.parallel_config = runner.args.get_parallel_config()
+    model = get_model(model_config)
+
+    loss_std = [10.215071, 10.185809, 10.154663, 10.117041, 10.073891,
+                10.031114, 9.991641, 9.953879, 9.921892, 9.895320,
+                9.867306, 9.841521, 9.812788, 9.804385, 9.781006,
+                9.780165, 9.771321, 9.777928, 9.774494, 9.765804]
+    time_std = 625
+
+    runner.set_train(model, model_config, loss_std=loss_std, avg_time_std=time_std)
+
+
+def parallel_train_ndtp_cp2x2y2z1():
+    """test llama2 train in context_parallel=2, model_parallel=4, use_3d_tensor_parallel =True,
+    tp_x=2, tp_y=2, tp_z=1"""
+    parallel_config = {
+        'use_parallel': True,
+        'use_seq_parallel': True,
+    }
+    runner = ModelTester(run_mode='train', batch_size=8, experiment_mode=False, **parallel_config)
+    build_context(runner.args)
+    base_config = copy.deepcopy(BASE_CONFIG)
+    base_config['use_3d_tensor_parallel'] = True
+    base_config['tp_x'] = 2
+    base_config['tp_y'] = 2
+    base_config['tp_z'] = 1
+    model_config = LlamaConfig(**base_config)
+    model_config.parallel_config = runner.args.get_parallel_config()
+    model = get_model(model_config)
+    context_parallel = {
+        'data_parallel': 1,
+        'model_parallel': 4,
+        'context_parallel': 2,
+        'pipeline_stage': 1,
+        'use_seq_parallel': True,
+    }
+
+    loss_std = [10.630943, 10.627740, 10.620153, 10.611454, 10.601110,
+                10.587559, 10.589168, 10.579193, 10.568209, 10.559528,
+                10.558443, 10.556045, 10.550834, 10.538548, 10.535338,
+                10.534349, 10.533194, 10.533914, 10.535391, 10.533615]
+    time_std = 1170
+    runner.set_train(model, model_config, loss_std=loss_std, avg_time_std=time_std, parallel_config=context_parallel)
+
+
 TEST_MAP = {
     'parallel_train_mp2_pp2': parallel_train_mp2_pp2,
     'parallel_train_dp2': parallel_train_dp2,
-    'parallel_predict_mp2': parallel_predict_mp2,
     'parallel_train_mp2_cp2': parallel_train_mp2_cp2,
-    'parallel_train_sapp_mp2_pp2': parallel_train_sapp_mp2_pp2
+    'parallel_train_sapp_mp2_pp2': parallel_train_sapp_mp2_pp2,
+    "train_input_sliced": train_input_sliced,
+    'parallel_train_ndtp_cp2x2y2z1': parallel_train_ndtp_cp2x2y2z1
 }
 
 if __name__ == '__main__':

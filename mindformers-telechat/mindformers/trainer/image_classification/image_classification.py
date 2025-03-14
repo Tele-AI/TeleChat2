@@ -14,7 +14,6 @@
 # ============================================================================
 """Image Classification Trainer."""
 from typing import Optional, List, Union
-
 import numpy as np
 from PIL.Image import Image
 
@@ -29,6 +28,7 @@ from mindformers.tools.logger import logger
 from mindformers.tools.image_tools import load_image
 from mindformers.tools.register import MindFormerRegister, \
     MindFormerModuleType, MindFormerConfig
+from mindformers.utils import deprecated
 from ..config_args import ConfigArguments
 from ..training_args import TrainingArguments
 from ..base_trainer import BaseTrainer
@@ -37,6 +37,7 @@ from ..base_trainer import BaseTrainer
 __all__ = ['ImageClassificationTrainer']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER, alias="image_classification")
 class ImageClassificationTrainer(BaseTrainer):
     """

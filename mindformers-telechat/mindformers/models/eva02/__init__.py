@@ -17,4 +17,4 @@
 from .eva import EVAModel
 from .eva_config import EVA02Config
 
-__all__ = []
+__all__ = ['EVAModel', 'EVA02Config']

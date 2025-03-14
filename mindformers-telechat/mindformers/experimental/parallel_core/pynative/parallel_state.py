@@ -36,6 +36,7 @@ valid_groups = normal_groups + special_groups
 # A list of global ranks for pipeline group
 _PIPELINE_GLOBAL_RANKS = None
 
+
 class GroupInfo:
     """ Comm Group Info """
     def __init__(self):
@@ -288,8 +289,8 @@ def initialize_model_parallel(tensor_model_parallel_size=1,
         if 'ep-dp' not in order and 'dp-ep' not in order:
             raise RuntimeError(f"The ep and dp must be adjacent in order ({order}).")
 
-    for key, _ in kwargs.items():
-        logger.warning(f"The parameter {key} is not used in save_checkpoint.")
+    for key in kwargs:
+        logger.warning(f"The parameter '{key}' is not used in initialize_model_parallel.")
 
     rank_generator = CreateCommGroups(tp=tensor_model_parallel_size,\
                                       ep=expert_model_parallel_size, \
@@ -439,6 +440,7 @@ def _get_global_ranks_helper(mode, check_initialized=True):
                                f"is initialized and {mode} in order.")
     return comm_group.group
 
+
 # pylint: disable=C0330
 def get_cp_global_ranks(check_initialized=True):
     """Get all global ranks of the context parallel group that the caller rank belongs to."""
@@ -532,30 +534,39 @@ def get_pipeline_model_parallel_rank():
     """Return my rank for the pipeline model parallel group."""
     return _get_rank_helper('pp')
 
+
 def get_pipeline_model_parallel_first_rank():
     """Return the global rank of the first precess in the pipeline"""
-    assert _PIPELINE_GLOBAL_RANKS is not None, "Pipeline parallel group is not initialized"
+    if _PIPELINE_GLOBAL_RANKS is None:
+        raise Exception("Pipeline parallel group is not initialized")
     return _PIPELINE_GLOBAL_RANKS[0]
+
 
 def get_pipeline_model_parallel_last_rank():
     """Return the global rank of the last precess in the pipeline"""
-    assert _PIPELINE_GLOBAL_RANKS is not None, "Pipeline parallel group is not initialized"
+    if _PIPELINE_GLOBAL_RANKS is None:
+        raise Exception("Pipeline parallel group is not initialized")
     last_rank_local = get_pipeline_model_parallel_world_size() - 1
     return _PIPELINE_GLOBAL_RANKS[last_rank_local]
 
+
 def get_pipeline_model_parallel_prev_rank():
     """Return the global rank that precedes the caller in the pipeline"""
-    assert _PIPELINE_GLOBAL_RANKS is not None, "Pipeline parallel group is not initialized"
+    if _PIPELINE_GLOBAL_RANKS is None:
+        raise Exception("Pipeline parallel group is not initialized")
     rank_in_pipeline = get_pipeline_model_parallel_rank()
     world_size = get_pipeline_model_parallel_world_size()
     return _PIPELINE_GLOBAL_RANKS[(rank_in_pipeline - 1) % world_size]
 
+
 def get_pipeline_model_parallel_next_rank():
     """Return the global rank that follows the caller in the pipeline"""
-    assert _PIPELINE_GLOBAL_RANKS is not None, "Pipeline parallel group is not initialized"
+    if _PIPELINE_GLOBAL_RANKS is None:
+        raise Exception("Pipeline parallel group is not initialized")
     rank_in_pipeline = get_pipeline_model_parallel_rank()
     world_size = get_pipeline_model_parallel_world_size()
     return _PIPELINE_GLOBAL_RANKS[(rank_in_pipeline + 1) % world_size]
+
 
 def is_pipeline_first_stage(ignore_virtual=False):
     """Return True if in the first pipeline model-parallel stage, False otherwise."""

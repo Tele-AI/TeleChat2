@@ -1,0 +1,250 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ""
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+use_parallel: True
+run_mode: &run_mode 'train'
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'llava'
+
+# runner config
+runner_config:
+  epochs: 1
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [ 0.9,0.999 ]
+  eps: 1.e-8
+  weight_decay: 0.0
+
+# lr sechdule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 2.e-6
+  lr_end: 0.0
+  warmup_ratio: 0.03
+  total_steps: -1 # -1 means it will load the total steps of the datase
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "llava-next-video-7b"
+    save_checkpoint_steps: 8000
+    keep_checkpoint_max: 3
+    integrated_save: False
+    async_save: False
+
+# default parallel of device num = 8 for Atlas 800T A2
+parallel_config:
+  data_parallel: 8
+  model_parallel: 1
+  pipeline_stage: 1
+  use_seq_parallel: True
+  micro_batch_num: 1
+  vocab_emb_dp: False
+  gradient_aggregation_group: 1
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+# recompute config
+recompute_config:
+  recompute: [16]
+  select_recompute: False
+  parallel_optimizer_comm_recompute: True
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+model:
+  model_config:
+    type: LlavaNextConfig
+    auto_register: llava_next_config.LlavaNextConfig
+    stage: 3 #1--Pretrain Stage for Adapter only; 2--Finetune Stage for full; 3-finetune video for full model
+    freeze_vision: False
+    freeze_llm: False
+    batch_size: 1
+    seq_length: &seq_length 4096
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float32"
+    param_init_type: "float32"
+    ignore_token_id: &ignore_token_id -100
+    add_newline: &add_newline False
+    video_contains_pooler: &video_contains_pooler True
+    spatial_pool_mode: "average"
+    spatial_pool_out_channels: 1024
+    spatial_pool_stride: 2
+    repetition_penalty: 1
+    use_past: False
+    block_size: 16
+    num_blocks: 512
+    is_dynamic: False
+    top_k: 0
+    top_p: 0.8
+    max_decode_length: 1024
+    do_sample: False
+    vision_model:
+      arch:
+        type: LlavaVisionEncoder
+        auto_register: llava_next_vision_tower.LlavaVisionEncoder
+      model_config:
+        type: LlavaNextVisionConfig
+        auto_register: llava_next_config.LlavaNextVisionConfig
+        hidden_size: 1024
+        intermediate_size: 4096
+        num_hidden_layers: 24
+        num_attention_heads: 16
+        use_flash_attention: True
+        image_size: &image_size 336
+        patch_size: &patch_size 14
+        num_queries: &num_queries 576
+        hidden_act: "quick_gelu"
+        dropout: 0.0
+        attention_dropout: 0.0
+        initializer_range: 0.02
+        initializer_factor: 1.0
+        checkpoint_name_or_path: ""
+        vision_feature_layer: -2
+        vision_feature_select_strategy: &vision_feature_select_strategy "default"
+    text_model:
+      arch:
+        type: LlamaForCausalLM
+      model_config:
+        type: LlamaConfig
+        hidden_size: 4096
+        num_layers: 32
+        num_heads: 32
+        vocab_size: 32064
+        intermediate_size: 11008
+        rms_norm_eps: 1.0e-5
+        emb_dropout_prob: 0.0
+        bos_token_id: 1
+        eos_token_id: 2
+        pad_token_id: 0
+        use_flash_attention: True
+        use_past_shard: False
+        offset: 0
+        checkpoint_name_or_path: ""
+  arch:
+    type: LlavaNextVlm
+    auto_register: llava_next.LlavaNextVlm
+
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: BaseMultiModalDataLoader
+    annotation_file: ""
+    shuffle: False
+  num_parallel_workers: 8
+  python_multiprocessing: True
+  drop_remainder: True
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+  seed: 42
+  construct_args_key: [ "input_ids", "images","image_context_pos", "labels"]
+  modal_to_text_transform:
+    type: BaseXModalToTextTransform
+    add_special_tokens: True
+    max_length: *seq_length
+    model_transform_template:
+      type: LlavaNextContentTransformTemplate
+      auto_register: llava_next_processor.LlavaNextContentTransformTemplate
+      frames_upbound: 16
+      add_special_tokens: True
+      patch_size: *patch_size
+      vision_feature_select_strategy: *vision_feature_select_strategy
+      output_columns: [ "input_ids", "images","image_context_pos", "labels"]
+      mode: 'train'
+      ignore_token_id: *ignore_token_id
+      add_length_offset: False
+      add_newline: *add_newline
+      num_queries: *num_queries
+      video_contains_pooler: *video_contains_pooler
+      add_time_instruction: False
+      image_processor:
+        type: ClipImageProcessorV2
+        auto_register: llava_next_multi_modal_processor.ClipImageProcessorV2
+        size:
+          shortest_edge: *image_size
+        crop_size:
+          height: 336
+          width: 336
+        image_mean: [ 0.48145466,0.4578275,0.40821073 ]
+        image_std: [ 0.26862954,0.26130258,0.27577711 ]
+        image_grid_pinpoints: [ [ 336,672 ],[ 672,336 ],[ 672,672 ],[ 1008,336 ],[ 336,1008 ] ]
+      prompt_processor:
+        type: VicunaPromptProcessor
+        auto_register: prompt_processor.VicunaPromptProcessor
+        roles:
+          human: "USER"
+          gpt: "ASSISTANT"
+        conv: "vicuna_v1.1"
+  tokenizer:
+    add_bos_token: True
+    add_eos_token: False
+    vocab_file: ""
+    image_tag: "<image>"
+    type: LlavaNextTokenizer
+    auto_register: llava_next_tokenizer.LlavaNextTokenizer
+
+train_dataset_task:
+  type: ModalToTextSFTDataset
+  dataset_config: *train_dataset
+
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense: 1.0
+  use_clip_grad: True
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  ascend_config:
+    precision_mode:
+      "must_keep_origin_dtype"
+  max_call_depth: 10000
+  max_device_memory: "57GB"
+  mempool_block_size: "57GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+  jit_config:
+    jit_level: "O1"
+  memory_optimize_level: "O0"
+  infer_boost: 'off'
+
+
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True

@@ -239,6 +239,7 @@ class Conv1d(nn.Conv1d):
             bias_init,
             dtype=dtype)
         self.compute_dtype = compute_dtype
+        self.cast = P.Cast()
 
     def construct(self, x):
         """forward"""
@@ -314,6 +315,7 @@ class LMHead(nn.Cell):
         self.matmul = P.MatMul(transpose_b=True)
         self.reshape = P.Reshape()
         self.shape = P.Shape()
+        self.cast = P.Cast()
 
     def construct(self, state, embedding_table):
         out_shape = self.shape(state)[:-1] + (self.out_channels,)
@@ -393,26 +395,22 @@ class WhisperAttention(nn.Cell):
                              embed_dim,
                              has_bias=False,
                              compute_dtype=self.compute_dtype,
-                             param_init_type=param_init_type,
-                             skip_redistribution=is_dynamic)
+                             param_init_type=param_init_type)
         self.v_proj = Linear(embed_dim,
                              embed_dim,
                              has_bias=bias,
                              compute_dtype=self.compute_dtype,
-                             param_init_type=param_init_type,
-                             skip_redistribution=is_dynamic)
+                             param_init_type=param_init_type)
         self.q_proj = Linear(embed_dim,
                              embed_dim,
                              has_bias=bias,
                              compute_dtype=self.compute_dtype,
-                             param_init_type=param_init_type,
-                             skip_redistribution=is_dynamic)
+                             param_init_type=param_init_type)
         self.out_proj = Linear(embed_dim,
                                embed_dim,
                                has_bias=bias,
                                compute_dtype=self.compute_dtype,
-                               param_init_type=param_init_type,
-                               skip_redistribution=is_dynamic)
+                               param_init_type=param_init_type)
 
         self.shape = P.Shape()
         self.transpose = P.Transpose()
@@ -597,20 +595,19 @@ class WhisperEncoderLayer(nn.Cell):
         self.self_attn_layer_norm = LayerNorm((self.embed_dim,), eps=1e-05)
         self.dropout = get_dropout(config.dropout)
         self.add = P.Add()
+        self.cast = P.Cast()
         self.activation_dropout = get_dropout(config.activation_dropout)
         self.fc1 = Linear(self.embed_dim,
                           config.encoder_ffn_dim,
                           has_bias=True,
                           activation=config.activation_function,
                           compute_dtype=self.compute_dtype,
-                          param_init_type=config.param_init_type,
-                          skip_redistribution=config.is_dynamic)
+                          param_init_type=config.param_init_type)
         self.fc2 = Linear(config.encoder_ffn_dim,
                           self.embed_dim,
                           has_bias=True,
                           compute_dtype=self.compute_dtype,
-                          param_init_type=config.param_init_type,
-                          skip_redistribution=config.is_dynamic)
+                          param_init_type=config.param_init_type)
         self.final_layer_norm = LayerNorm((self.embed_dim,), eps=1e-05)
 
         if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
@@ -704,6 +701,7 @@ class WhisperEncoder(nn.Cell):
         self.transpose = P.Transpose()
         self.add = P.Add()
         self.dropout = get_dropout(self.dropout)
+        self.cast = P.Cast()
 
         self.embed_positions = Embedding(vocab_table_size=self.max_source_positions,
                                          embedding_size=embed_dim,
@@ -833,6 +831,7 @@ class WhisperDecoderLayer(nn.Cell):
         self.dropout = get_dropout(config.dropout)
         self.activation_dropout = get_dropout(config.activation_dropout)
         self.add = P.Add()
+        self.cast = P.Cast()
 
         self.self_attn_layer_norm = LayerNorm((self.embed_dim,), eps=1e-05)
         self.encoder_attn = WhisperAttention(
@@ -853,14 +852,12 @@ class WhisperDecoderLayer(nn.Cell):
                           has_bias=True,
                           activation=config.activation_function,
                           compute_dtype=self.compute_dtype,
-                          param_init_type=config.param_init_type,
-                          skip_redistribution=config.is_dynamic)
+                          param_init_type=config.param_init_type)
         self.fc2 = Linear(config.decoder_ffn_dim,
                           self.embed_dim,
                           has_bias=True,
                           compute_dtype=self.compute_dtype,
-                          param_init_type=config.param_init_type,
-                          skip_redistribution=config.is_dynamic)
+                          param_init_type=config.param_init_type)
         self.final_layer_norm = LayerNorm((self.embed_dim,), eps=1e-05)
 
         if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
@@ -967,6 +964,7 @@ class WhisperDecoder(nn.Cell):
 
         self.layer_norm = LayerNorm((config.d_model,), eps=1e-05)
         self.add = P.Add()
+        self.cast = P.Cast()
         self.casual_mask = LowerTriangularMaskWithDynamic(seq_length=config.max_target_positions,
                                                           compute_type=config.compute_dtype,
                                                           is_dynamic=config.is_dynamic,

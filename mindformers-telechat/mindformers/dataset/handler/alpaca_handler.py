@@ -48,8 +48,8 @@ class AlpacaInstructDataHandler(BaseInstructDataHandler):
     user_role = "USER"
     assistant_role = "ASSISTANT"
 
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, **kwargs):
+        super().__init__(config, **kwargs)
         self.template = AlpacaTemplate()
 
     def format_func(self, example):
@@ -87,7 +87,8 @@ class AlpacaInstructDataHandler(BaseInstructDataHandler):
             mask.extend(conv_out['attention_mask'][1:])
         d = {'input_ids': ids, 'attention_mask': mask}
         # pylint: disable=W0212
-        d = self.tokenizer._pad(d, max_length=self.seq_length + 1, padding_strategy='max_length')
+        if not self.packing:
+            d = self.tokenizer._pad(d, max_length=self.seq_length + 1, padding_strategy='max_length')
         input_id = d['input_ids'][:self.seq_length + 1]
         target = np.array(d['input_ids'])
         total_len = int(np.not_equal(target, self.tokenizer.pad_token_id).sum())
@@ -106,6 +107,11 @@ class AlpacaInstructDataHandler(BaseInstructDataHandler):
             target[cur_len: cur_len + instruction_len] = self.ignore_token_id
 
             cur_len += round_len
+        if self.packing:
+            return {
+                "input_ids": input_id,
+                "labels": target[:len(input_id)].tolist()
+            }
         target[cur_len:] = self.ignore_token_id
         if cur_len < self.seq_length + 1:
             if cur_len != total_len:

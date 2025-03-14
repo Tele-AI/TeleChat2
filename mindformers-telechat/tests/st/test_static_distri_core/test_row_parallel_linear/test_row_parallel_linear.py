@@ -1,3 +1,4 @@
+# pylint: skip-file
 # Copyright 2024 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,7 +32,7 @@ def build_msrun_command(device_num, dp, cp, tp, has_bias=False):
 class TestRowParallelLinear:
     """A test class for testing RowParallelLinear"""
 
-    @pytest.mark.level0
+    @pytest.mark.level1
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.env_onecard
     def test_row_parallel_linear_on_single(self):
@@ -78,5 +79,22 @@ class TestRowParallelLinear:
         dp, cp, tp = (2, 2, 2)
         has_bias = False
         ret = os.system(build_msrun_command(device_num, dp, cp, tp, has_bias))
+        os.system(f"grep -E 'ERROR|error' {sh_path}/msrun_log/worker_0.log -C 3")
+        assert ret == 0
+
+
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend910b_training
+    @pytest.mark.env_single
+    def test_row_parallel_linear_precision_2card(self):
+        """
+        Feature: RowParallelLinear
+        Description: Test RowParallelLinear
+        Exception: AssertionError
+        """
+        sh_path = os.path.split(os.path.realpath(__file__))[0]
+        command = 'msrun --worker_num=2 --local_worker_num=2 --master_port=8167'\
+                  '--log_dir=msrun_log --join=True run_row_precision.py'
+        ret = os.system(command)
         os.system(f"grep -E 'ERROR|error' {sh_path}/msrun_log/worker_0.log -C 3")
         assert ret == 0

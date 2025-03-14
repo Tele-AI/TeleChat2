@@ -120,7 +120,7 @@ class MultiTurnDataset(BaseDataset):
         >>> dataset_from_class = MultiTurnDataset(config)
     """
 
-    def __new__(cls, dataset_config: dict = None):
+    def __new__(cls, dataset_config: dict):
         logger.info("Now Create Multi-turn Dataset.")
         if not is_version_python(sys.version, "3.9"):
             raise ValueError("MultiTurnDataset needs python3.9 or later, please upgrade your python.")

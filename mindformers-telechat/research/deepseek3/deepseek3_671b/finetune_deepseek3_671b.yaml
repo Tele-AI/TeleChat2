@@ -1,0 +1,205 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+load_ckpt_format: ''  # format of checkpoint files
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+use_parallel: True
+run_mode: 'train'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'deepseekV3'
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9, 0.95]
+  eps: 1.e-8
+
+# lr schedule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 5.e-6
+  lr_end: 1.e-6
+  warmup_ratio: 0.02
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: "./dataset"
+    shuffle: False
+  input_columns: ["input_ids", "labels"]  # "input_ids" , labels are used in instruction finetune.
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  max_call_depth: 10000
+  max_device_memory: "55GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  jit_config:
+    jit_level: "O1"
+
+# parallel config for device num = 1024
+parallel_config:
+  data_parallel: 16
+  model_parallel: 4
+  pipeline_stage: 16
+  expert_parallel: 8
+  micro_batch_num: &micro_batch_num 32
+  vocab_emb_dp: True
+  use_seq_parallel: True
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: True
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True
+  strategy_ckpt_config:
+    save_file: "./ckpt_strategy.ckpt"
+    only_trainable_params: False
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+# recompute config
+recompute_config:
+  recompute: [3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 2, 0]
+  select_recompute: False
+  parallel_optimizer_comm_recompute: True
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+# model config
+model:
+  model_config:
+    type: DeepseekV3Config
+    auto_register: deepseek3_config.DeepseekV3Config
+    batch_size: 1 # add for increase predict
+    seq_length: 4096
+    hidden_size:  7168
+    num_layers: &num_layers 61
+    num_heads: 128
+    max_position_embeddings: 4096
+    intermediate_size: 18432
+    kv_lora_rank: 512
+    n_kv_heads: 128
+    q_lora_rank: 1536
+    qk_rope_head_dim: 64
+    v_head_dim: 128
+    qk_nope_head_dim: 128
+    vocab_size: 129280
+    multiple_of: 256
+    rms_norm_eps: 1.0e-6
+    bos_token_id: 100000
+    eos_token_id: 100001
+    pad_token_id: 100001
+    ignore_token_id: -100
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float32"
+    router_dense_type: "float32"
+    param_init_type: "float32"
+    qkv_concat: False
+    use_past: False
+    extend_method: "None"
+    use_flash_attention: True
+    offset: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1]
+    checkpoint_name_or_path: ""
+    theta: 10000.0
+    return_extra_loss: True
+    mtp_depth: &mtp_depth 1
+    mtp_loss_factor: 0.3
+  arch:
+    type: DeepseekV3ForCausalLM
+    auto_register: deepseek3.DeepseekV3ForCausalLM
+
+#moe
+moe_config:
+  expert_num: &expert_num 256
+  expert_group_size: 8
+  capacity_factor: 1.5
+  aux_loss_factor: 0.05
+  num_experts_chosen: 8
+  routing_policy: "TopkRouterV2"
+  enable_sdrop: False
+  balance_via_topk_bias: &balance_via_topk_bias True
+  topk_bias_update_rate: &topk_bias_update_rate 0.001
+  use_fused_ops_topkrouter: True
+  group_wise_a2a: False
+  shared_expert_num: 1
+  routed_scaling_factor: 2.5
+  norm_topk_prob: False
+  first_k_dense_replace: 3
+  moe_intermediate_size: 2048
+  # greedy_group_limited strategy, select topk_group from n_group
+  topk_group: 4
+  n_group: 8
+  aux_loss_factors: [0.0001, 0., 0.]
+  aux_loss_types: ["expert", "device", "comm"]
+  z_loss_factor: 0.0
+  expert_model_parallel: 1
+  use_gating_sigmoid: True
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+    per_print_times: 1
+  # balance topk bias with callback
+  - type: TopkBiasBalanceCallback
+    balance_via_topk_bias: *balance_via_topk_bias
+    topk_bias_update_rate: *topk_bias_update_rate
+    num_layers: *num_layers
+    mtp_depth: *mtp_depth
+    expert_num: *expert_num
+    micro_batch_num: *micro_batch_num
+  - type: CheckpointMonitor
+    prefix: "deepseekv3"
+    save_checkpoint_steps: 1000
+    keep_checkpoint_max: 5
+    integrated_save: False
+    async_save: False
+    checkpoint_format: "safetensors"
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense: 1.0
+  use_clip_grad: True
+
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True

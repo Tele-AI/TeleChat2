@@ -27,7 +27,7 @@ from mindformers.dataset.dataloader.training_dataloader import TrainingDataset
 from mindformers.models.llama.llama_tokenizer import LlamaTokenizer
 from mindformers.tools import logger
 
-from mindformers.tools.dataset_preprocess.llama.conversation import get_default_conv_template
+from conversation import get_default_conv_template
 
 IGNORE_TOKEN_ID = -100
 

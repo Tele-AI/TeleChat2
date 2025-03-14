@@ -29,6 +29,7 @@ from research.qwen.qwen_tokenizer import QwenTokenizer
 from research.qwen1_5.qwen1_5_tokenizer import Qwen2Tokenizer
 from research.internlm.internlm_tokenizer import InternLMTokenizer
 from research.internlm2.internlm2_tokenizer import InternLM2Tokenizer
+from research.llama3.llama3_tokenizer import Llama3Tokenizer
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__),
                                              os.path.pardir)))
@@ -278,7 +279,7 @@ def get_args():
                        help='Path to binary output file without suffix')
     group.add_argument('--seq-length', type=int, default=4096,
                        help='The length of the output data.')
-    group.add_argument('--pad_or_stitch', type=str, default='pad', choices=['pad', 'stitch'],
+    group.add_argument('--pad_or_stitch', type=str, default='pad',
                        help='Decide whether to the longest or spliced to equal length')
 
     group = parser.add_argument_group(title='runtime')

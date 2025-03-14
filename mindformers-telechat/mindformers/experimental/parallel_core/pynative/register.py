@@ -19,8 +19,7 @@
 import inspect
 from enum import Enum
 from collections import defaultdict
-
-from mindformers.tools.logger import logger
+from mindformers.tools import logger
 
 
 class ModuleType(Enum):
@@ -89,7 +88,8 @@ class ModuleRegistry:
             raise ValueError("Register can only register class or function.")
         item_name = item_name if item_name is not None else register_item.__name__
         if cls.is_exist(module_type, item_name):
-            logger.warning(f"Module {module_type} with name {item_name} already exists and will be updated.")
+            logger.warning(f"Module {module_type} with name {item_name} "
+                           f"already exists and will be updated.")
         cls._registry[module_type][item_name]['item'] = register_item
         if meta is not None:
             if not isinstance(meta, dict):

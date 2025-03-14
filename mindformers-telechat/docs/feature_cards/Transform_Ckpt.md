@@ -1,5 +1,13 @@
 # 权重转换
 
+> ## 🚨 弃用说明
+>
+> 本文档已过时，不再进行维护，并将在 *1.5.0* 版本下架，其中可能包含过时的信息或已被更新的功能替代。建议参考最新的 **[官方文档](https://www.mindspore.cn/mindformers/docs/zh-CN/dev/index.html)** ，以获取准确的信息。
+>
+> 如果您仍需使用本文档中的内容，请仔细核对其适用性，并结合最新版本的相关资源进行验证。
+>
+> 如有任何问题或建议，请通过 **[社区Issue](https://gitee.com/mindspore/mindformers/issues/new)** 提交反馈。感谢您的理解与支持！
+
 ## 概述
 
 目前分布式训练/推理，当预训练权重与分布式策略不匹配时，需要**将预训练权重转换为对应分布式策略的权重**，主要适用场景如下：
@@ -8,7 +16,7 @@
 - 修改分布式策略进行训练/推理：需要将权重转换为对应分布式策略的权重。
 - 基于训练完的分布式权重进行单卡推理：需要将分布式权重合并为完整权重。
 
-主要参考：[mindspore分布式弹性训练与推理](https://www.mindspore.cn/tutorials/experts/zh-CN/master/parallel/model_transformation.html)
+主要参考：[mindspore分布式弹性训练与推理](https://www.mindspore.cn/docs/zh-CN/master/model_train/parallel/model_transformation.html)
 
 ## 自动权重转换
 
@@ -48,7 +56,7 @@ Mindformer的**自动权重转换**特性适用于以下三大任务场景，基
 
 ![checkpoint](assets/Transform_Ckpt/checkpoint.png)
 
-- 数据集：下载使用已转为mindrecord格式的[WikiText2数据集](https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com/MindFormers/features/transform_checkpoint/wikitext_512.zip)并解压。
+- 数据集: 参照[Llama对Wikitext-2](../model_cards/llama2.md#数据及权重准备)数据处理，讲wikitext-2数据集处理成序列长度为512的mindrecord数据集。
 
 ![wiki_dataset](assets/Transform_Ckpt/wiki_dataset.png)
 
@@ -344,8 +352,7 @@ Mindformers提供了权重转换工具，支持**离线权重转换**。
 - 单进程转换
 
   ```bash
-  cd mindformers/tools/ckpt_transform
-  python transform_checkpoint.py \
+  python mindformers/tools/ckpt_transform/transform_checkpoint.py \
   --src_checkpoint=src_checkpoint \
   --src_strategy=src_strategy \
   --dst_checkpoint=dst_checkpoint \
@@ -356,8 +363,7 @@ Mindformers提供了权重转换工具，支持**离线权重转换**。
 - 多进程转换
 
   ```bash
-  cd mindformers/tools/ckpt_transform
-  bash transform_checkpoint.sh src_checkpoint src_strategy dst_checkpoint dst_strategy world_size process_num [prefix]
+  bash mindformers/tools/ckpt_transform/transform_checkpoint.sh src_checkpoint src_strategy dst_checkpoint dst_strategy world_size process_num [prefix]
   ```
 
 **离线权重转换**相关参数说明如下：
@@ -431,7 +437,7 @@ bash run_distribute.sh ../rank_table_8.json ../configs/llama/run_llama_7b.yaml [
 开启了流水线并行，`dst_strategy`使用文件夹路径。
 
 ```bash
-python transform_checkpoint.py \
+python mindformers/tools/ckpt_transform/transform_checkpoint.py \
 --src_checkpoint=/worker/checkpoint/llama-7b-2layer/rank_0/llama_7b.ckpt \
 --dst_checkpoint=/worker/transform_ckpt/llama_7b_1to8/ \
 --dst_strategy=/worker/mindformers/output/strategy/
@@ -451,7 +457,7 @@ python transform_checkpoint.py \
 
 ```bash
 # 使用2个进程转换
-bash transform_checkpoint.sh \
+bash mindformers/tools/ckpt_transform/transform_checkpoint.sh \
 /worker/checkpoint/llama-7b-2layer/rank_0/llama_7b.ckpt \
 None \
 /worker/transform_ckpt/llama_7b_1to8/ \
@@ -526,7 +532,7 @@ bash run_distribute.sh ../rank_table_4_id04.json ../configs/llama/run_llama_7b.y
 开启了流水线并行，`dst_strategy`使用文件夹路径。
 
 ```bash
-python transform_checkpoint.py \
+python mindformers/tools/ckpt_transform/transform_checkpoint.py \
 --src_checkpoint=/worker/checkpoint/llama-7b-2layer-dp2mp2pp2/ \
 --src_strategy=/worker/checkpoint/llama-7b-2layer-dp2mp2pp2/strategy/merged_ckpt_strategy.ckpt \
 --dst_checkpoint=/worker/transform_ckpt/llama_7b_8to4/ \
@@ -547,7 +553,7 @@ python transform_checkpoint.py \
 
 ```bash
 # 使用2个进程转换
-bash transform_checkpoint.sh \
+bash mindformers/tools/ckpt_transform/transform_checkpoint.sh \
 /worker/checkpoint/llama-7b-2layer-dp2mp2pp2/ \
 /worker/checkpoint/llama-7b-2layer-dp2mp2pp2/strategy/merged_ckpt_strategy.ckpt \
 /worker/transform_ckpt/llama_7b_8to4/ \
@@ -577,8 +583,8 @@ bash transform_checkpoint.sh \
 
 ① 运行命令
 
-```python
-python transform_checkpoint.py \
+```shell
+python mindformers/tools/ckpt_transform/transform_checkpoint.py \
 --src_checkpoint=/worker/checkpoint/llama-7b-2layer-dp1mp2pp2/ \
 --src_strategy=/worker/checkpoint/llama-7b-2layer-dp1mp2pp2/strategy/merged_ckpt_strategy.ckpt \
 --dst_checkpoint=/worker/transform_ckpt/llama_7b_4to1/

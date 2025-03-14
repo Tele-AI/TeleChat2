@@ -66,21 +66,19 @@ def pipeline(
     r"""Pipeline for executing the inference flow of integrated tasks and models.
 
     Args:
-        task (str):
-            The task, now support ['zero_shot_image_classification', 'image_to_text_generation',
-            'multi_modal_to_text_generation', 'masked_image_modeling', 'image_classification', 'translation',
-            'fill_mask', 'text_classification', 'token_classification', 'question_answering', 'text_generation',
-            'image_to_text_retrieval', 'segment_anything']. Default: ``None`` .
+        task (str, optional):
+            The task, now support ['text_generation', 'image_to_text_generation',
+            'multi_modal_to_text_generation']. Default: ``None``.
         model (Union[str, PreTrainedModel, Model, Tuple[str, str]], optional):
-            The model used for task. Default: ``None`` .
+            The model used for task. Default: ``None``.
         tokenizer (PreTrainedTokenizerBase, optional):
-            The tokenizer of the model. Default: ``None`` .
+            The tokenizer of the model. Default: ``None``.
         image_processor (BaseImageProcessor, optional):
-            The image processor of the model. Default: ``None`` .
+            The image processor of the model. Default: ``None``.
         audio_processor (BaseAudioProcessor, optional):
-            The audio processor of the model. Default: ``None`` .
+            The audio processor of the model. Default: ``None``.
         backend (str, optional):
-            The inference backend. Currently, only "ms" is supported. Default: ``"ms"`` .
+            The inference backend. Currently, only "ms" is supported. Default: ``"ms"``.
         **kwargs (Any):
             Refers to the kwargs description of the corresponding task pipeline.
 
@@ -96,7 +94,10 @@ def pipeline(
         >>> # Construct inputs
         >>> inputs = ["I love Beijing, because", "LLaMA is a", "Huawei is a company that"]
         >>> # Initialize the environment
-        >>> build_context({'context': {'mode': 0}, 'parallel': {}, 'parallel_config': {}})
+        >>> build_context({
+        ...     'context': {'mode': 0, 'jit_config': {'jit_level': 'O0', 'infer_boost': 'on'}},
+        ...     'parallel': {},
+        ...     'parallel_config': {}})
         >>> # Tokenizer instantiation
         >>> tokenizer = AutoTokenizer.from_pretrained('llama2_7b')
         >>> # Model instantiation

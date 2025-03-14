@@ -25,7 +25,7 @@ class TestLanguageModel:
     @pytest.mark.level0
     @pytest.mark.skip(reason="Get golden loss from records")
     @pytest.mark.platform_arm_ascend910b_training
-    @pytest.mark.env_single
+    @pytest.mark.env_onecard
     @pytest.mark.run(order=1)
     def generate_goloden_loss(self):
         """
@@ -55,7 +55,7 @@ class TestLanguageModel:
 
     @pytest.mark.level0
     @pytest.mark.platform_arm_ascend910b_training
-    @pytest.mark.env_single
+    @pytest.mark.env_onecard
     @pytest.mark.run(order=2)
     def test_language_model_loss(self):
         """
@@ -84,7 +84,7 @@ class TestLanguageModel:
         assert ret == 0, f"msrun failed, please check {log_dir}/worker_*.log"
 
     @pytest.mark.level0
-    @pytest.mark.env_single
+    @pytest.mark.env_onecard
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.run(order=3)
     def test_compare_loss(self):

@@ -65,11 +65,6 @@ def main(config_path, use_parallel, load_checkpoint, vocab_file):
     if config.load_checkpoint:
         logger.info("----------------Transform and load checkpoint----------------")
         seq_length = config.model.model_config.seq_length
-        # set auto transform ckpt
-        if os.path.isdir(config.load_checkpoint) or config.use_parallel:
-            config.auto_trans_ckpt = True
-        else:
-            config.auto_trans_ckpt = False
         input_ids = Tensor(shape=(batch_size, seq_length), dtype=ms.int32, init=init.One())
         infer_data = network.prepare_inputs_for_predict_layout(input_ids)
         transform_and_load_checkpoint(config, model, network, infer_data, do_predict=True)
@@ -99,7 +94,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_path', default='predict_glm4_9b_chat.yaml', type=str,
                         help='model config file path.')
-    parser.add_argument('--use_parallel', default=False, type=bool,
+    parser.add_argument('--use_parallel', action='store_true',
                         help='if run model prediction in parallel mode.')
     parser.add_argument('--load_checkpoint', type=str,
                         help='load model checkpoint path or directory.')

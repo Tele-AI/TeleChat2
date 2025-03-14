@@ -31,7 +31,7 @@ from mindformers.modules.transformer import LowerTriangularMaskWithDynamic
 from mindformers.modules.transformer.op_parallel_config import _check_config
 from mindformers.tools.logger import logger
 from mindformers.tools.register.register import MindFormerModuleType, MindFormerRegister
-from mindformers.tools.utils import get_disable_custom_fa, get_predict_run_mode, get_use_rope_self_define
+from mindformers.tools.utils import get_predict_run_mode
 
 from research.telechat2.telechat_transformer import TelechatDecodeLayer
 from research.telechat2.telechat_interleave import TelechatDecodeLayerInterleave
@@ -86,12 +86,6 @@ class TelechatModel(TelechatPreTrainedModel):
         self.cast = P.Cast()
         self.shape = P.Shape()
         self.reshape = P.Reshape()
-        # default open internal kernel boost
-        self.use_rope_self_define = get_use_rope_self_define()
-        self.disable_custom_fa = get_disable_custom_fa()
-        logger.info("disable custom flash attention score op:{}".format(self.disable_custom_fa))
-        if self.disable_custom_fa:
-            self.prefill_flatten_mask = Tensor(np.triu(np.ones(shape=(128, 128), dtype=np.float16), 1))
 
         self.freqs_mgr = FreqsMgr(head_dim=self.head_dim,
                                   seq_length=config.seq_length,
@@ -100,13 +94,16 @@ class TelechatModel(TelechatPreTrainedModel):
                                   theta=config.theta,
                                   scaling_factor=config.scaling_factor,
                                   extend_method=config.extend_method,
-                                  parallel_config=config.parallel_config)
+                                  parallel_config=config.parallel_config,
+                                  is_dynamic=config.is_dynamic)
+        self.freqs_mgr.shard(config.parallel_config)
         self.casual_mask = LowerTriangularMaskWithDynamic(seq_length=config.seq_length,
                                                           compute_type=config.compute_dtype,
                                                           is_dynamic=config.is_dynamic,
                                                           pad_token_id=config.pad_token_id,
                                                           use_flash_attention=config.use_flash_attention,
-                                                          use_attn_mask_compression=config.use_attn_mask_compression)
+                                                          use_attn_mask_compression=config.use_attn_mask_compression,
+                                                          use_past=config.use_past)
         self.tok_embeddings = TelechatEmbedding(vocab_table_size=config.vocab_size,
                                                 sigma=config.sigma,
                                                 mean=config.mean,
@@ -134,7 +131,7 @@ class TelechatModel(TelechatPreTrainedModel):
                                                       ffn_dim_multiplier=config.ffn_dim_multiplier,
                                                       norm_eps=config.rms_norm_eps,
                                                       qkv_has_bias=config.qkv_has_bias,
-                                                      wo_has_bias=config.wo_has_bias,
+                                                      out_proj_has_bias=config.out_proj_has_bias,
                                                       compute_dtype=config.compute_dtype,
                                                       layernorm_compute_dtype=config.layernorm_compute_type,
                                                       softmax_compute_dtype=config.softmax_compute_type,
@@ -142,7 +139,6 @@ class TelechatModel(TelechatPreTrainedModel):
                                                       param_init_type=config.param_init_type,
                                                       res_dtype=config.res_dtype,
                                                       use_flash_attention=config.use_flash_attention,
-                                                      is_dynamic=config.is_dynamic,
                                                       use_rope_slice=config.use_rope_slice,
                                                       fine_grain_interleave=config.fine_grain_interleave,
                                                       parallel_config=config.parallel_config)
@@ -153,6 +149,7 @@ class TelechatModel(TelechatPreTrainedModel):
                                             n_kv_heads=config.n_kv_heads,
                                             sigma=config.sigma,
                                             mean=config.mean,
+                                            moe_config=config.moe_config,
                                             hidden_dropout_prob=config.hidden_dropout_prob,
                                             attention_dropout_prob=config.attention_dropout_prob,
                                             intermediate_size=config.intermediate_size,
@@ -160,7 +157,8 @@ class TelechatModel(TelechatPreTrainedModel):
                                             ffn_dim_multiplier=config.ffn_dim_multiplier,
                                             norm_eps=config.rms_norm_eps,
                                             qkv_has_bias=config.qkv_has_bias,
-                                            wo_has_bias=config.wo_has_bias,
+                                            out_proj_has_bias=config.out_proj_has_bias,
+                                            qkv_concat=config.qkv_concat,
                                             compute_dtype=config.compute_dtype,
                                             layernorm_compute_dtype=config.layernorm_compute_type,
                                             softmax_compute_dtype=config.softmax_compute_type,
@@ -180,6 +178,7 @@ class TelechatModel(TelechatPreTrainedModel):
         self.norm_out = LlamaRMSNorm(config.hidden_size, config.rms_norm_eps,
                                      compute_type=config.layernorm_compute_type)
         dp = config.parallel_config.data_parallel
+        self.expert_num = 1 if config.moe_config is None else config.moe_config.expert_num
         if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
             self.tok_embeddings.pipeline_stage = 0
             if config.parallel_config.pipeline_stage > 1:
@@ -199,7 +198,7 @@ class TelechatModel(TelechatPreTrainedModel):
                 self.norm_out.shard((dp, 1, 1))
 
     # pylint: disable=W0613
-    def construct(self, tokens: Tensor, batch_valid_length=None, batch_index=None, zactivate_len=None,
+    def construct(self, tokens: Tensor, batch_valid_length=None, batch_index=None, zactivate_len=None, aux_loss=None,
                   block_tables=None, slot_mapping=None, prefix_keys_values=None):
         """
         Forward of telechat model.
@@ -218,18 +217,8 @@ class TelechatModel(TelechatPreTrainedModel):
         mask = None
         if self.use_past:
             if self.is_first_iteration:
-                if self.use_rope_self_define:
-                    freqs_cis = self.freqs_mgr(seq_len)
-                else:
-                    freqs_cis = self.freqs_mgr.prefill(bs, seq_len)
-
-                if self.use_flash_attention:
-                    if self.disable_custom_fa:  # only support fp16
-                        mask = self.prefill_flatten_mask
-                        freqs_cis = self.freqs_mgr.prefill_flatten()
-                else:
-                    mask = self.casual_mask(tokens)  # mask: [bs, seq, seq]
-
+                freqs_cis = self.freqs_mgr.prefill(bs, seq_len)
+                mask = self.casual_mask.prefill()
                 if prefix_keys_values is not None:
                     if mask is None:
                         mask = self.casual_mask(tokens)
@@ -253,9 +242,16 @@ class TelechatModel(TelechatPreTrainedModel):
         # h: [bs, seq/1, hidden_dim]
         for i in range(self.num_layers):
             prefix_kv = prefix_keys_values[i] if prefix_keys_values is not None else None
-            h = self.layers[i](h, freqs_cis, mask, batch_valid_length=batch_valid_length, block_tables=block_tables,
-                               slot_mapping=slot_mapping, prefix_keys_values=prefix_kv)
+            if self.expert_num > 1:
+                h, aux_loss = self.layers[i](h, freqs_cis, mask, batch_valid_length=batch_valid_length,
+                                             block_tables=block_tables, aux_loss=aux_loss, slot_mapping=slot_mapping,
+                                             prefix_keys_values=prefix_kv)
+            else:
+                h = self.layers[i](h, freqs_cis, mask, batch_valid_length=batch_valid_length, block_tables=block_tables,
+                                   slot_mapping=slot_mapping, prefix_keys_values=prefix_kv)
         output = self.norm_out(h)
+        if self.expert_num > 1:
+            return output, aux_loss
         return output
 
 
@@ -291,9 +287,13 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
         self.pad_token_id = config.pad_token_id
         self.use_past = config.use_past
         self.vocab_size = config.vocab_size
+        self.rl_config = config.rl_config
         self.is_first_iteration = True
-        self.disable_custom_fa = get_disable_custom_fa()
 
+        self.dp = config.parallel_config.data_parallel
+        self.mp = config.parallel_config.model_parallel
+        self.expert_num = config.moe_config.expert_num
+        self.init_aux_loss = Tensor(np.zeros([self.dp * self.mp, self.expert_num]), mstype.float32)
         self.shape = P.Shape()
         self.reshape = P.Reshape()
         self.cast = P.Cast()
@@ -302,8 +302,7 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
         self.mul = P.Mul()
         self.add = P.Add()
         self.ones = P.Ones()
-        self.gather = P.Gather(1)
-        self.prefill_gather_flatten = P.Gather()
+        self.gather = P.Gather()
         self.sub_batch_valid_len = P.Sub()
         self.model = TelechatModel(config=config)
         self.lm_head = Linear(in_channels=config.hidden_size,
@@ -328,13 +327,13 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
 
         dp = config.parallel_config.data_parallel
         mp = config.parallel_config.model_parallel
+        self.aux_reduce_mean = P.ReduceMean(keep_dims=True).shard(((1, 1),))
         if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
             self.slice.shard(((dp, 1),))
             self.not_equal.shard(((dp, 1), ()))
             self.mul.shard(((dp, 1), (dp, 1)))
             self.add.shard(((dp, 1), ()))
             self.gather.shard(((dp, 1, 1), (dp,)))
-            self.prefill_gather_flatten.shard(((dp, 1, 1), (dp,)))
             self.sub_batch_valid_len.shard(((1,), ()))
             if config.parallel_config.vocab_emb_dp or (vocab_size % mp != 0):
                 self.lm_head.shard(strategy_matmul=((dp, 1), (1, 1)))
@@ -356,39 +355,6 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
         self.predict_run_mode = get_predict_run_mode()
 
         logger.info("Predict run mode:{}".format(self.predict_run_mode))
-
-    def prepare_inputs_for_prefill_flatten(self, input_ids, batch_valid_length, slot_mapping, model_inputs):
-        """prepare inputs ids for prefill flatten"""
-        batch_valid_length_bs = batch_valid_length.shape[0]
-        input_ids_bs = input_ids.shape[0]
-        if batch_valid_length_bs == input_ids_bs and batch_valid_length_bs > 1:
-            input_ids_list = []
-            for i in range(batch_valid_length_bs):
-                context_len = batch_valid_length[i]
-                input_ids_list.append(input_ids[i][:context_len])
-            input_ids = np.concatenate(input_ids_list, 0)
-            input_ids = input_ids.reshape((1, -1))
-            slot_mapping = np.delete(slot_mapping, np.where(slot_mapping == -1))
-        model_inputs["input_ids"] = Tensor.from_numpy(input_ids.astype(np.int32))
-        model_inputs["slot_mapping"] = Tensor.from_numpy(slot_mapping)
-        return model_inputs
-
-
-    def prepare_inputs_for_generation(self, input_ids, **kwargs):
-        """Return model inputs for generation"""
-        model_inputs = {}
-        if self.config.is_dynamic and "origin_inputs" in kwargs:
-            input_ids = kwargs["origin_inputs"]
-        model_inputs["input_ids"] = Tensor.from_numpy(
-            input_ids.astype(np.int32))
-
-        prefill = kwargs.get("prefill")
-        if self.disable_custom_fa and prefill:
-            batch_valid_length = kwargs.get("valid_length_each_example")
-            slot_mapping = kwargs.get("slot_mapping")
-            model_inputs = self.prepare_inputs_for_prefill_flatten(input_ids, batch_valid_length, slot_mapping,
-                                                                   model_inputs)
-        return model_inputs
 
     # pylint: disable=W0613
     def prepare_inputs_for_predict_layout(self, input_ids, **kwargs):
@@ -450,6 +416,7 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
             Tensor: The loss or (logits, tokens, input_mask) of the network.
         """
         bsz, seqlen = self.shape(input_ids)
+        aux_loss = None
         if self.use_past:
             if not isinstance(batch_valid_length, Tensor):
                 batch_valid_length = self.ones((bsz,), mstype.int32)
@@ -459,16 +426,19 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
             tokens = input_ids
         if batch_valid_length is not None:
             batch_valid_length = self.reshape(batch_valid_length, (-1,))
-        output = self.model(tokens, batch_valid_length, batch_index, zactivate_len, block_tables, \
-                            slot_mapping, prefix_keys_values)
+        if self.expert_num == 1:
+            output = self.model(tokens, batch_valid_length, batch_index, zactivate_len, block_tables=block_tables, \
+                                slot_mapping=slot_mapping, prefix_keys_values=prefix_keys_values)
+        else:
+            output, aux_loss = self.model(tokens, batch_valid_length, batch_index, zactivate_len, self.init_aux_loss,
+                                          block_tables, slot_mapping, prefix_keys_values)
         pre_gather = (not self.use_past or self.is_first_iteration) and batch_valid_length is not None
         if pre_gather:
-            if self.disable_custom_fa:
-                batch_valid_length = mint.cumsum(batch_valid_length, 0)
-                output = self.prefill_gather_flatten(output, self.sub_batch_valid_len(batch_valid_length, 1), 1)
-            else:
-                output = self.gather(output, self.sub_batch_valid_len(batch_valid_length, 1), 1)
+            batch_valid_length = mint.cumsum(batch_valid_length, 0)
+            output = self.gather(output, self.sub_batch_valid_len(batch_valid_length, 1), 1)
         logits = self.lm_head(output)
+        if self.rl_config is not None:
+            return logits
 
         input_mask = self.cast(self.not_equal(tokens, self.pad_token_id), mstype.float32)
         if labels is None:
@@ -493,6 +463,9 @@ class TelechatForCausalLM(TelechatPreTrainedModel):
         labels = self.reshape(labels, (-1,))
         input_mask = self.reshape(input_mask, (-1,))
         loss = self.loss(logits, labels, input_mask)
+        if self.expert_num > 1:
+            aux_loss = self.aux_reduce_mean(aux_loss).reshape(-1)
+            loss = loss + aux_loss
         return loss
 
     def kvcache(self, layer_idx):

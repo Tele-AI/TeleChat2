@@ -13,14 +13,27 @@
 # limitations under the License.
 # ============================================================================
 """Config Class"""
-from typing import Callable
-
+import copy
+from typing import Callable, Dict, Any
+from enum import Enum
 import mindspore.common.dtype as mstype
+from mindspore import log as logger
 
 from mindformers.experimental.utils import init_method_normal
 
 
-class ModelParallelConfig:
+class ContextParallelAlgo(Enum):
+    """context parallel algorithm type.
+
+    Args:
+        Enum (str): chosses context parallel type
+    """
+    colossalai_cp = "colossalai_cp"
+    ulysses_cp = "ulysses_cp"
+    hybird_cp = "hybird_cp"
+
+
+class ModelParallelConfig():
     r"""
         Parallel config class for setting parallel configuration, such as the data parallel and model parallel.
 
@@ -40,6 +53,8 @@ class ModelParallelConfig:
                 FeedForward layer will be sliced according to the model parallel way. Default: 1.
             context_parallel (int): The context parallel way. The context data will be sliced into n parts for each
                 layer according to the context parallel strategy. Default: 1.
+            context_parallel_algo (str): Which type of context parallel algorithm to use. Supports `colossalai_cp`,
+                `ulysses_cp` and `hybird_cp`. Only takes effect when context_parallel > 1. Default: `colossalai_cp`
             vocab_emb_dp (bool): Shard embedding in model parallel or data parallel. If True, the embedding lookup
                 will be a data parallel style training and model_parallel value will be ignored.  If false, the
                 embedding table will be sharded into n parts at the 0-th dimension row slice of the embedding table,
@@ -55,13 +70,45 @@ class ModelParallelConfig:
                  data_parallel: int = 1,
                  tensor_parallel: int = 1,
                  context_parallel: int = 1,
+                 context_parallel_algo: str = 'colossalai_cp',
+                 ulysses_degree_in_cp=1,
                  vocab_emb_dp: bool = True,
+                 sequence_parallel: bool = False,
                  **kwargs):
         super(ModelParallelConfig, self).__init__(**kwargs)
         self.data_parallel = data_parallel
         self.tensor_parallel = tensor_parallel
         self.context_parallel = context_parallel
+        self.context_parallel_algo = ContextParallelAlgo(context_parallel_algo)
+        self.ulysses_degree_in_cp = ulysses_degree_in_cp
         self.vocab_emb_dp = vocab_emb_dp
+        self.sequence_parallel = sequence_parallel
+        self._check_context_parallel()
+
+    def _check_context_parallel(self):
+        """check whether context parallel config is valid.
+
+        Raises:
+            ValueError: in hybird_cp algorithm, context_parallel should be divisible by ulysses_degree_in_cp
+        """
+        if self.context_parallel == 1:
+            if self.context_parallel_algo.value != ContextParallelAlgo.colossalai_cp.value:
+                logger.warning(f"context_parallel_algo {self.context_parallel_algo.value} will not take effect "
+                               "when context_parallel == 1.")
+            if self.ulysses_degree_in_cp > 1:
+                logger.warning(f"ulysses_degree_in_cp {self.ulysses_degree_in_cp} will not take effect "
+                               "when context_parallel == 1.")
+            return
+
+        # here context parallel > 1
+        if self.context_parallel_algo.value != ContextParallelAlgo.hybird_cp.value and self.ulysses_degree_in_cp > 1:
+            logger.warning(f"ulysses_degree_in_cp {self.ulysses_degree_in_cp} will not take effect when "
+                           f"context_parallel_algo {self.context_parallel_algo.value} is not `hybird_cp`.")
+        if (self.context_parallel_algo.value == ContextParallelAlgo.hybird_cp.value and
+                self.context_parallel % self.ulysses_degree_in_cp != 0):
+            raise ValueError(f"When using hybird_cp algorithm, context_parallel {self.context_parallel} "
+                             f"should be divisible by ulysses_degree_in_cp {self.ulysses_degree_in_cp}. "
+                             "Please check your `ulysses_degree_in_cp`.")
 
 
 class TransformerConfig(ModelParallelConfig):
@@ -147,10 +194,12 @@ class TransformerConfig(ModelParallelConfig):
                  init_method_std: float = 0.01,
                  rotary_percent: float = 1.0,
                  rotary_seq_len_interpolation_factor: float = None,
+                 rotary_base: float = 10000.0,
                  compute_dtype: mstype = mstype.float32,
                  softmax_compute_dtype: mstype = mstype.float32,
                  params_dtype: mstype = mstype.float32,
                  embedding_init_type: mstype = mstype.float32,
+                 rotary_dtype: mstype = mstype.float32,
                  add_bias_linear: bool = False,
                  add_qkv_bias: bool = False,
                  mlp_has_gate: bool = True,
@@ -161,16 +210,17 @@ class TransformerConfig(ModelParallelConfig):
                  use_flash_attn: bool = False,
                  qkv_concat: bool = False,
                  use_attn_mask_compression: bool = False,
+                 use_ring_attention: bool = False,
                  apply_query_key_layer_scaling: bool = False,
                  attention_softmax_in_fp32: bool = True,
                  apply_residual_connection_post_layernorm: bool = False,
                  fp16_lm_cross_entropy: bool = False,
                  untie_embeddings_and_output_weights: bool = True,
-                 hidden_act: str = "gelu",
+                 hidden_act: str = "silu",
                  mask_func_type: str = "attn_mask_fill",
                  normalization: str = "FusedRMSNorm",
                  position_embedding_type: str = "rope",
-                 init_method: Callable = None,
+                 init_method_: Callable = None,
                  output_layer_init_method: Callable = None,
                  **kwargs):
         super(TransformerConfig, self).__init__(**kwargs)
@@ -189,10 +239,12 @@ class TransformerConfig(ModelParallelConfig):
         self.init_method_std = init_method_std
         self.rotary_percent = rotary_percent
         self.rotary_seq_len_interpolation_factor = rotary_seq_len_interpolation_factor
+        self.rotary_base = rotary_base
         self.compute_dtype = compute_dtype
         self.softmax_compute_dtype = softmax_compute_dtype
         self.params_dtype = params_dtype
         self.embedding_init_type = embedding_init_type
+        self.rotary_dtype = rotary_dtype
         self.add_bias_linear = add_bias_linear
         self.add_qkv_bias = add_qkv_bias
         self.mlp_has_gate = mlp_has_gate
@@ -202,7 +254,9 @@ class TransformerConfig(ModelParallelConfig):
         self.group_query_attention = group_query_attention
         self.use_flash_attn = use_flash_attn
         self.qkv_concat = qkv_concat
+        self.ffn_concat = qkv_concat
         self.use_attn_mask_compression = use_attn_mask_compression
+        self.use_ring_attention = use_ring_attention
         self.apply_query_key_layer_scaling = apply_query_key_layer_scaling
         self.attention_softmax_in_fp32 = attention_softmax_in_fp32
         self.apply_residual_connection_post_layernorm = apply_residual_connection_post_layernorm
@@ -212,7 +266,7 @@ class TransformerConfig(ModelParallelConfig):
         self.mask_func_type = mask_func_type
         self.normalization = normalization
         self.position_embedding_type = position_embedding_type
-        self.init_method = init_method
+        self.init_method_ = init_method_
         self.output_layer_init_method = output_layer_init_method
         self.post_init_checks()
 
@@ -247,8 +301,18 @@ class TransformerConfig(ModelParallelConfig):
         if self.max_position_embeddings is None:
             self.max_position_embeddings = self.seq_length
 
-        if self.init_method is None:
-            self.init_method = init_method_normal(self.init_method_std, self.params_dtype)
+        if self.init_method_ is None:
+            self.init_method_ = init_method_normal(self.init_method_std, self.params_dtype)
+
+        if not self.use_flash_attn and self.use_ring_attention:
+            raise ValueError(f"When the ring_attention = True, the flash_attention must be True ")
+
+        if self.context_parallel_algo.value == ContextParallelAlgo.hybird_cp.value and not self.use_ring_attention:
+            logger.warning(f"When using hybird_cp algorithm,but use_ring_attention=False, will not take effect."
+                           f"Please check your config")
+
+        if self.context_parallel_algo.value == ContextParallelAlgo.ulysses_cp.value and self.use_ring_attention:
+            logger.warning(f"When using ulysses_cp algorithm,use_ring_attention will not take effect.")
 
     def update(self):
         """Modify attributes after covert."""
@@ -260,3 +324,23 @@ class TransformerConfig(ModelParallelConfig):
 
         if self.max_position_embeddings == 1:
             self.max_position_embeddings = self.seq_length
+
+    def get_ulysses_cp_num(self):
+        """get ulysses context parallel num under this config.
+
+        Returns:
+            int: ulysses degrees.
+        """
+        if self.context_parallel == 1:
+            return 1
+        if self.context_parallel_algo.value == ContextParallelAlgo.colossalai_cp.value:
+            return 1
+        if self.context_parallel_algo.value == ContextParallelAlgo.ulysses_cp.value:
+            return self.context_parallel
+        # hybird
+        return self.ulysses_degree_in_cp
+
+    def to_dict(self) -> Dict[str, Any]:
+        """to dict convert function."""
+        output = copy.deepcopy(self.__dict__)
+        return output

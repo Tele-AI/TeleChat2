@@ -1,5 +1,13 @@
 # ConvertWeight
 
+> ## 🚨 弃用说明
+>
+> 本文档已过时，不再进行维护，并将在 *1.5.0* 版本下架，其中可能包含过时的信息或已被更新的功能替代。建议参考最新的 **[官方文档](https://www.mindspore.cn/mindformers/docs/zh-CN/dev/index.html)** ，以获取准确的信息。
+>
+> 如果您仍需使用本文档中的内容，请仔细核对其适用性，并结合最新版本的相关资源进行验证。
+>
+> 如有任何问题或建议，请通过 **[社区Issue](https://gitee.com/mindspore/mindformers/issues/new)** 提交反馈。感谢您的理解与支持！
+
 ## 基本介绍
 
 ConvertWeight支持对torch权重和mindspore权重的格式互转
@@ -15,7 +23,6 @@ ConvertWeight支持对torch权重和mindspore权重的格式互转
 | internlm    | internlm                 |
 | baichuan    | baichuan、baichuan2       |
 | gpt         | gpt2                     |
-| bloom       | bloom                    |
 | wizardcoder | wizardcoder              |
 | skywork     | skywork                  |
 | mixtral     | mixtral                  |
@@ -44,8 +51,6 @@ ConvertWeight支持对torch权重和mindspore权重的格式互转
 | input_path    | 输入权重文件路径，如果模型存在多个权重文件，选择模型目录下其中一个即可，根据目录自动加载全部权重     | 是        |
 | output_path   | 输出权重文件路径                                             | 是        |
 | dtype         | 输出的权重数据类型,默认为原始权重数据类型                                | 否        |
-| n_head        | bloom权重转换所需额外参数，根据bloom模型实际情况配置                      | 否        |
-| hidden_size   | bloom权重转换所需额外参数，根据bloom模型实际情况配置                      | 否        |
 | layers        | gpt2和wizardcoder的torch权重转mindspore权重时所需的额外参数，转换的权重层数 | 否        |
 | is_pretrain   | swin权重转换所需额外参数，输入权重是否为预训练权重                          | 否        |
 | telechat_type | telechat权重转换所需额外参数，模型版本                              | 否        |

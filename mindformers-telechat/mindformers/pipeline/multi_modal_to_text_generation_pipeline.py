@@ -33,7 +33,7 @@ class MultiModalToTextPipeline(Pipeline):
         model (Union[PretrainedModel, Model]):
             The model used to perform task, the input should be a model instance inherited from PretrainedModel.
         processor (BaseXModalToTextProcessor, optional):
-            The image_processor of model, it could be None if the model do not need image_processor. Default: ``None`` .
+            The image_processor of model, it could be None if the model do not need image_processor. Default: ``None``.
 
     Returns:
         A pipeline for MultiModalToTextPipeline.
@@ -49,7 +49,6 @@ class MultiModalToTextPipeline(Pipeline):
         >>> import mindspore as ms
         >>> from mindformers import build_context
         >>> from mindformers import AutoModel, AutoTokenizer, pipeline, AutoProcessor, MindFormerConfig, AutoConfig
-        >>> os.environ['USE_ROPE_SELF_DEFINE'] = 'True'
         >>> inputs = [[{"image": "/path/to/example.jpg"}, {"text": "Please describe this image."}]]
         >>> # Note:
         >>> #     "image": is an image path

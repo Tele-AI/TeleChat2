@@ -15,6 +15,7 @@
 """Transform for QwenVL"""
 
 import numpy as np
+
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 
 from qwenvl_tokenizer import IMG_TOKEN_SPAN
@@ -82,7 +83,7 @@ class QwenVLTransform:
             caption_list = list(zip(*caption_list))
             return caption_list
         caption = template[task].format(caption)
-        return self.tokenizer(caption, max_length=self.max_length, padding=self.padding)["input_ids"]
+        return self.tokenizer(caption, max_length=self.max_length)["input_ids"]
 
     def pre_caption_for_vqa_task(self, caption, template):
         """process caption for caption_task"""

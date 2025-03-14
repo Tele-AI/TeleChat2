@@ -29,7 +29,7 @@ import mindspore.communication.comm_func as comm_func
 
 from mindformers.experimental.parallel_core.pynative.parallel_state import get_data_parallel_rank, \
     get_data_parallel_world_size, get_data_parallel_group
-from mindformers.tools.logger import logger
+from mindformers.tools import logger
 from mindformers.experimental.parallel_core.pynative.register import ModuleType, ModuleRegistry
 
 _adamw_opt = ops.MultitypeFuncGraph("adamw_opt")
@@ -397,6 +397,7 @@ class AdamW(Optimizer):
 
         self.z3_optim_cells = []
         self.skip_bias_add_list = []
+
         def recursion_cells(cell):
             sub_cells_list = cell.cells()
             for sub_cell in sub_cells_list:
@@ -420,8 +421,8 @@ class AdamW(Optimizer):
         self.zero3_parameters = []
         for i, sub_cell in enumerate(self.z3_optim_cells):
             sub_cell.register_forward_pre_hook(_pre_forward_cell_hook)
-            if not self.param_resident or \
-                    (self.param_resident and self.param_resident_rate < 1 and i not in resident_cell_id):
+            resident_condition = self.param_resident and self.param_resident_rate < 1 and i not in resident_cell_id
+            if not self.param_resident or resident_condition:
                 sub_cell.register_forward_hook(_post_forward_cell_hook)
                 sub_cell.register_forward_hook(_pre_backward_cell_hook)
             elif sub_cell.has_bias and sub_cell.skip_bias_add:

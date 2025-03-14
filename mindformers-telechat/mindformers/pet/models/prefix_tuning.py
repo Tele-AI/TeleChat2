@@ -64,6 +64,15 @@ class PrefixTuningModel(PreTrainedModel):
     def slice_incremental_inputs(self, model_inputs: dict, current_index):
         return self.pet_model.slice_incremental_inputs(model_inputs, current_index)
 
+    def convert_name(self, weight_name):
+        return self.pet_model.convert_name(weight_name)
+
+    def convert_weight_dict(self, source_dict, **kwargs):
+        return self.pet_model.convert_weight_dict(source_dict, **kwargs)
+
+    def convert_map_dict(self, source_dict, **kwargs):
+        return self.pet_model.convert_map_dict(source_dict, **kwargs)
+
     def set_dynamic_inputs(self, **kwargs):
         dynamic_input_ids = Tensor(shape=[None, None], dtype=mstype.int32)
         dynamic_batch_valid_length = Tensor(shape=[None, None], dtype=mstype.int32)

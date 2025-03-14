@@ -166,9 +166,14 @@ def run_resume_training(config):
             resume_ckpt_name = f"network_rank_{get_rank()}-0_5.ckpt"
             ckpt_path = os.path.join(rank_path, resume_ckpt_name)
         print(f"ckpt_path is {ckpt_path}")
-        resume_dict = load_checkpoint(model_config, network, optimizer=optimizer,
-                                      opt_param_scheduler=opt_param_scheduler,
-                                      ckpt_path=ckpt_path, format=training_config.ckpt_format)
+        resume_dict = load_checkpoint(
+            config=model_config,
+            model=network,
+            optimizer=optimizer if not training_config.no_load_optim else None,
+            opt_param_scheduler=opt_param_scheduler,
+            ckpt_path=ckpt_path,
+            format=training_config.ckpt_format
+            )
 
     train_one_step_cell = TrainOneStepCell(network, optimizer, opt_param_scheduler, training_config, model_config)
     # train
@@ -186,6 +191,11 @@ if __name__ == '__main__':
     parser.add_argument('--load_checkpoint', type=str, default="", help="where to load ckpt")
     parser.add_argument('--training_iters', type=int, default=10, help="training_iters")
     parser.add_argument('--save_interval', type=int, default=None, help="training_iters")
+    parser.add_argument('--no_load_optim', action='store_true', help="load optim or not")
+    parser.add_argument('--no_load_rng', action='store_true', help="load rng or not")
+    parser.add_argument('--new_dataset', action='store_true', help="use new dataset or not")
+    parser.add_argument('--learning_rate', type=float, default=0.0009, help="learning_rate")
+    parser.add_argument('--override_opt_param_scheduler', action='store_true', help="use config scheduler")
     cli_args, rest_args = parser.parse_known_args()
 
     all_config = init_configs_from_yaml(cli_args.config_path)
@@ -198,8 +208,15 @@ if __name__ == '__main__':
         all_config.training_config.compile_cache_path = cli_args.compile_cache_path
     all_config.training_config.crc_check = cli_args.crc_check
     all_config.training_config.output_dir = cli_args.output_dir
+    all_config.training_config.profile_save_path = os.path.join(cli_args.output_dir, "profile")
     all_config.training_config.load_checkpoint = cli_args.load_checkpoint
     all_config.training_config.training_iters = cli_args.training_iters
     all_config.training_config.save_interval = cli_args.save_interval
-
+    all_config.training_config.no_load_optim = cli_args.no_load_optim
+    all_config.training_config.no_load_rng = cli_args.no_load_rng
+    all_config.training_config.new_dataset = cli_args.new_dataset
+    all_config.optimizer_config.learning_rate = cli_args.learning_rate
+    all_config.optimizer_config.override_opt_param_scheduler = cli_args.override_opt_param_scheduler
+    if cli_args.override_opt_param_scheduler:
+        all_config.optimizer_config.use_checkpoint_opt_param_scheduler = False
     run_resume_training(all_config)

@@ -29,7 +29,7 @@ from mindformers.utils.convert_utils import pt2ms
 def convert_pt_to_ms(input_path, output_path, dtype=None, **kwargs):
     """convert hf weight to ms."""
     model_dir = os.path.dirname(input_path)
-    model = AutoModel.from_pretrained(model_dir, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_dir)
     ckpt_list = []
     for name, value in model.state_dict().items():
         print(f'\rprocessing parameter: {name}', end='', flush=True)

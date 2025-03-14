@@ -25,7 +25,7 @@ class TestPipelineParallel:
     @pytest.mark.level1
     @pytest.mark.skip(reason="Get golden loss from records")
     @pytest.mark.platform_arm_ascend910b_training
-    @pytest.mark.env_single
+    @pytest.mark.env_onecard
     @pytest.mark.run(order=1)
     def test_generate_pipeline_net_golden_with_shared_weight(self):
         """
@@ -84,7 +84,7 @@ class TestPipelineParallel:
         assert ret == 0, f"msrun failed, please check {log_dir}/worker_*.log"
 
     @pytest.mark.level1
-    @pytest.mark.env_single
+    @pytest.mark.env_onecard
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.run(order=3)
     def test_compare_loss_with_custom_shared_weight(self):

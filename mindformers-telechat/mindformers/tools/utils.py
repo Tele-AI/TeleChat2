@@ -71,12 +71,12 @@ def check_in_modelarts():
     """
     # 'KUBERNETES_PORT' in os.environ or \
     return 'MA_LOG_DIR' in os.environ or \
-           'MA_JOB_DIR' in os.environ or \
-           'MA_LOCAL_LOG_PATH' in os.environ or \
-           'S3_ACCESS_KEY_ID' in os.environ or \
-           'S3_SECRET_ACCESS_KEY' in os.environ or \
-           'BATCH_GROUP_NAME' in os.environ or \
-           'MA_LOCAL_LOG_PATH' in os.environ
+        'MA_JOB_DIR' in os.environ or \
+        'MA_LOCAL_LOG_PATH' in os.environ or \
+        'S3_ACCESS_KEY_ID' in os.environ or \
+        'S3_SECRET_ACCESS_KEY' in os.environ or \
+        'BATCH_GROUP_NAME' in os.environ or \
+        'MA_LOCAL_LOG_PATH' in os.environ
 
 
 class Validator:
@@ -453,6 +453,16 @@ def get_real_rank():
         return int(os.getenv("RANK_ID", "0"))
 
 
+def get_dp_from_dataset_strategy():
+    data_strategy = ms.get_auto_parallel_context("dataset_strategy")
+    if isinstance(data_strategy, (tuple, list)):
+        first_input_stra = data_strategy[0]
+        dp = int(first_input_stra[0])
+    else:
+        raise TypeError(f"Dataset_strategy in mindspore auto parallel context is invalid, only support (tuple, list)")
+    return dp
+
+
 def get_real_group_size():
     try:
         return get_group_size()
@@ -464,42 +474,19 @@ def get_device_num_per_node():
     return int(os.getenv("DEVICE_NUM_PER_NODE", "8"))
 
 
-def get_disable_custom_fa():
-    """
-    whether fa support flatten
-    """
-    ms_enable_fa_flatten = os.environ.get("MS_ENABLE_FA_FLATTEN")
-    if ms_enable_fa_flatten == "off":
-        return False
-
-    ms_enable_internal_boost = os.environ.get("MS_ENABLE_INTERNAL_BOOST")
-    if ms_enable_internal_boost == "off":
-        return True
-
-    disable_custom_op_list = os.environ.get("MS_INTERNAL_DISABLE_CUSTOM_KERNEL_LIST")
-    if disable_custom_op_list is not None and "FlashAttentionScore" in disable_custom_op_list:
-        return True
-    return False
-
-
 def get_predict_run_mode():
     run_mode = os.environ.get("RUN_MODE")
     return run_mode == "predict"
 
 
-def get_use_rope_self_define():
-    # use_rope_self_define=True indicate that using self defined op for rope kernel
-    use_rope_self_define = os.environ.get("USE_ROPE_SELF_DEFINE")
-    return use_rope_self_define == "True"
-
-
-def is_main_rank():
+def is_main_rank(ignore_check_modelarts=False):
     return not get_real_rank() or \
-        (check_in_modelarts() and get_real_rank() % get_device_num_per_node() == 0)
+        ((ignore_check_modelarts or check_in_modelarts()) and get_real_rank() % get_device_num_per_node() == 0)
 
 
 def is_publicly_accessible_path(path):
     """Check a path is accessible by all rank."""
+    from .logger import logger
     if get_real_group_size() <= get_device_num_per_node():
         return True
 
@@ -518,7 +505,8 @@ def is_publicly_accessible_path(path):
         shared_path = os.path.realpath(shared_path)
         if path.startswith(shared_path):
             return True
-
+    logger.info("System can not identify if given path is shared disk. "
+                "If it is, Please set env 'SHARED_PATHS' to given path.")
     return False
 
 
@@ -606,34 +594,34 @@ def remove_folder(folder_path, rank_id=None):
             logger.info("Folder %s is removed.", folder_path)
 
 
-def get_epoch_and_step_from_ckpt_name(ckpt_file):
+def get_epoch_and_step_from_ckpt_name(ckpt_file, ckpt_fmt='ckpt'):
     """Get epoch and step from ckpt name."""
-    ckpt_name = os.path.split(ckpt_file)[1]
-    match = re.search(r'-(\d+)_(\d+)\.ckpt', ckpt_name)
+    ckpt_name = os.path.basename(ckpt_file)
+    pattern = r'-(\d+)_(\d+)\.' + ckpt_fmt
+    match = re.search(pattern, ckpt_name)
     if match:
         epoch = int(match.group(1))
         step = int(match.group(2))
         return epoch, step
-    raise ValueError(f"Can't match epoch and step from checkpoint: {ckpt_file}. "
-                     "Please ensure the format of the ckpt_file is {prefix}-{epoch}_{step}.ckpt. "
-                     "for example, llama_7b_rank_0-3_2.ckpt.")
+    raise ValueError(f"Can't match epoch and step from checkpoint file: {ckpt_file}. Please ensure the format "
+                     f"of the checkpoint file name is {{prefix}}-{{epoch}}_{{step}}.{ckpt_fmt}, for example, "
+                     f"llama_7b_rank_0-3_2.{ckpt_fmt}.")
 
 
 def get_rank_id_from_ckpt_name(ckpt_file):
     """Get rank id from ckpt name."""
-    ckpt_name = os.path.split(ckpt_file)[1]
+    ckpt_name = os.path.basename(ckpt_file)
     match = re.search(r'_rank_(\d+)', ckpt_name)
     if match:
         rank_id = int(match.group(1))
         return rank_id
-    raise ValueError(f"Can't match rank id in checkpoint: {ckpt_file}. "
-                     "Please ensure the format of the ckpt_file is {prefix}-{epoch}_{step}.ckpt. "
-                     "for example, llama_7b_rank_0-3_2.ckpt.")
+    raise ValueError(f"Can't match rank id from checkpoint file: {ckpt_file}. Please ensure the name of "
+                     f"the checkpoint file is xxx_rank_x-{{epoch}}_{{step}}, for example, llama_7b_rank_0-3_2.")
 
 
 def replace_rank_id_in_ckpt_name(ckpt_file, dst_rank_id):
     """Replace rank id to dst_rank_id in ckpt name"""
-    ckpt_name = os.path.split(ckpt_file)[1]
+    ckpt_name = os.path.basename(ckpt_file)
     ori_rank_id = get_rank_id_from_ckpt_name(ckpt_name)
     ckpt_name = ckpt_name.replace(f"_rank_{ori_rank_id}", f"_rank_{dst_rank_id}")
     return ckpt_name
@@ -650,10 +638,10 @@ def clear_auto_trans_output():
         remake_folder(folder_path, permissions=0o750)
 
 
-def check_ckpt_file_name(ckpt_file):
+def check_ckpt_file_name(ckpt_file, ckpt_fmt='ckpt'):
     """Check ckpt name in the format of {prefix}-{epoch}_{step}.ckpt"""
     ckpt_name = os.path.split(ckpt_file)[1]
-    pattern = r'^[^/]+-\d+_\d+\.ckpt$'
+    pattern = r'^[^/]+-\d+_\d+\.' + ckpt_fmt + r"$"
     match = re.match(pattern, ckpt_name)
     if match:
         return True
@@ -711,3 +699,62 @@ def get_pipeline_rank_ids():
     pipeline_rank_ids = [i * devices_per_stage for i in range(current_stage_num)]
 
     return pipeline_rank_ids
+
+
+def ensure_divisibility(numerator, denominator):
+    """Ensure that numerator is divisible by the denominator."""
+    if numerator % denominator != 0:
+        raise ValueError("{} is not divisible by {}".format(numerator, denominator))
+
+
+def divide(numerator, denominator):
+    """Ensure that numerator is divisible by the denominator and return the division value."""
+    ensure_divisibility(numerator, denominator)
+    return numerator // denominator
+
+
+def calculate_pipeline_stage(layers_per_stage, model_layers):
+    r"""Calculate pipeline stage for model
+
+    Args:
+        layers_per_stage (list): The number of layers per stage.
+        model_layers (list): The number of layers of each part of the model.
+
+    """
+    pipeline_stages = []
+    cur_stage = 0  # Initialize the start stage counter
+
+    # Iterate directly over the model layers
+    for model_layer in model_layers:
+        model_layer_remaining = model_layer
+        start_stage = cur_stage
+        end_stage = cur_stage
+        offset = []
+
+        while cur_stage < len(layers_per_stage) and model_layer_remaining > 0:
+            if model_layer_remaining < layers_per_stage[cur_stage]:
+                layers_per_stage[cur_stage] -= model_layer_remaining
+                offset.append(model_layer_remaining)
+                model_layer_remaining = 0
+            else:
+                model_layer_remaining -= layers_per_stage[cur_stage]
+                offset.append(layers_per_stage[cur_stage])
+                layers_per_stage[cur_stage] = 0
+                cur_stage += 1
+            end_stage += 1
+
+        stage_num = end_stage - start_stage
+        avg_layer_per_stage = model_layer // stage_num if stage_num > 0 else 0
+
+        for j in range(stage_num):
+            offset[j] -= avg_layer_per_stage
+
+        pipeline_stage = {
+            "offset": offset,
+            "start_stage": start_stage,
+            "stage_num": stage_num
+        }
+
+        pipeline_stages.append(pipeline_stage)
+
+    return pipeline_stages

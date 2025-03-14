@@ -21,14 +21,15 @@ from mindspore.dataset import GeneratorDataset
 
 from mindformers.dataset import BaseDataset
 from mindformers.models import PreTrainedModel, PreTrainedTokenizerBase
-
 from mindformers.tools.register import MindFormerRegister, \
     MindFormerModuleType, MindFormerConfig
+from mindformers.utils import deprecated
 from ..config_args import ConfigArguments
 from ..training_args import TrainingArguments
 from ..base_trainer import BaseTrainer
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER)
 class MaskedLanguageModelingTrainer(BaseTrainer):
     """
@@ -49,7 +50,7 @@ class MaskedLanguageModelingTrainer(BaseTrainer):
     """
 
     def __init__(self, model_name: str = None):
-        super(MaskedLanguageModelingTrainer, self).__init__("fill_mask", model_name)
+        super().__init__("fill_mask", model_name)
 
     def train(self,
               config: Optional[Union[dict, MindFormerConfig, ConfigArguments, TrainingArguments]] = None,

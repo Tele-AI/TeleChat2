@@ -38,6 +38,8 @@ def to_ms_dataset(
         shard_id: Optional[int] = None,
         python_multiprocessing: Optional[bool] = True,
         max_rowsize: Optional[int] = 6,
+        packing: Optional[str] = None,
+        adaptor_config: Optional[dict] = None
 ):
     """Create a `ms.dataset.GeneratorDataset` from the underlying Dataset. This `ms.dataset.GeneratorDataset` will load
     and collate batches from the Dataset, and is suitable for passing to methods like `model.fit()`.
@@ -86,6 +88,10 @@ def to_ms_dataset(
             allocation to copy data between processes, the total occupied shared memory will increase as
             ``num_parallel_workers`` and :func:`mindspore.dataset.config.set_prefetch_size` increase. This is only
             used if python_multiprocessing is set to True. Default: 16.
+        packing(str, optional):
+            Packing strategy in Handler. Default: ``None`` .
+        adaptor_config(dict, optional):
+            Dataset config for MSDatasetAdaptor. Default: ``None`` .
 
     Returns:
         `ms.dataset.GeneratorDataset`
@@ -125,18 +131,16 @@ def to_ms_dataset(
         if ("label_ids" in label_cols or "label" in label_cols) and "labels" not in label_cols:
             label_cols = [col for col in label_cols if col not in ["label_ids", "label"]] + ["labels"]
 
-    for col in columns:
-        if col not in output_signature:
-            raise ValueError(f"Column {col} not found in dataset!")
-
-    for col in label_cols:
-        if col not in output_signature:
-            raise ValueError(f"Label column {col} not found in dataset!")
+    packing_col = ('input_ids', 'labels', 'actual_seq_len')
+    if packing and any([_ not in output_signature for _ in packing_col]):
+        raise ValueError(
+            f"If set packing, 'input_ids', 'labels', 'actual_seq_len' "
+            f"should in dataset.column_names, but got {dataset.column_names}.")
 
     column_names = columns + label_cols
     if num_workers >= 1:
         ms_dataset = ms.dataset.GeneratorDataset(
-            MSDatasetAdaptor(dataset, column_names),
+            MSDatasetAdaptor(dataset, packing, adaptor_config),
             column_names=column_names,
             schema=schema,
             num_samples=num_samples,
@@ -161,6 +165,7 @@ def to_ms_dataset(
         dataset.__del__()
         # pylint: disable=W0212
         self._TF_DATASET_REFS.remove(ref)
+
     # pylint: disable=W0212
     self._TF_DATASET_REFS.add(weakref.ref(ms_dataset, cleanup_callback))
 
@@ -173,25 +178,82 @@ class MSDatasetAdaptor:
         Args:
             dataset (Datasets):
                 huggingface dataset
-            col_names (list):
-                list of col names
+            packing (str):
+                set packing strategy in dataset
+            config (dict)
+                dataset config for MSDatasetAdaptor
+
         Returns:
             A dataset for MSDatasetAdaptor.
     """
-    def __init__(self, dataset, col_names=None):
+
+    def __init__(self, dataset, packing=None, config=None):
         self.dataset = dataset
-        if col_names:
-            self.col_names = col_names
-        else:
-            self.col_names = dataset.column_names
+        self.col_names = dataset.column_names
         for col_name in self.col_names:
             setattr(self, col_name, dataset[col_name])
 
+        self.packing = packing
+        self.compress_mask = None
+        self._set_config(config)
+
     def __getitem__(self, idx):
+        if self.packing:
+            return self._generate_mask(idx)
         return [getattr(self, col_name)[idx] for col_name in self.col_names]
 
     def __len__(self):
         return len(self.dataset)
+
+    def _set_config(self, config):
+        """set dataset config"""
+        if config is None:
+            config = dict()
+
+        self.compress_mask = config.get('compress_mask', False)
+
+    def _generate_mask(self, idx):
+        """Generate EOD mask for packing dataset."""
+        tokens = self.input_ids[idx]
+        labels = self.labels[idx]
+        actual_seq_len = self.actual_seq_len[idx]
+
+        seq_length = len(tokens)
+
+        # loss mask
+        loss_mask = np.ones(seq_length, dtype=np.float32)
+        loss_mask[actual_seq_len[-1]:] = 0.0
+
+        # position ids and attention mask
+        position_ids = []
+        attention_mask = np.expand_dims(np.tril(np.ones((seq_length, seq_length))), axis=0)
+        pre_seq = 0
+        for seq in actual_seq_len:
+            sub_pos = np.arange(seq - pre_seq, dtype=np.float32)
+            position_ids.append(sub_pos)
+            pre_seq = seq
+            attention_mask[0, seq:, : seq] = 0
+
+        position_ids.append(np.arange(seq_length - actual_seq_len[-1], dtype=np.float32))
+        position_ids = np.concatenate(position_ids)
+
+        if self.compress_mask:
+            actual_seq_len = np.pad(
+                actual_seq_len, (0, 128 - len(actual_seq_len)),
+                mode='constant',
+                constant_values=seq_length)
+            attention_mask = actual_seq_len
+        else:
+            # reverse attention mask
+            attention_mask = attention_mask < 0.5
+
+        return (
+            tokens.astype(np.int32),
+            labels.astype(np.int32),
+            loss_mask.astype(np.int32),
+            position_ids.astype(np.int32),
+            attention_mask.astype(np.int32)
+        )
 
 
 def get_ms_output_signature(dataset):

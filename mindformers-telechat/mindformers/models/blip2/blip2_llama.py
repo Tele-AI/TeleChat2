@@ -17,7 +17,7 @@
 """Blip2 second stage pretrain and infer with Llama model"""
 
 import mindspore.common.dtype as mstype
-from mindspore import Tensor
+from mindspore import Tensor, mint
 from mindspore.ops import operations as P
 
 from mindformers.models.blip2.layers import ImageTextEmbeddingPreparationMixIn
@@ -53,7 +53,8 @@ class LlamaModelForBlip2(LlamaModel):
         mask = None
         if self.use_past:
             if self.is_first_iteration:
-                freqs_cis = self.freqs_mgr(seq_len)
+                freqs_cis = self.freqs_mgr.prefill(bs, seq_len)
+                mask = self.casual_mask.prefill()
             else:
                 freqs_cis = self.freqs_mgr.increment(batch_valid_length)
         else:
@@ -149,8 +150,6 @@ class LlamaForBlip2(LlamaForCausalLM, ImageTextEmbeddingPreparationMixIn):
 
         if batch_valid_length is not None:
             batch_valid_length = self.reshape(batch_valid_length, (-1,))
-        if not self.is_first_iteration:
-            batch_valid_length = self.sub_batch_valid_len(batch_valid_length, 1)
 
         output = self.model(input_embeddings=input_embeddings,
                             input_attention_masks=attention_mask,
@@ -162,8 +161,8 @@ class LlamaForBlip2(LlamaForCausalLM, ImageTextEmbeddingPreparationMixIn):
 
         pre_gather = (not self.use_past or self.is_first_iteration) and batch_valid_length is not None
         if pre_gather:
+            batch_valid_length = mint.cumsum(batch_valid_length, 0)
             output = self.gather(output, self.sub_batch_valid_len(batch_valid_length, 1), 1)
-
         logits = self.lm_head(output)
         logits = self.cast(logits, mstype.float32)
 

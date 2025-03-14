@@ -1,0 +1,251 @@
+seed: 0
+run_mode: 'train'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+
+# context
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  max_call_depth: 10000
+  save_graphs: False
+  device_id: 0
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+
+# runner
+runner_config:
+  epochs: 100
+  batch_size: 128
+  image_size: 224
+  sink_mode: True
+  sink_size: 2
+  num_classes: 1000
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: FixedLossScaleUpdateCell
+    loss_scale_value: 1024
+  use_clip_grad: True
+  max_grad_norm: 5.0
+
+
+# parallel
+use_parallel: False
+parallel:
+  parallel_mode: 0 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: True
+  enable_alltoall: False
+  full_batch: False
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+parallel_config:
+  data_parallel: 1
+  model_parallel: 1
+  expert_parallel: 1
+  pipeline_stage: 1
+  micro_batch_num: 1
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# moe
+moe_config:
+  expert_num: 1
+  capacity_factor: 1.05
+  aux_loss_factor: 0.05
+  num_experts_chosen: 1
+
+# recompute
+recompute_config:
+  recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: False
+
+# autotune
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+# profile
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+
+# Trainer
+trainer:
+  type: image_classification
+  model_name: 'swin_base_p4w7'
+# if True, do evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+
+# train dataset
+train_dataset: &train_dataset
+  seed: 0
+  batch_size: 128
+  data_loader:
+    type: ImageFolderDataset
+    dataset_dir: "imageNet-1k/train"
+    num_parallel_workers: 8
+    shuffle: True
+  transforms:
+    - type: Decode
+    - type: RandomResizedCrop
+      size: 224
+      scale: [0.08, 1.0]
+      interpolation: cubic
+    - type: RandomHorizontalFlip
+      prob: 0.5
+    - type: ToPIL
+    - type: rand_augment_transform
+      config_str: "rand-m9-mstd0.5-inc1"
+      hparams:
+        translate_const: 100
+        img_mean: [124, 116, 104]
+        interpolation: cubic
+    - type: ToTensor
+    - type: Normalize
+      mean: [0.485, 0.456, 0.406] # [123.675, 118.575, 103.53]
+      std: [0.229, 0.224, 0.225] #
+      is_hwc: False
+    - type: RandomErasing
+      probability: 0.25
+      mode: pixel
+      max_count: 1
+  mixup_op:
+    mixup_alpha: 0.8
+    cutmix_alpha: 1.0
+    cutmix_minmax:
+    prob: 1.0
+    switch_prob: 0.5
+    label_smoothing: 0.1
+  input_columns: ["image", "label"]
+  output_columns: ["image", "label"]
+  column_order: ["image", "label"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 30
+train_dataset_task:
+  type: ImageCLSDataset
+  dataset_config: *train_dataset
+
+# eval dataset
+eval_dataset: &eval_dataset
+  seed: 0
+  batch_size: 128
+  data_loader:
+    type: ImageFolderDataset
+    dataset_dir: "imageNet-1k/val"
+    num_parallel_workers: 8
+    shuffle: True
+  transforms:
+    - type: Decode
+    - type: Resize
+      size: 256
+      interpolation: cubic
+    - type: CenterCrop
+      size: 224
+    - type: ToTensor
+    - type: Normalize
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+      is_hwc: False
+  input_columns: ["image", "label"]
+  output_columns: ["image", "label"]
+  column_order: ["image", "label"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 30
+  eval_interval: 1
+  eval_offset: 0
+eval_dataset_task:
+  type: ImageCLSDataset
+  dataset_config: *eval_dataset
+
+# model
+model:
+  arch:
+    type: SwinForImageClassification
+  model_config:
+    type: SwinConfig
+    num_labels: 1000 # num classes
+    image_size: 224 # input image size
+    patch_size: 4 # patch size
+    num_channels: 3 # channels of input images
+    embed_dim: 128 # embedding dimension
+    depths: [2, 2, 18, 2] # number of transformer blocks for each swin layer
+    num_heads: [4, 8, 16, 32] # number of attention heads for each swin layer
+    window_size: 7 # window size for swin
+    mlp_ratio: 4 # ffn_hidden_size = mlp_ratio * embed_dim
+    qkv_bias: True # has transformer qkv bias or not
+    layer_norm_eps: 0.00001  # eps of layer_norm
+    hidden_dropout_prob: 0. # drop rate of MLP
+    attention_probs_dropout_prob: 0. # drop rate of Attention
+    drop_path_rate: 0.1 # drop path rate of transformer blocks
+    use_absolute_embeddings: False # if using absolute position embedding
+    patch_norm: True # use norm in SwinPatchEmbeddings
+    hidden_act: gelu # activation of MLP
+    weight_init: normal # weight initialize type
+    loss_type: SoftTargetCrossEntropy # loss type
+    checkpoint_name_or_path: swin_base_p4w7
+
+# lr schedule
+lr_schedule:
+  type: cosine
+  learning_rate: 0.00125
+  lr_end: 0.00000025
+  warmup_lr_init: 0.00000025
+  warmup_epochs: 20
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+layer_scale: True
+layer_decay: 0.9
+
+# optimizer
+optimizer:
+  type: adamw
+  beta1: 0.9
+  beta2: 0.999
+  eps: 0.00000001 # 1e-8
+  weight_decay: 0.05
+lr_scale: True
+lr_scale_factor: 512
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "mindformers"
+    save_checkpoint_steps: 100
+    integrated_save: True
+    async_save: False
+  - type: ObsMonitor
+eval_callbacks:
+  - type: ObsMonitor
+
+# metric
+metric:
+  type: Accuracy
+  eval_type: classification
+
+# processor
+processor:
+  type: SwinProcessor
+  image_processor:
+    type: SwinImageProcessor
+    size: 224  # input image size

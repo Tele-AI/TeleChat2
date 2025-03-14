@@ -25,7 +25,7 @@ from mindformers.tools.logger import logger
 
 
 class LoraModel(PreTrainedModel):
-    """
+    r"""
     LoRA model for LLM. Provide a flexible and efficient way to adjust and
     optimize pre-trained models by adding LoRA structures to the base pre-trained models.
 
@@ -33,8 +33,11 @@ class LoraModel(PreTrainedModel):
         config (LoraConfig): Pet config, defines Parameter-Efficient Tuning (Pet) algorithm.
         base_model (PreTrainedModel): Pre-trained model for tuning.
 
-    Returns:
-        An instance of LoraModel.
+    Inputs:
+        - **\*inputs** (Tensor) - Input arguments of original base model.
+
+    Outputs:
+        Outputs of original base model.
 
     Examples:
         >>> import mindspore as ms
@@ -140,6 +143,8 @@ class LoraModel(PreTrainedModel):
             base_model.transformer = LoraAdapter.get_pet_model(base_model.transformer, self.config.pet_config)
         elif hasattr(base_model, "llm_model"):
             base_model.llm_model = LoraAdapter.get_pet_model(base_model.llm_model, self.config.pet_config)
+        elif hasattr(base_model, "language_model"):
+            base_model.language_model = LoraAdapter.get_pet_model(base_model.language_model, self.config.pet_config)
         else:
             logger.warning("The base model must has an attribute named in \'backbone\',"
                            "\'model\', or \'transformer\', which define transformer blocks.")
@@ -176,18 +181,14 @@ class LoraModel(PreTrainedModel):
     def to_embeddings(self, tokens):
         return self.lora_model.to_embeddings(tokens)
 
-    def construct(self, input_ids, labels=None, input_position=None, position_ids=None, attention_mask=None,
-                  input_embeds=None, init_reset=None, batch_valid_length=None, batch_index=None,
-                  zactivate_len=None, block_tables=None, slot_mapping=None):
-        return self.lora_model(input_ids=input_ids,
-                               labels=labels,
-                               input_position=input_position,
-                               position_ids=position_ids,
-                               attention_mask=attention_mask,
-                               input_embeds=input_embeds,
-                               init_reset=init_reset,
-                               batch_valid_length=batch_valid_length,
-                               batch_index=batch_index,
-                               zactivate_len=zactivate_len,
-                               block_tables=block_tables,
-                               slot_mapping=slot_mapping)
+    def convert_name(self, weight_name):
+        return self.lora_model.convert_name(weight_name)
+
+    def convert_weight_dict(self, source_dict, **kwargs):
+        return self.lora_model.convert_weight_dict(source_dict, **kwargs)
+
+    def convert_map_dict(self, source_dict, **kwargs):
+        return self.lora_model.convert_map_dict(source_dict, **kwargs)
+
+    def construct(self, *inputs, **kwargs):
+        return self.lora_model(*inputs, **kwargs)

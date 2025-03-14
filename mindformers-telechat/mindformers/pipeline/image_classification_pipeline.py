@@ -14,7 +14,6 @@
 # ============================================================================
 """Image Classification Pipeline API."""
 from typing import Optional, Union
-
 import numpy as np
 from PIL import Image
 
@@ -26,9 +25,11 @@ from mindformers.models import PreTrainedModel, BaseImageProcessor
 from mindformers.tools.image_tools import load_image
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 from mindformers.dataset.labels import labels
+from mindformers.utils import deprecated
 from .base_pipeline import Pipeline
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="image_classification")
 class ImageClassificationPipeline(Pipeline):
     r"""Pipeline for image classification

@@ -1,0 +1,166 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+use_parallel: True
+run_mode: 'finetune'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'internlm2_20b'
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+  gradient_accumulation_steps: 1
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9, 0.95]
+  eps: 1.e-8
+  weight_decay: 0.01
+
+# lr schedule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 1.e-5
+  warmup_ratio: 0.03
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+
+# dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: True
+  input_columns: ["input_ids", "labels"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+# if True, do evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+eval_step_interval: -1        # num of step intervals between each eval, -1 means no step end eval.
+eval_epoch_interval: 50000        # num of epoch intervals between each eval, 1 means eval on every epoch end.
+
+# default parallel of device num = 8 for Atlas 800T A2
+parallel_config:
+  data_parallel: 1
+  model_parallel: 8
+  pipeline_stage: 2
+  micro_batch_num: 128
+  vocab_emb_dp: False
+
+# recompute config
+recompute_config:
+  recompute: False
+  select_recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: False
+  recompute_slice_activation: False
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "internlm2_20b"
+    save_checkpoint_steps: 500
+    keep_checkpoint_max: 1
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor
+
+# mindspore context init config
+context:
+  jit_config:
+    jit_level: "O2"
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  max_device_memory: "59GB"
+  device_id: 0
+
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-dataset, 1-semi, 2-auto, 3-hybrid
+  enable_alltoall: False
+  full_batch: True
+  enable_parallel_optimizer: True
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+
+# model config
+model:
+  model_config:
+    type: InternLM2Config
+    auto_register: internlm2_model.InternLM2Config
+    batch_size: 1 # add for increase predict
+    seq_length: 4096
+    hidden_size: 6144
+    num_layers: 48
+    num_heads: 48
+    n_kv_heads: 8
+    vocab_size: 92544
+    rms_norm_eps: 1.0e-5
+    intermediate_size: 16384
+    theta: 1000000
+    bos_token_id: 1
+    eos_token_id: [2, 92542]
+    pad_token_id: 2
+    ignore_token_id: -100
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float32"
+    param_init_type: "float32"
+    qkv_concat: True
+    use_past: False
+    use_flash_attention: True
+    block_size: 16
+    num_blocks: 512
+    is_dynamic: False
+    scaling_factor: 1.0
+    extend_method: "None"
+    offset: 0
+    checkpoint_name_or_path: "internlm2_20b"
+    repetition_penalty: 1.00
+    max_decode_length: 512
+    top_k: 3
+    top_p: 0.8
+    do_sample: False
+  arch:
+    type: InternLM2ForCausalLM
+    auto_register: internlm2_model.InternLM2ForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    unk_token: '<unk>'
+    bos_token: '<s>'
+    eos_token: '</s>'
+    pad_token: '</s>'
+    type: InternLM2Tokenizer
+    auto_register: internlm2_tokenizer.InternLM2Tokenizer
+    vocab_file: './tokenizer.model'
+  type: LlamaProcessor
+
+# wrapper cell config
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    loss_scale_value: 16384
+    scale_factor: 2
+    scale_window: 1000
+  use_clip_grad: True

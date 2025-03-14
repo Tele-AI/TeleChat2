@@ -54,6 +54,15 @@ class Ptuning2Model(PreTrainedModel):
     def prepare_inputs_for_generation(self, input_ids, **kwargs):
         return self.pet_model.prepare_inputs_for_generation(input_ids, **kwargs)
 
+    def convert_name(self, weight_name):
+        return self.pet_model.convert_name(weight_name)
+
+    def convert_weight_dict(self, source_dict, **kwargs):
+        return self.pet_model.convert_weight_dict(source_dict, **kwargs)
+
+    def convert_map_dict(self, source_dict, **kwargs):
+        return self.pet_model.convert_map_dict(source_dict, **kwargs)
+
     def prepare_inputs_for_predict_layout(self, input_ids, **kwargs):
         input_ids = Tensor(input_ids, mstype.int32)
         labels = Tensor(kwargs["labels"]) if "labels" in kwargs else None

@@ -1,0 +1,200 @@
+seed: 0
+run_mode: 'train'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+
+# context
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  max_call_depth: 10000
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+
+# runner
+runner_config:
+  epochs: 1
+  batch_size: 1
+  sink_mode: True
+  sink_size: 2
+runner_wrapper:
+  type: MFTrainOneStepCell
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    scale_factor: 2
+    scale_window: 1000
+    loss_scale_value: 65536
+  use_clip_grad: True
+  max_grad_norm: 1.0
+
+# parallel
+use_parallel: False
+parallel:
+  parallel_mode: 0 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: True
+  enable_alltoall: False
+  full_batch: False
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+parallel_config:
+  data_parallel: 1
+  model_parallel: 1
+  expert_parallel: 1
+  pipeline_stage: 1
+  micro_batch_num: 1
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# moe
+moe_config:
+  expert_num: 1
+  capacity_factor: 1.05
+  aux_loss_factor: 0.05
+  num_experts_chosen: 1
+
+# recompute
+recompute_config:
+  recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: False
+
+# autotune
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+# profile
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+
+# Trainer
+trainer:
+  type: translation
+  model_name: 't5'
+
+# train dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: WMT16DataLoader
+    dataset_dir: "/your/wmt_en_ro"
+  tokenizer:
+    type: t5_small
+    src_max_length: 1024 # this will truncate the source input sequence
+    tgt_max_length: 128
+    prefix: "translate the English to Romanian:"
+    stage: 'train'
+  input_columns: ["input_ids", "attention_mask", "labels"] # determinied by the model inputs
+  output_columns: ["input_ids", "attention_mask", "labels"]
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: False
+  batch_size: 1
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: TranslationDataset
+  dataset_config: *train_dataset
+
+# model
+model:
+  arch:
+    type: T5ForConditionalGeneration
+  model_config:
+    batch_size: 1
+    d_ff: 2048
+    hidden_size: 512
+    do_sample: false
+    eos_token_id: 1
+    has_relative_bias: true
+    hidden_act: relu
+    hidden_dropout_prob: 0.1
+    initializer_factor: 1.0
+    initializer_range: 0.02
+    is_encoder_decoder: true
+    d_kv: 64
+    layer_norm_epsilon: 1.0e-06
+    length_penalty_weight: 1.0
+    max_decode_length: 128
+    max_length: 32
+    max_position_embeddings: 1024
+    num_heads: 8
+    num_hidden_layers: 6
+    pad_token_id: 0
+    relative_attention_num_buckets: 32
+    repetition_penalty: 1
+    scale_output: true
+    seq_length: 1024
+    top_k: 1
+    top_p: 0.95
+    type: T5Config
+    use_cache: true
+    vocab_size: 32128
+    checkpoint_name_or_path: t5_small
+    hidden_dropout_rate: 0.1
+    attention_dropout_rate: 0.1
+    embedding_dropout_prob: 0.1
+    param_init_type: float32
+    layernorm_compute_type: float32
+    softmax_compute_type: float32
+    post_layernorm_residual: False
+    offset: 0
+    use_past: False
+
+# lr schedule
+lr_schedule:
+  type: polynomial
+  learning_rate: 0.00005
+  lr_end: 0.0
+  warmup_steps: 0
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+layer_scale: False
+layer_decay: 0.65
+
+# optimizer
+optimizer:
+  type: adamw
+  beta1: 0.9
+  beta2: 0.999
+  eps: 0.00000001 # 1e-8
+  weight_decay: 0.0
+lr_scale: False
+lr_scale_factor: 256
+
+# callbacks
+callbacks:
+  - type: LossMonitor
+  - type: CheckpointMonitor
+    prefix: "mindformers"
+    save_checkpoint_steps: 1000
+    integrated_save: True
+    async_save: False
+  - type: ObsMonitor
+eval_callbacks:
+  - type: ObsMonitor
+
+# processor
+processor:
+  max_length: 77
+  padding: max_length
+  return_tensors: ms
+  tokenizer:
+    eos_token: </s>
+    pad_token: <pad>
+    type: T5Tokenizer
+    unk_token: <unk>
+  type: T5Processor

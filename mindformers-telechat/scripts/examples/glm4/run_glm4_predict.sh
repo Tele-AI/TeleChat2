@@ -14,13 +14,24 @@
 # limitations under the License.
 # ============================================================================
 
-CONFIG_PATH=$1
-CKPT_PATH=$2
-TOKENIZER=$3
-
+PARALLEL=$1
+CONFIG_PATH=$2
+CKPT_PATH=$3
+TOKENIZER=$4
+DEVICE_NUM=$5
 script_path="$(realpath "$(dirname "$0")")"
-
-python "$script_path"/run_glm4_generate.py \
+if [ "$PARALLEL" = "single" ]; then
+  python "$script_path"/run_glm4_generate.py \
     --config_path "$CONFIG_PATH" \
     --load_checkpoint "$CKPT_PATH" \
     --vocab_file "$TOKENIZER"
+elif [ "$PARALLEL" = "parallel" ]; then
+  bash "$script_path"/../../msrun_launcher.sh \
+    "$script_path/run_glm4_generate.py \
+    --config_path $CONFIG_PATH \
+    --load_checkpoint $CKPT_PATH \
+    --vocab_file $TOKENIZER \
+    --use_parallel" "$DEVICE_NUM"
+else
+  echo "Only support 'single' or 'parallel', but got $PARALLEL."
+fi

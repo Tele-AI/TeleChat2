@@ -19,15 +19,16 @@ import base64
 import re
 import unicodedata
 from typing import List, Any, Union, Tuple, Callable, Set, Collection, Dict
-
 from tokenizers import AddedToken
-from mindformers import MindFormerRegister, MindFormerModuleType, PreTrainedTokenizer
-from mindformers.tools.utils import check_file
 
 try:
     import tiktoken
 except ImportError as e:
     raise ValueError("Package 'tiktoken' required to run Qwen. please install it with pip.") from e
+
+from mindformers import MindFormerRegister, MindFormerModuleType, PreTrainedTokenizer
+from mindformers.tools.utils import check_file
+
 
 PAT_STR = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(
 ?!\S)|\s+"""

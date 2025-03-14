@@ -1,0 +1,138 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+run_mode: 'predict'
+use_parallel: True
+
+load_checkpoint: "/path/to/deepseekv3/model_w8a8_ckpt"
+load_ckpt_format: "ckpt"
+auto_trans_ckpt: False # If true, auto transform load_checkpoint to load in distributed model
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'DeepseekV3-W8A8'
+
+# default parallel of device num = 32 for Atlas 800T A2
+parallel_config:
+  model_parallel: 32
+  pipeline_stage: 1
+  expert_parallel: 1
+  vocab_emb_dp: False
+
+# mindspore context init config
+context:
+  mode: 0 # 0--Graph Mode; 1--Pynative Mode
+  max_device_memory: "58GB"
+  device_id: 0
+
+# parallel context config
+parallel:
+  parallel_mode: "STAND_ALONE" # use 'STAND_ALONE' mode for inference with parallelism in frontend
+  full_batch: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+
+# model config
+model:
+  model_config:
+    type: DeepseekV3Config
+    auto_register: deepseek3_config.DeepseekV3Config
+    batch_size: 1 # add for incre predict
+    seq_length: 4096
+    hidden_size: 7168
+    num_layers: 61
+    num_heads: 128
+    max_position_embeddings: 163840
+    intermediate_size: 18432
+    kv_lora_rank:  512
+    q_lora_rank: 1536
+    qk_rope_head_dim: 64
+    v_head_dim: 128
+    qk_nope_head_dim: 128
+    vocab_size: 129280
+    multiple_of: 256
+    rms_norm_eps: 1.0e-6
+    bos_token_id: 0
+    eos_token_id: 1
+    pad_token_id: 1
+    ignore_token_id: -100
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "bfloat16"
+    softmax_compute_type: "bfloat16"
+    rotary_dtype: "bfloat16"
+    router_dense_type: "bfloat16"
+    param_init_type: "bfloat16"
+    scaling_factor:
+      beta_fast: 32.0
+      beta_slow: 1.0
+      factor: 40.0
+      mscale: 1.0
+      mscale_all_dim: 1.0
+      original_max_position_embeddings: 4096
+    use_past: True
+    extend_method: "YARN"
+    use_flash_attention: True
+    block_size: 16
+    num_blocks: 512
+    offset: 0
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1
+    max_decode_length: 1024
+    top_k: 1
+    top_p: 1
+    theta: 10000.0
+    do_sample: False
+    is_dynamic: True
+    qkv_concat: False
+    quantization_config:
+      quant_method: 'ptq'
+      weight_dtype: 'int8'
+      activation_dtype: 'int8'
+      kvcache_dtype: 'none'
+      outliers_suppression: 'outlier-suppression+'
+      modules_to_not_convert: ['lm_head', 'w2', 'lkv2kv']
+      algorithm_args: {}
+      layer_policies: 
+        {
+          r'.*\.feed_forward\..*':
+          {
+            quant_method: 'ptq',
+            "activation_dtype": 'int8',
+            "weight_dtype": 'int8',
+            "kvcache_dtype": 'none',
+            "act_quant_granularity": 'per_token',
+            "weight_quant_granularity": 'per_channel',
+            "outliers_suppression": 'None',
+            "modules_to_not_convert": [],
+            "algorithm_args": {}
+          }
+        }
+    auto_map:
+      AutoConfig: deepseek3_config.DeepseekV3Config
+      AutoModel: deepseek3.DeepseekV3ForCausalLM
+  arch:
+    type: DeepseekV3ForCausalLM
+    auto_register: deepseek3.DeepseekV3ForCausalLM
+
+moe_config:
+  expert_num: 256
+  num_experts_chosen: 8
+  routing_policy: "TopkRouterV2"
+  shared_expert_num: 1
+  routed_scaling_factor: 2.5
+  first_k_dense_replace: 3
+  moe_intermediate_size: 2048
+  topk_group: 4
+  n_group: 8
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    unk_token: '<unk>'
+    bos_token: '<｜begin▁of▁sentence｜>'
+    eos_token: '<｜end▁of▁sentence｜>'
+    pad_token: '<｜end▁of▁sentence｜>'
+    type: LlamaTokenizerFast
+    vocab_file: '/path/to/deepseekv3/tokenizer.json'
+    tokenizer_file: '/path/to/deepseekv3/tokenizer.json'
+    chat_template: "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='', is_first_sp=true) %}{%- for message in messages %}{%- if message['role'] == 'system' %}{%- if ns.is_first_sp %}{% set ns.system_prompt = ns.system_prompt + message['content'] %}{% set ns.is_first_sp = false %}{%- else %}{% set ns.system_prompt = ns.system_prompt + '\n\n' + message['content'] %}{%- endif %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{{'<｜Assistant｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜>'}}{% endif %}"
+  type: LlamaProcessor

@@ -16,6 +16,7 @@
 """
 BaseImageToTextProcessor
 """
+import copy
 from typing import Optional, Union, List, Dict
 
 import PIL
@@ -31,6 +32,10 @@ from mindformers.models.image_processing_utils import BaseImageProcessor
 from mindformers.models.multi_modal.modal_content import ModalContentTransformTemplate
 from mindformers.tools import MindFormerModuleType, MindFormerRegister
 from .utils import DataRecord
+from .shm_utils import create_shm, encode_shm_name_to_int64, encode_shape_to_int64, get_data_from_shm
+
+
+MODALS = ["image", "video", "audio"]
 
 
 class BatchResizeV2(BatchResize):
@@ -113,6 +118,7 @@ class BaseXModalToTextTransform:
     """
         Base multi-modal to text transform, it can perform transforms defined in the template in a order.
     """
+
     def __init__(
             self,
             tokenizer,
@@ -120,6 +126,7 @@ class BaseXModalToTextTransform:
             max_length=512,
             padding='max_length',
             mode: str = "train",
+            add_special_tokens: bool = False,
     ):
         self.tokenizer = tokenizer
 
@@ -132,6 +139,7 @@ class BaseXModalToTextTransform:
         self.max_length = max_length
         self.padding = padding
         self.mode = mode
+        self.add_special_tokens = add_special_tokens
 
         if not self.model_transform_template.has_init_modal_builder_tokens:
             self.model_transform_template.check_modal_builder_tokens(self.tokenizer)
@@ -180,7 +188,7 @@ class BaseXModalToTextTransform:
 
         text_id_list = []
         for text in text_list:
-            text_id = self.tokenizer(text, add_special_tokens=False)["input_ids"]
+            text_id = self.tokenizer(text, add_special_tokens=self.add_special_tokens)["input_ids"]
             text_id = self.model_transform_template.build_modal_context(text_id, self.result_recorder, **kwargs)
             text_id_list.append(text_id)
 
@@ -295,3 +303,147 @@ class BaseXModalToTextProcessor(BaseProcessor):
             max_length = max(max_length, len(data.get("input_ids")))
 
         return self.modal_transform.batch_for_predict(batch_data, max_length)
+
+    def modal_pad_ids(self):
+        modal_pad_ids = []
+        for modal in MODALS:
+            builder = self.modal_transform.modal_builders.get(modal, None)
+            if not builder:
+                modal_pad_ids.append(None)
+            else:
+                modal_pad_ids.append(builder.context_pad_token_id)
+        return modal_pad_ids
+
+    def _get_start_index_of_modal_pad_id(self, input_ids, encode=True):
+        """return the index of the first modal_pad_id of the input_ids."""
+        modal_pad_ids = self.modal_pad_ids()
+        modal_pad_id = None
+        for pad_ids in modal_pad_ids:
+            if pad_ids in input_ids:
+                modal_pad_id = pad_ids
+        index = np.where(input_ids == modal_pad_id)[0][0]
+        if not encode:
+            return index
+        index_origin = index
+        length = 0
+        while input_ids[index] == modal_pad_id:
+            length += 1
+            index += 1
+        length_need = len(self.modal_transform.model_transform_template.output_columns) * 2 - 2
+        if length - 1 < length_need:
+            raise ValueError("The length of modal_pad_ids is less than needed.")
+        return index_origin
+
+    def encode_array_to_shared_memory(self, input_ids, other_data):
+        """encode arrays in other_data to shared memory, and put it in input_ids."""
+        input_ids = np.array(input_ids)
+        index = self._get_start_index_of_modal_pad_id(input_ids)
+
+        shm_name_save_path = "./shm_name.txt"
+        output_columns = copy.deepcopy(self.modal_transform.model_transform_template.output_columns)
+        # move position_ids to end of list
+        if "position_ids" in output_columns:
+            index = output_columns.index("position_ids")
+            output_columns.pop(index)
+            output_columns.append("position_ids")
+
+        for column in output_columns:
+            if column == "input_ids":
+                continue
+            data = other_data.pop(column, None)
+            data = np.array(data).astype(np.float32)
+            if data.ndim == 1:
+                data = data[None, :]
+
+            shm = create_shm(data.nbytes, shm_name_save_path)
+            shared_array = np.ndarray(data.shape, dtype=np.float32, buffer=shm.buf)
+            shared_array[:] = data
+
+            shm_name = encode_shm_name_to_int64(shm.name)
+            shape_value = encode_shape_to_int64(data.shape)
+            input_ids[index] = shm_name
+            input_ids[index + 1] = shape_value
+            index += 2
+        return input_ids
+
+    def tokenize(self, inputs: List[Dict[str, str]]):
+        """only for mindie"""
+        data = self.modal_transform.perform_predict_transform(inputs, batch_index=0, history=None,
+                                                              **self.kwargs)
+        new_data = {}
+        for key in self.modal_transform.model_transform_template.output_columns:
+            new_data[key] = data[key]
+        input_ids = new_data.pop("input_ids")
+        input_ids = self.encode_array_to_shared_memory(input_ids, new_data)
+        return input_ids
+
+    def decode_input_ids(self, input_ids, valid_length_each_example):
+        """decode arrays from input_ids"""
+        input_ids = np.array(input_ids)
+        start_index = 0
+        batch_data = []
+        max_length = self.max_length or 0
+
+        batch_index = 0
+        for valid_length in valid_length_each_example:
+            single_input_ids = input_ids[0][start_index:(start_index + valid_length)]
+            data = self._decode_single_input_ids(single_input_ids, batch_index)
+            batch_data.append(data)
+            max_length = max(max_length, len(data.get("input_ids")))
+            start_index += valid_length
+            batch_index += 1
+        data = self.modal_transform.batch_for_predict(batch_data, max_length)
+        return data.pop("input_ids"), data
+
+    def _decode_single_input_ids(self, input_ids, batch_index):
+        """decode arrays from single input_ids"""
+        data = {}
+        index = self._get_start_index_of_modal_pad_id(input_ids, encode=False)
+        columns = copy.deepcopy(self.modal_transform.model_transform_template.output_columns)
+        if "position_ids" in columns:
+            columns.remove("position_ids")
+            data["position_ids"] = None
+        for column in reversed(columns):
+            if column == "input_ids":
+                continue
+            shm_name = input_ids[index - 2]
+            shape_value = input_ids[index - 1]
+            shared_array = get_data_from_shm(shm_name, shape_value)
+            data[column] = shared_array
+
+            input_ids[index - 2] = input_ids[index]
+            input_ids[index - 1] = input_ids[index]
+            index -= 2
+        data["input_ids"] = input_ids
+        self.add_batch_index_to_context_pos(data, batch_index)
+        return data
+
+    def add_batch_index_to_context_pos(self, data, batch_index):
+        context_pos_types = [modal + "_context_pos" for modal in MODALS]
+        for pos_type in context_pos_types:
+            if pos_type not in data:
+                continue
+            data[pos_type][:, :, 0] += batch_index
+
+    def decode_position_ids_from_input_ids(self, input_ids):
+        """decode position_ids from input_ids"""
+        if "position_ids" not in self.modal_transform.model_transform_template.output_columns:
+            return range(len(input_ids))
+        index = self._get_start_index_of_modal_pad_id(input_ids, encode=False)
+        shm_name = input_ids[index - 2]
+        shape_value = input_ids[index - 1]
+        position_ids = get_data_from_shm(shm_name, shape_value)
+        input_ids[index - 2] = input_ids[index]
+        input_ids[index - 1] = input_ids[index]
+        return np.squeeze(position_ids)[:len(input_ids)]
+
+    def decode(self, *args, **kwargs):
+        return self.tokenizer.decode(*args, **kwargs)
+
+    # pylint: disable=W0613
+    def make_context(self, rank: int, conversation: List[Dict[str, str]], add_generation_prompt: bool = True,
+                     adapt_to_max_length: bool = False, **kwargs):
+        inputs = []
+        for i in conversation:
+            inputs.extend(i["content"])
+        return self.tokenize(inputs)

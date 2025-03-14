@@ -42,6 +42,7 @@ from mindformers.generation.utils import softmax_with_threads, topk, GenerateOut
 from mindformers.modules.block_tables import BlockTables
 from mindformers.tools.logger import logger
 from mindformers.tools.utils import is_pynative
+from mindformers.tools.debug_info import DetailedLatency, Profiling
 from mindformers.generation.parallel_decoding import parallel_decoding_control, parallel_decoding_process
 
 __all__ = ["GenerationMixin"]
@@ -79,23 +80,41 @@ class GenerationMixin:
     """A class providing all functions for autoregressive text generation, used as a mixin with PreTrainedModel."""
 
     def __init__(self):
+        self.detailed_latency = DetailedLatency()
+        self.profile = Profiling()
         self.block_mgr = None
         self.use_mint_op = version_control.use_mint_op()
         self.is_pynative = is_pynative()
         self.argmax = mint.argmax if self.use_mint_op else ms.ops.argmax
         self._pre_set_phase = None
+        self._exec_add_flags = True
+        self.gather = P.Gather()
 
     def _set_network_phase(self, phase):
         self._pre_set_phase = phase
+        self._exec_add_flags = True
 
-    def _set_block_mgr(self, batch_size):
+    def _set_block_mgr(self, batch_size, seq_length):
         """ Set model block table mgr function. """
-
         if not self.block_mgr:
-            self.block_mgr = BlockTables(self.config.num_blocks, self.config.block_size, self.config.seq_length)
+            self.block_mgr = BlockTables(self.config.num_blocks, self.config.block_size, seq_length)
 
         if self.block_mgr:
             self.block_mgr.init_cache_engine(batch_size)
+
+    def _prepare_inputs_for_prefill_flatten(self, input_ids, batch_valid_length, slot_mapping, model_inputs):
+        """prepare inputs ids for prefill flatten"""
+        batch_valid_length_bs = batch_valid_length.shape[0]  # [bs,]
+        input_ids_list = []
+        for i in range(batch_valid_length_bs):
+            context_len = batch_valid_length[i]
+            input_ids_list.append(input_ids[i][:context_len])
+        input_ids = np.concatenate(input_ids_list, 0)
+        input_ids = input_ids.reshape((1, -1))
+        slot_mapping = np.delete(slot_mapping, np.where(slot_mapping == -1))
+        model_inputs["input_ids"] = Tensor.from_numpy(input_ids.astype(np.int32))
+        model_inputs["slot_mapping"] = Tensor.from_numpy(slot_mapping)
+        return model_inputs
 
     # pylint: disable=W0613
     def prepare_inputs_for_generation(self, input_ids, **kwargs):
@@ -104,13 +123,25 @@ class GenerationMixin:
         A model class needs to define a `prepare_inputs_for_generation` method
         in order to use `.generate()`
 
-        Raises:
-            RuntimeError: Not implemented in model but call `.generate()`
         """
-        raise RuntimeError(
-            "A model class needs to define a `prepare_inputs_for_generation`"
-            " method in order to use `.generate()`."
-        )
+        model_inputs = {"input_ids": Tensor.from_numpy(input_ids.astype(np.int32))}
+        if self.is_pynative:
+            model_inputs = {}
+            if self.config.is_dynamic and "origin_inputs" in kwargs and self.use_past:
+                input_ids = kwargs["origin_inputs"]
+            model_inputs["input_ids"] = Tensor.from_numpy(input_ids.astype(np.int32))
+        else:
+            if self.config.is_dynamic:
+                prefill = kwargs.get("prefill")
+                if prefill and "origin_inputs" in kwargs:
+                    origin_inputs = kwargs["origin_inputs"]
+                    batch_valid_length = kwargs.get("valid_length_each_example")
+                    slot_mapping = kwargs.get("slot_mapping")
+                    model_inputs = self._prepare_inputs_for_prefill_flatten(origin_inputs,
+                                                                            batch_valid_length,
+                                                                            slot_mapping,
+                                                                            model_inputs)
+        return model_inputs
 
     def add_flags_custom(self, is_first_iteration):
         """
@@ -122,6 +153,17 @@ class GenerationMixin:
                 Indicate whether current iteration is the first iteration in prediction.
         """
         self.add_flags_recursive(is_first_iteration=is_first_iteration)
+
+    def add_flags_custom_mcore(self, is_prefill):
+        """
+        Add customized attributes for specific cells in the model. If the model does not implement this method,
+        this will add customized attributes for all cells in the model recursively.
+
+        Args:
+            is_first_iteration (bool): Network configuration information.
+                Indicate whether current iteration is the first iteration in prediction.
+        """
+        self.add_flags_recursive(is_prefill=is_prefill)
 
     # pylint: disable=W0613
     def update_model_kwargs_before_generate(self, input_ids, model_kwargs: dict):
@@ -290,32 +332,83 @@ class GenerationMixin:
         )
         return input_ids
 
-    def _incremental_infer(self, model_inputs: dict, prefill, current_index):
+    def _incremental_infer(self, model_inputs: dict, prefill, current_index, key_cache=None, value_cache=None):
         """model forward for incremental infer."""
         # Claim the first graph
+        if key_cache is not None and value_cache is not None:
+            model_inputs = {**model_inputs, 'key_cache': key_cache, 'value_cache': value_cache}
         if prefill:
             self.phase = "prefill"
             if self._pre_set_phase:
                 self.phase = f"prefill_{self._pre_set_phase}"
-            self.add_flags_custom(is_first_iteration=True)
+            # In dynamic shape scenarios, only the first execution of the prefill process will trigger this.
+            if self._exec_add_flags:
+                self.add_flags_custom(is_first_iteration=True)
+            self.detailed_latency.start_predict_timer()
             # pylint: disable=E1102
             res = self(
                 **model_inputs,
             )
             self.phase = "increment"
-            # first iter done, go to other iters
-            self.add_flags_custom(is_first_iteration=False)
+            # first iter done, go to other iters, in dynamic shape scenarios, only the first execution
+            # of the increment process will trigger this.
+            if self._exec_add_flags:
+                self.add_flags_custom(is_first_iteration=False)
+                if self.config.is_dynamic and not self.is_pynative:
+                    self._exec_add_flags = False
         else:
             # slice model inputs for incremental infer
             if self._pre_set_phase:
                 self.phase = f"increment_{self._pre_set_phase}"
             if not (hasattr(self.config, 'parallel_decoding_params') and self.config.parallel_decoding_params):
                 self.slice_incremental_inputs(model_inputs, current_index)
+            self.detailed_latency.start_predict_timer()
             # pylint: disable=E1102
             res = self(
                 **model_inputs,
             )
 
+        return res
+
+    def _incremental_infer_mcore(self,
+                                 model_inputs: dict,
+                                 prefill):
+        """model forward for incremental infer."""
+        # Claim the first graph
+        if prefill:
+            self.phase = "prefill"
+            if self._pre_set_phase:
+                self.phase = f"prefill_{self._pre_set_phase}"
+            # In dynamic shape scenarios, only the first execution of the prefill process will trigger this.
+            if self._exec_add_flags:
+                self.add_flags_custom_mcore(is_prefill=True)
+            self.detailed_latency.start_predict_timer()
+            # pylint: disable=E1102
+            res = self(
+                **model_inputs,
+            )
+            self.phase = "increment"
+            # first iter done, go to other iters, in dynamic shape scenarios, only the first execution
+            # of the increment process will trigger this.
+            if self._exec_add_flags:
+                self.add_flags_custom_mcore(is_prefill=False)
+                self._exec_add_flags = False
+
+        else:
+            # slice model inputs for incremental infer
+            if self._pre_set_phase:
+                self.phase = f"increment_{self._pre_set_phase}"
+            self.detailed_latency.start_predict_timer()
+            # pylint: disable=E1102
+            res = self(
+                **model_inputs,
+            )
+            seq_lens_tensor = model_inputs.get("seq_lens_tensor", None)
+            context_lens_tensor = model_inputs.get("context_lens_tensor", None)
+            if seq_lens_tensor is not None and context_lens_tensor is not None:
+                q_lens_tensor = seq_lens_tensor - context_lens_tensor
+                if q_lens_tensor.max() > 1:
+                    res = self.gather(res, q_lens_tensor - 1, 0)
         return res
 
     def _beam_search(self,
@@ -571,8 +664,8 @@ class GenerationMixin:
                 complement the default logits processors built from arguments and generation config.
                 If a logit processor is passed that is already created with the arguments or a
                 generation config an error is thrown. This feature is intended for advanced users. Default: ``None``.
-            streamer (TextStreamer): The streamer that generator uses.
-            seed (int): Random seed used in sample.
+            streamer (TextStreamer, optional): The streamer that generator uses. Default: ``None``.
+            seed (int, optional): Random seed used in sample. Default: ``None``.
             kwargs:
                 Specific parametrization of `generate_config` and/or additional model-specific kwargs that will be
                 forwarded to the `forward` function of the model. Supported `generate_config` keywords can be
@@ -647,6 +740,7 @@ class GenerationMixin:
             UN Chief Says There Is No Military Solution in Syria
             UN Chief Says There Is No Military Solution in Syria.
         """
+        self.detailed_latency.clear()
         origin_phase = self.phase
         self.set_train(False)
         try:
@@ -657,8 +751,12 @@ class GenerationMixin:
         input_ids = np.reshape(input_ids, (-1, np.shape(input_ids)[-1]))
         batch_size = input_ids.shape[0]
 
-        seed = 0 if seed is None else seed
-        np.random.seed(seed)
+        if seed is not None:
+            if not isinstance(seed, int):
+                raise ValueError(f"Invalid seed type: {type(seed)}. Seed must be an integer.")
+            if not 0 <= seed < 2**64:
+                raise ValueError(f"Invalid seed value: {seed}. Seed must be in the range [0, 2**64 - 1].")
+            np.random.seed(seed)
 
         logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
 
@@ -667,7 +765,7 @@ class GenerationMixin:
         if use_past_tmp is not None:
             logger.warning("use_past should be defined in model config, it will not take effect when passed to "
                            ".generate() method.")
-
+        use_legacy = getattr(self.config, "use_legacy", True)
         # Handle `generation_config` and kwargs that might update it
         # priority: `generation_config` argument > `model.generation_config` (default config)
         if generation_config is None:
@@ -688,7 +786,11 @@ class GenerationMixin:
         if generation_config.pad_token_id is None:
             generation_config.pad_token_id = 0
 
-        _, input_ids_length = get_valid_length_each_example(input_ids, generation_config.pad_token_id)
+        valid_length_each_example, input_ids_length = \
+            get_valid_length_each_example(input_ids, generation_config.pad_token_id)
+        if hasattr(self.config, "extend_method") and self.config.extend_method == "DYNAMIC_NTK":
+            if not self.config.is_dynamic:
+                raise ValueError("Dynamic NTK predict mode only support is_dynamic=True, but get is_dynamic=False")
 
         if generation_config.max_new_tokens is not None:
             generation_config.max_length = generation_config.max_new_tokens + input_ids_length
@@ -705,6 +807,12 @@ class GenerationMixin:
                 "The max_length set is smaller than the length in the input_ids."
                 f"You shout set max_length to {input_ids_length}"
             )
+
+        if generation_config.max_new_tokens is not None:
+            max_length_each_example = [valid_length + generation_config.max_new_tokens \
+                for valid_length in valid_length_each_example]
+        else:
+            max_length_each_example = [generation_config.max_length] * len(valid_length_each_example)
 
         if generation_config.min_length is not None and generation_config.min_length > generation_config.max_length:
             logger.warning(f"Unfeasible length constraints: `min_length` ({generation_config.min_length}) is "
@@ -737,8 +845,11 @@ class GenerationMixin:
                 "`streamer` cannot be used with beam search yet. Make sure that `num_beams` is set to 1."
             )
 
-        if generation_config.use_past:
-            self._set_block_mgr(batch_size)
+        if not use_legacy:
+            self._set_block_mgr(batch_size, self.config.seq_length)
+            self.set_dynamic_inputs()
+        elif generation_config.use_past:
+            self._set_block_mgr(batch_size, self.config.seq_length)
             if self.config.is_dynamic:
                 self.set_dynamic_inputs()
 
@@ -835,15 +946,20 @@ class GenerationMixin:
 
             if hasattr(self.config, 'pet_config') and self.config.pet_config.pet_type == "slora":
                 adapter_id = kwargs.pop("adapter_id", None)
-                adapter_ids = [adapter_id] * batch_size if adapter_id is not None else None
-                model_kwargs["adapter_ids"] = adapter_ids
+                if adapter_id is not None and len(adapter_id) > 1:
+                    if len(adapter_id) != batch_size:
+                        raise ValueError("adapter_ids has different length with inputs.")
+                    model_kwargs["adapter_ids"] = adapter_id
+                else:
+                    model_kwargs["adapter_ids"] = adapter_id * batch_size if adapter_id is not None else None
 
             while np.sum(is_finished) != batch_size:
+                self.detailed_latency.start_preprocess_timer()
                 block_tables = None
                 slot_mapping = None
-                if generation_config.use_past:
+                if not use_legacy or generation_config.use_past:
                     if prefill:
-                        if self.config.is_dynamic:
+                        if (use_legacy and self.is_pynative and self.config.is_dynamic):
                             max_input_length = len(origin_inputs[0])
                         else:
                             max_input_length = self.config.seq_length
@@ -853,20 +969,33 @@ class GenerationMixin:
                     else:
                         block_tables, slot_mapping = self.block_mgr.assemble_pa_inc_inputs(valid_length_each_example,
                                                                                            is_finished)
-
-                infer_output, is_finished = self.infer(input_ids=input_ids,
-                                                       valid_length_each_example=valid_length_each_example,
-                                                       generation_config=generation_config,
-                                                       logits_processor=logits_processor,
-                                                       logits_warper=logits_warper,
-                                                       block_tables=block_tables,
-                                                       slot_mapping=slot_mapping,
-                                                       prefill=prefill,
-                                                       is_finished=is_finished,
-                                                       encoder_mask=encoder_mask,
-                                                       encoder_output=encoder_output,
-                                                       target_mask=target_mask,
-                                                       **model_kwargs)
+                self.profile.start_profiling(valid_length_each_example[0] - input_ids_length)
+                if use_legacy:
+                    infer_output, is_finished = self.infer(input_ids=input_ids,
+                                                           valid_length_each_example=valid_length_each_example,
+                                                           generation_config=generation_config,
+                                                           logits_processor=logits_processor,
+                                                           logits_warper=logits_warper,
+                                                           block_tables=block_tables,
+                                                           slot_mapping=slot_mapping,
+                                                           prefill=prefill,
+                                                           is_finished=is_finished,
+                                                           encoder_mask=encoder_mask,
+                                                           encoder_output=encoder_output,
+                                                           target_mask=target_mask,
+                                                           **model_kwargs)
+                else:
+                    infer_output, is_finished = self.infer_mcore(input_ids=input_ids,
+                                                                 valid_length_each_example=valid_length_each_example,
+                                                                 generation_config=generation_config,
+                                                                 logits_processor=logits_processor,
+                                                                 logits_warper=logits_warper,
+                                                                 block_tables=block_tables,
+                                                                 slot_mapping=slot_mapping,
+                                                                 prefill=prefill,
+                                                                 is_finished=is_finished,
+                                                                 **model_kwargs)
+                self.profile.stop_profiling(valid_length_each_example[0] - input_ids_length)
                 if generation_config.return_dict_in_generate:
                     target_list = infer_output["target_list"]
                     if generation_config.output_scores:
@@ -875,10 +1004,11 @@ class GenerationMixin:
                         raw_logits += (infer_output["logits"],)
                 else:
                     target_list = infer_output
-                if generation_config.use_past:
+                if not use_legacy or generation_config.use_past:
                     if prefill and "origin_inputs" in model_kwargs:
                         model_kwargs.pop("origin_inputs")
                     prefill = False
+
                 for i in range(batch_size):
                     if is_finished[i]:
                         continue
@@ -890,10 +1020,11 @@ class GenerationMixin:
 
                     # Stop judgment
                     if target_list[i] in generation_config.eos_token_id \
-                            or valid_length_each_example[i] + 1 == generation_config.max_length:
+                            or valid_length_each_example[i] + 1 == generation_config.max_length \
+                            or valid_length_each_example[i] + 1 == max_length_each_example[i]:
                         is_finished[i] = True
                     else:
-                        valid_length_each_example[i] += int(1)
+                        valid_length_each_example[i] += 1
                         input_mask[i][valid_length_each_example[i] - 1] = 1
 
                 if streamer is not None:
@@ -901,6 +1032,7 @@ class GenerationMixin:
                         streamer.put(target_list[0])
                     else:
                         streamer.put(target_list)
+                self.detailed_latency.end_postprocess_timer()
 
             # Return valid outputs out of padded outputs
             valid_length_each_example += 1
@@ -917,6 +1049,7 @@ class GenerationMixin:
             total_time = time.time() - total_time
             logger.info("total time: %s s; generated tokens: %s tokens; generate speed: %s tokens/s",
                         total_time, generate_len, generate_len / total_time)
+            self.detailed_latency.print_info()
 
         # set to original phase
         self.set_train(origin_phase == "train")
@@ -954,8 +1087,8 @@ class GenerationMixin:
         Args:
             input_ids (List(List(int))): Input ids after padding.
             valid_length_each_example (np.ndarray): Valid input length except padding.
-            generation_config (`GenerationConfig`): The generation configuration to be used
-                as base parametrization for the generation call.
+            generation_config (`GenerationConfig`, optional): The generation configuration to be used
+                as base parametrization for the generation call. Default: ``None``.
             logits_processor (`LogitsProcessorList`, optional): An instance of [`LogitsProcessorList`].
                 List of instances of class derived from [`LogitsProcessor`] used to modify the prediction scores
                 of the language modeling head applied at each generation step. Default: ``None``.
@@ -963,13 +1096,17 @@ class GenerationMixin:
                 List of instances of class derived from [`LogitsWarper`] used to warp the prediction score
                 distribution of the language modeling head applied before multinomial sampling
                 at each generation step. Default: ``None``.
-            block_tables (Tensor): Params for page attention.
-            slot_mapping (Tensor): Params for page attention.
-            prefill (bool): Whether to do prefill predict or decode predict.
-            is_finished (List(bool)): Whether each sequence is finished its generation.
-            encoder_mask (Tensor): Use for encoder-decoder construct, do not need for decoder only construct.
-            encoder_output (Tensor): Use for encoder-decoder construct, do not need for decoder only construct.
-            target_mask (Tensor): Use for encoder-decoder construct, do not need for decoder only construct.
+            block_tables (Tensor, optional): Store mapping tables for each sequence. Default: ``None``.
+            slot_mapping (Tensor, optional): Token cache physical slot index. Default: ``None``.
+            prefill (bool, optional): Whether to do prefill predict or decode predict. Default: ``True``.
+            is_finished (List(bool), optional): Whether each sequence is finished its generation. Default: ``None``.
+            encoder_mask (Tensor, optional): Use for encoder-decoder construct, do not need for decoder only
+                construct. Default: ``None``.
+            encoder_output (Tensor, optional): Use for encoder-decoder construct, do not need for decoder only
+                construct. Default: ``None``.
+            target_mask (Tensor, optional): Use for encoder-decoder construct, do not need for decoder only
+                construct. Default: ``None``.
+            **model_kwargs (Any): Keyword arguments of the model.
 
         Returns:
             next_token, the next token to be generated.
@@ -996,6 +1133,7 @@ class GenerationMixin:
                                           target_mask=target_mask,
                                           **model_kwargs)
 
+        self.detailed_latency.start_postprocess_timer()
         forward_time = time.time() - start_time
         sample_time = time.time()
 
@@ -1040,6 +1178,8 @@ class GenerationMixin:
                 encoder_mask: Optional[Tensor] = None,
                 encoder_output: Optional[Tensor] = None,
                 target_mask: Optional[Tensor] = None,
+                key_cache: Optional[List[Tensor]] = None,
+                value_cache: Optional[List[Tensor]] = None,
                 **model_kwargs):
         r"""
         Model forward process.
@@ -1047,23 +1187,27 @@ class GenerationMixin:
         Args:
             input_ids (List(List(int))): Input ids after padding.
             valid_length_each_example (np.ndarray): Valid input length except padding.
-            block_tables (Tensor): Params for page attention.
-            slot_mapping (Tensor): Params for page attention.
-            prefill (bool): Whether to do prefill predict or decode predict.
-            use_past (bool): Whether to use past.
-            encoder_mask (Tensor): Use for encoder-decoder construct, do not need for decoder only construct.
-            encoder_output (Tensor): Use for encoder-decoder construct, do not need for decoder only construct.
-            target_mask (Tensor): Use for encoder-decoder construct, do not need for decoder only construct.
+            block_tables (Tensor, optional): Params for page attention. Default: ``None``.
+            slot_mapping (Tensor, optional): Params for page attention. Default: ``None``.
+            prefill (bool, optional): Whether to do prefill predict or decode predict. Default: ``None``.
+            use_past (bool, optional): Whether to use past. Default: ``False``.
+            encoder_mask (Tensor, optional): Use for encoder-decoder construct, do not need for decoder only
+                construct. Default: ``None``.
+            encoder_output (Tensor, optional): Use for encoder-decoder construct, do not need for decoder only
+                construct. Default: ``None``.
+            target_mask (Tensor, optional): Use for encoder-decoder construct, do not need for decoder only
+                construct. Default: ``None``.
+            key_cache (List[Tensor], optional): A group of tensors used for kvcache.
+                Default: ``None``.
+            value_cache (List[Tensor], optional): A group of tensors used for kvcache.
+                Default: ``None``.
+            **model_kwargs (Any): Keyword arguments of the model.
 
         Returns:
             res, the result after the forward process.
             current_index, records the current index of the sequence.
         """
         input_ids = np.reshape(input_ids, (-1, np.shape(input_ids)[-1]))
-        if parallel_decoding_control(self.config):
-            current_index = None
-        else:
-            current_index = valid_length_each_example - 1 + np.arange(input_ids.size, step=input_ids.shape[1])
         if self.config.is_encoder_decoder:
             inputs = Tensor(input_ids, mstype.int32)
             # pylint: disable=E1102
@@ -1075,6 +1219,10 @@ class GenerationMixin:
                 decoder_attention_mask=Tensor(target_mask, mstype.float32),
             )
         else:
+            if parallel_decoding_control(self.config):
+                current_index = None
+            else:
+                current_index = valid_length_each_example - 1 + np.arange(input_ids.size, step=input_ids.shape[1])
             model_kwargs["current_index"] = current_index
             model_kwargs["prefill"] = prefill if use_past else None
             model_kwargs["valid_length_each_example"] = valid_length_each_example
@@ -1090,7 +1238,6 @@ class GenerationMixin:
             else:
                 current_index = valid_length_each_example - 1 + np.arange(real_input_ids.numel(),
                                                                           step=real_input_ids.shape[1])
-                model_kwargs["current_index"] = current_index
             if use_past:
                 if "batch_valid_length" not in model_inputs:
                     model_inputs["batch_valid_length"] = Tensor.from_numpy(
@@ -1103,13 +1250,243 @@ class GenerationMixin:
                     model_inputs=model_inputs,
                     prefill=prefill,
                     current_index=current_index,
+                    key_cache=key_cache,
+                    value_cache=value_cache
                 )
             else:
                 if self._pre_set_phase:
                     self.phase = f"predict_{self._pre_set_phase}"
                 res = self(**model_inputs)  # pylint: disable=E1102
-
         return res, current_index
+
+    def prepare_inputs_for_generation_mcore(self,
+                                            input_ids: [Union[List[int], List[List[int]]]],
+                                            valid_length_each_example: np.ndarray,
+                                            block_tables: Optional[Tensor] = None,
+                                            slot_mapping: Optional[Tensor] = None,
+                                            prefill: bool = None,
+                                            **model_kwargs):
+        """prepare inputs for mcore"""
+        model_inputs = dict()
+        seq_lens = valid_length_each_example
+        q_seq_lens = model_kwargs.get("q_seq_lens", None)
+        positions = model_kwargs.get("position_ids", None)
+        if q_seq_lens is None:
+            if len(input_ids) == len(seq_lens):
+                q_seq_lens = np.ones_like(seq_lens)
+            else:
+                q_seq_lens = valid_length_each_example
+        context_lens = seq_lens - q_seq_lens
+
+        if positions is None:
+            positions = np.zeros_like(input_ids, dtype=np.int32)
+            start = 0
+            for i in range(seq_lens.size):
+                positions[start:start + q_seq_lens[i]] = np.arange(context_lens[i], seq_lens[i])
+                start += q_seq_lens[i]
+        if context_lens.max() > 0:
+            prefill = False
+        model_inputs["input_ids"] = Tensor.from_numpy(input_ids.astype(np.int32))
+        model_inputs["batch_valid_length"] = Tensor.from_numpy(seq_lens.astype(np.int32))
+        model_inputs["context_lens_tensor"] = Tensor.from_numpy(context_lens.astype(np.int32))
+        model_inputs["positions"] = Tensor.from_numpy(positions.astype(np.int32))
+        model_inputs["block_tables"] = Tensor.from_numpy(block_tables)
+        model_inputs["slot_mapping"] = Tensor.from_numpy(slot_mapping)
+        model_inputs["attention_mask"] = None
+        model_inputs["attn_metadata"] = None
+        model_inputs["kv_cache"] = None
+        return model_inputs, prefill
+
+    def forward_mcore(self,
+                      input_ids: [Union[List[int], List[List[int]]]],
+                      valid_length_each_example: np.ndarray,
+                      block_tables: Optional[Tensor] = None,
+                      slot_mapping: Optional[Tensor] = None,
+                      prefill: bool = None,
+                      **model_kwargs):
+        r"""
+        Model forward process.
+
+        Args:
+            input_ids (List(List(int))): Input ids after padding.
+            valid_length_each_example (np.ndarray): Valid input length except padding.
+            block_tables (Tensor, optional): Params for page attention. Default: ``None``.
+            slot_mapping (Tensor, optional): Params for page attention. Default: ``None``.
+            prefill (bool, optional): Whether to do prefill predict or decode predict. Default: ``None``.
+            **model_kwargs (Any): Keyword arguments of the model.
+
+        Returns:
+            res, the result after the forward process.
+            current_index, records the current index of the sequence.
+        """
+        model_inputs, prefill = self.prepare_inputs_for_generation_mcore(
+            input_ids=input_ids,
+            valid_length_each_example=valid_length_each_example,
+            block_tables=block_tables,
+            slot_mapping=slot_mapping,
+            prefill=prefill,
+            model_kwargs=model_kwargs,
+        )
+        res = self._incremental_infer_mcore(
+            model_inputs=model_inputs,
+            prefill=prefill,
+        )
+        return res, None
+
+    def infer_mcore(self,
+                    input_ids: Union[List[int], List[List[int]]],
+                    valid_length_each_example: np.ndarray,
+                    generation_config: GenerationConfig = None,
+                    logits_processor: Optional[LogitsProcessorList] = None,
+                    logits_warper: Optional[LogitsProcessorList] = None,
+                    block_tables: Optional[Tensor] = None,
+                    slot_mapping: Optional[Tensor] = None,
+                    prefill: bool = True,
+                    is_finished: List[bool] = None,
+                    **model_kwargs):
+        r"""
+        Do infer and return logits on next position, can choose do prefill or decode predict.
+
+        Args:
+            input_ids (List(List(int))): Input ids after padding.
+            valid_length_each_example (np.ndarray): Valid input length except padding.
+            generation_config (`GenerationConfig`, optional): The generation configuration to be used
+                as base parametrization for the generation call. Default: ``None``.
+            logits_processor (`LogitsProcessorList`, optional): An instance of [`LogitsProcessorList`].
+                List of instances of class derived from [`LogitsProcessor`] used to modify the prediction scores
+                of the language modeling head applied at each generation step. Default: ``None``.
+            logits_warper (`LogitsProcessorList`, optional): An instance of [`LogitsProcessorList`].
+                List of instances of class derived from [`LogitsWarper`] used to warp the prediction score
+                distribution of the language modeling head applied before multinomial sampling
+                at each generation step. Default: ``None``.
+            block_tables (Tensor, optional): Store mapping tables for each sequence. Default: ``None``.
+            slot_mapping (Tensor, optional): Token cache physical slot index. Default: ``None``.
+            prefill (bool, optional): Whether to do prefill predict or decode predict. Default: ``True``.
+            is_finished (List(bool), optional): Whether each sequence is finished its generation. Default: ``None``.
+            **model_kwargs (Any): Keyword arguments of the model.
+
+        Returns:
+            next_token, the next token to be generated.
+            is_finished, whether the sequence has completed its generation task.
+        """
+        max_valid_length = max(valid_length_each_example)
+        if max_valid_length > self.config.seq_length:
+            raise ValueError(
+                f"The input length:{max_valid_length} is longer than the seq_length:{self.config.seq_length}, "
+                "which is not allowed."
+            )
+
+        start_time = time.time()
+        flatten_input_ids, slot_mapping = self._prepare_inputs_for_flatten(
+            input_ids, valid_length_each_example, slot_mapping, prefill
+        )
+        res, current_index = self.forward_mcore(
+            input_ids=flatten_input_ids,
+            valid_length_each_example=valid_length_each_example,
+            block_tables=block_tables,
+            slot_mapping=slot_mapping,
+            prefill=prefill,
+            **model_kwargs,
+        )
+
+        self.detailed_latency.start_postprocess_timer()
+        forward_time = time.time() - start_time
+        sample_time = time.time()
+        target_list, probs, logits, is_finished = self.postprocess(
+            input_ids=input_ids,
+            is_finished=is_finished,
+            res=res,
+            current_index=current_index,
+            generation_config=generation_config,
+            valid_length_each_example=valid_length_each_example,
+            logits_processor=logits_processor,
+            logits_warper=logits_warper,
+            need_gather_logits=False,
+        )
+
+        sample_time = time.time() - sample_time
+        infer_time = time.time() - start_time
+        logger.debug("forward time: %s s; sample time: %s s; total count: %s s",
+                     forward_time, sample_time, infer_time)
+
+        if generation_config.return_dict_in_generate:
+            infer_output_dict = InferOutput(
+                target_list=target_list,
+                probs=probs,
+                logits=logits
+            )
+            return infer_output_dict, is_finished
+
+        return target_list, is_finished
+
+    def _prepare_inputs_for_flatten(self, input_ids, valid_length_each_example, slot_mapping, prefill=True):
+        """prepare inputs ids for prefill flatten"""
+        input_ids = np.array(input_ids)
+        batch_valid_length_bs = valid_length_each_example.shape[0]
+        if prefill:
+            input_ids_list = []
+            for i in range(batch_valid_length_bs):
+                input_ids_list.append(input_ids[i][:valid_length_each_example[i]])
+            input_ids = np.concatenate(input_ids_list, 0)
+            slot_mapping = np.delete(slot_mapping, np.where(slot_mapping == -1))
+        else:
+            batch_valid_length_bs = valid_length_each_example.shape[0]
+            input_ids_list = []
+            for i in range(batch_valid_length_bs):
+                input_ids_list.append(input_ids[i][valid_length_each_example[i] - 1])
+            input_ids = np.array(input_ids_list)
+        input_ids = input_ids.reshape((-1))
+        return input_ids, slot_mapping
+
+    # pylint: disable=E1102
+    def chunk_prefill_infer(self,
+                            input_ids: [Union[List[int], List[List[int]]]],
+                            batch_valid_length: np.ndarray,
+                            block_tables: np.ndarray,
+                            slot_mapping: np.ndarray,
+                            attention_mask: Optional[np.ndarray] = None,
+                            **model_kwargs):
+        """
+        Preprocessing of chunk prefill inference
+
+        Args:
+            input_ids (List(List(int))): Input ids.
+            batch_valid_length (np.ndarray): Valid input length.
+            block_tables (np.ndarray): Params for page attention.
+            slot_mapping (np.ndarray): Params for page attention.
+            attention_mask (np.ndarray): Params for page attention.
+            q_seq_lens (np.ndarray): Params for page attention.
+            gather_index (np.ndarray): Used to obtain the last latent vector of each sequence.
+            seq_range (np.ndarray): Used to obtain Mask and positional encoding of valid tokens for each sequence.
+        """
+        if not (self.use_past and self.chunk_prefill):
+            raise ValueError(f"chunk prefill infer can be called only when use_past=true and chunk_prefill=true, \
+                but use_past={self.use_past}, chunk_prefill={self.chunk_prefill}")
+        # decode
+        if "gather_index" not in model_kwargs or "seq_range"not in model_kwargs \
+            or "q_seq_lens" not in model_kwargs:
+            model_kwargs["gather_index"] = None
+            model_kwargs["seq_range"] = None
+            model_kwargs["q_seq_lens"] = None
+            self.add_flags_custom(is_first_iteration=False)
+        else: # decode + chunk
+            input_ids = np.reshape(input_ids, (1, -1))
+            model_kwargs["gather_index"] = Tensor(model_kwargs["gather_index"], ms.int32)
+            model_kwargs["seq_range"] = Tensor(model_kwargs["seq_range"], ms.int32)
+            model_kwargs["q_seq_lens"] = Tensor(model_kwargs["q_seq_lens"], ms.int32)
+            self.add_flags_custom(is_first_iteration=True)
+
+        if attention_mask is not None:
+            model_kwargs["attention_mask"] = Tensor(attention_mask, ms.float16)
+
+        model_kwargs["input_ids"] = Tensor(input_ids, ms.int32)
+        model_kwargs["batch_valid_length"] = Tensor(batch_valid_length, ms.int32)
+        model_kwargs["block_tables"] = Tensor(block_tables, ms.int32)
+        model_kwargs["slot_mapping"] = Tensor(slot_mapping, ms.int32)
+
+        logits = self(**model_kwargs)
+
+        return logits
 
     def postprocess(self,
                     input_ids,
@@ -1139,7 +1516,8 @@ class GenerationMixin:
                 instances of class derived from [`LogitsWarper`] used to warp
                 the prediction score distribution of the language modeling head applied
                 before multinomial sampling at each generation step. Default: ``None``.
-            need_gather_logits (bool): whether gather result, when decode predict and is first iteration, set True.
+            need_gather_logits (bool, optional): whether gather result, when decode predict and is first iteration.
+                Default: ``True``.
 
         Returns:
             target_list, contains the target values generated in each batch.
@@ -1273,9 +1651,9 @@ class GenerationMixin:
             query (str): User input for inference.
             history (List[Dict[str, str]], optional): A Conversation object or list of dicts with "role"
                 and "content" keys, representing the chat history so far. Default: ``None``.
-            system_role_name (str): The name of system role. Default: ``"system"``.
-            user_role_name (str): The name of user role. Default: ``"user"``.
-            assistant_role_name (str): The name of assistant role. Default: "assistant".
+            system_role_name (str, optional): The name of system role. Default: ``"system"``.
+            user_role_name (str, optional): The name of user role. Default: ``"user"``.
+            assistant_role_name (str, optional): The name of assistant role. Default: "assistant".
             instruction (str, optional): Instruction message to the model. Default: ``""``.
             max_length (int, optional): The maximum length the generated tokens can have.
                 Corresponds to the length of the input prompt + `max_new_tokens`.

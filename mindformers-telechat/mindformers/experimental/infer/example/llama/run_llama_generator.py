@@ -16,7 +16,11 @@
 import argparse
 import os
 
+import mindspore as ms
+from mindspore import Tensor, Model
+from mindspore.common import initializer as init
 from mindspore.communication import get_rank
+from mindspore.nn.utils import no_init_parameters
 
 from mindformers import MindFormerConfig, build_context, logger
 from mindformers.experimental.infer.core.utils import generate_state_dict
@@ -24,7 +28,7 @@ from mindformers.experimental.infer.models.llama import ParallelLlamaForCausalLM
 from mindformers.experimental.parallel_core.pynative.utils import save_strategy_file
 from mindformers.models.llama import LlamaConfig, LlamaTokenizer
 from mindformers.tools.utils import get_output_root_path
-from mindformers.trainer.utils import load_ckpt
+from mindformers.trainer.utils import transform_and_load_checkpoint
 
 
 def main(config_path, load_checkpoint):
@@ -36,7 +40,6 @@ def main(config_path, load_checkpoint):
 
     # init config with yaml
     config = MindFormerConfig(config_path)
-    config.use_parallel = True
     device_num = os.getenv('MS_WORKER_NUM')
     logger.info(f"Use device number: {device_num}, it will override config.model_parallel.")
     config.parallel_config.model_parallel = int(device_num) if device_num else 1
@@ -58,7 +61,9 @@ def main(config_path, load_checkpoint):
     tokenizer = LlamaTokenizer.from_pretrained(model_name)
 
     # build model
-    network = ParallelLlamaForCausalLM(model_config)
+    with no_init_parameters():
+        network = ParallelLlamaForCausalLM(model_config)
+    model = Model(network)
 
     # get strategy file
     if config.only_save_strategy:
@@ -72,7 +77,12 @@ def main(config_path, load_checkpoint):
         return
 
     # load checkpoint
-    load_ckpt(config, network)
+    if config.load_checkpoint:
+        logger.info("----------------Transform and load checkpoint----------------")
+        seq_length = config.model.model_config.seq_length
+        input_ids = Tensor(shape=(batch_size, seq_length), dtype=ms.int32, init=init.One())
+        infer_data = network.prepare_inputs_for_predict_layout(input_ids)
+        transform_and_load_checkpoint(config, model, network, infer_data, do_predict=True)
 
     # generate
     inputs_ids = tokenizer(inputs, max_length=model_config.seq_length, padding="max_length")["input_ids"]

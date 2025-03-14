@@ -31,12 +31,14 @@ from mindformers.experimental.graph.transformer.\
     transformer import (ParallelTransformer as GraphParallelTransformer,
                         ParallelTransformerLayer as GraphParallelTransformerLayer,
                         ParallelAttention as GraphParallelAttention,
-                        ParallelMLP as GraphParallelMLP)
+                        ParallelMLP as GraphParallelMLP,
+                        ParallelLMLogits as GraphParallelLMLogits)
 from mindformers.experimental.parallel_core.pynative.transformer.\
     transformer import (ParallelTransformer as PynativeParallelTransformer,
                         ParallelTransformerLayer as PynativeParallelTransformerLayer,
                         ParallelAttention as PynativeParallelAttention,
-                        ParallelMLP as PynativeParallelMLP)
+                        ParallelMLP as PynativeParallelMLP,
+                        ParallelLMLogits as PynativeParallelLMLogits)
 from mindformers.experimental.graph.optimizer.adamw import AdamW as GraphAdamW
 from mindformers.experimental.parallel_core.pynative.optimizer.zero.adamw_zero import AdamW as PynativeAdamW
 from mindformers.experimental.graph.transformer.language_model import get_language_model as graph_get_language_model
@@ -44,6 +46,9 @@ from mindformers.experimental.parallel_core.pynative.transformer.\
     language_model import (get_language_model as pynative_get_language_model)
 from mindformers.experimental.graph.transformer.language_model import Embedding as GraphEmbedding
 from mindformers.experimental.parallel_core.pynative.transformer.language_model import Embedding as PynativeEmbedding
+from mindformers import MFTrainOneStepCell as GraphTrainOneStepCell
+from mindformers.experimental.parallel_core.pynative.training import TrainOneStepCell as PynativeTrainOneStepCell
+from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 from mindformers.experimental.parallel_core.pynative.register import ModuleType, ModuleRegistry
 
 __all__ = [
@@ -58,7 +63,8 @@ __all__ = [
     'ParallelMLP',
     'AdamW',
     'get_language_model',
-    'Embedding'
+    'Embedding',
+    'ParallelLMLogits'
 ]
 
 
@@ -190,4 +196,26 @@ class Embedding:
             return GraphEmbedding(*args, **kwargs)
         if mode == 1:
             return PynativeEmbedding(*args, **kwargs)
+        return None
+
+
+class ParallelLMLogits:
+    """Parallel LM logits router for graph or pynative depending on mode."""
+    def __new__(cls, *args, **kwargs):
+        mode = get_context('mode')
+        if mode == 0:
+            return GraphParallelLMLogits(*args, **kwargs)
+        if mode == 1:
+            return PynativeParallelLMLogits(*args, **kwargs)
+        return None
+
+
+@MindFormerRegister.register(MindFormerModuleType.WRAPPER, alias='UnifiedTrainOneStepCell')
+class TrainOneStepCell:
+    def __new__(cls, *args, **kwargs):
+        mode = get_context('mode')
+        if mode == 0:
+            return GraphTrainOneStepCell(*args, **kwargs)
+        if mode == 1:
+            return PynativeTrainOneStepCell(*args, **kwargs)
         return None

@@ -14,6 +14,7 @@
 # ============================================================================
 """Telechat Model Layers' APIs."""
 
+import mindspore as ms
 from mindspore.common.parameter import Parameter
 from mindspore import nn
 import mindspore.common.dtype as mstype
@@ -29,7 +30,7 @@ from mindspore import log as logger
 from mindspore.common.initializer import initializer, Normal
 from mindspore.parallel._utils import _get_parallel_mode
 from mindspore.context import ParallelMode
-
+from mindformers.modules.transformer.op_parallel_config import default_dpmp_config
 from mindformers.models.llama.llama_layer import LlamaSiLU
 from mindformers.modules.layers import Linear, Dropout, _check_input_dtype, _args_type_validator_check, \
     _valid_value_checks
@@ -111,29 +112,38 @@ class TelechatLinear(Linear):
                  has_bias=True,
                  activation=None,
                  transpose_b=True,
+                 expert_num=1,
+                 outer_batch=1,
                  param_init_type=mstype.float32,
                  compute_dtype=mstype.float16,
-                 skip_redistribution=False,
                  keep_prob=1.0):
         super(TelechatLinear, self).__init__(
             in_channels,
             out_channels,
+            weight_init=Normal(sigma=sigma, mean=mean),
             bias_init=bias_init,
             has_bias=has_bias,
             activation=activation,
             transpose_b=transpose_b,
+            expert_num=expert_num,
+            outer_batch=outer_batch,
             param_init_type=param_init_type,
-            skip_redistribution=skip_redistribution,
             compute_dtype=compute_dtype)
-        weight_shape = [out_channels, in_channels] if transpose_b else [in_channels, out_channels]
-        self.weight = Parameter(initializer(Normal(sigma=sigma, mean=mean), weight_shape, param_init_type),
-                                name="weight")
         self.dropout = Dropout(keep_prob=keep_prob)
+        if expert_num == 1:
+            weight_shape = [out_channels, in_channels] if transpose_b else [in_channels, out_channels]
+            self.weight = Parameter(initializer(Normal(sigma=sigma, mean=mean), weight_shape, param_init_type),
+                                    name="weight")
 
     def construct(self, x):
         """construct of linear."""
         out_shape = self.shape(x)[:-1] + (self.out_channels,)
         x = self.reshape(x, (-1, self.in_channels))
+        if self.expert_flag:
+            if self.use_expert_group_size is True:
+                x = self.reshape(x, (-1, self.expert_num, self.expert_group_size, self.in_channels))
+            else:
+                x = self.reshape(x, (self.outer_batch, self.expert_num, -1, self.in_channels))
         ori_dtype = F.dtype(x)
         weight = self.cast(self.weight, self.dtype)
         x = self.cast(x, self.dtype)
@@ -180,6 +190,7 @@ class TelechatFeedForward(Cell):
     def __init__(self, dim,
                  intermediate_size=None,
                  hidden_dim=None,
+                 expert_num=1,
                  sigma=0.0048,
                  mean=0.0,
                  multiple_of=256,
@@ -188,7 +199,8 @@ class TelechatFeedForward(Cell):
                  ffn_dim_multiplier=None,
                  compute_dtype=mstype.float16,
                  param_init_type=mstype.float32,
-                 is_dynamic=False):
+                 ffn_concat=False,
+                 parallel_config=default_dpmp_config):
         super().__init__()
 
         if hidden_act is None or not (isinstance(hidden_act, str) or issubclass(hidden_act, nn.Cell)):
@@ -205,48 +217,77 @@ class TelechatFeedForward(Cell):
                          ((hidden_dim + multiple_of - 1) // multiple_of)
 
         self.hidden_dropout_prob = hidden_dropout_prob
+        if expert_num == 1:
+            dp_moe = 1
+        else:
+            ep = parallel_config.expert_parallel
+            dp_moe = parallel_config.data_parallel // ep
         self.dtype = compute_dtype
         self.hidden_act = hidden_act
         self.dim = dim
         self.hidden_dim = hidden_dim
         self.mul = P.Mul()
         self.cast = P.Cast()
-        self.w1 = TelechatLinear(in_channels=dim,
-                                 out_channels=hidden_dim,
-                                 activation=hidden_act,
-                                 has_bias=False,
-                                 sigma=sigma,
-                                 mean=mean,
-                                 compute_dtype=compute_dtype,
-                                 param_init_type=param_init_type,
-                                 skip_redistribution=is_dynamic)
+        self.ffn_concat = ffn_concat
+        self.expert_num = expert_num
+        if self.ffn_concat:
+            self.w_gate_hidden = TelechatLinear(in_channels=dim,
+                                                out_channels=hidden_dim * 2,
+                                                expert_num=expert_num,
+                                                outer_batch=dp_moe,
+                                                has_bias=False,
+                                                sigma=sigma,
+                                                mean=mean,
+                                                compute_dtype=compute_dtype,
+                                                param_init_type=param_init_type)
+            self.activate = self.hidden_act()
+            self.split = ms.ops.auto_generate.SplitWithSize()
+        else:
+            self.w1 = TelechatLinear(in_channels=dim,
+                                     out_channels=hidden_dim,
+                                     activation=hidden_act,
+                                     expert_num=expert_num,
+                                     outer_batch=dp_moe,
+                                     has_bias=False,
+                                     sigma=sigma,
+                                     mean=mean,
+                                     compute_dtype=compute_dtype,
+                                     param_init_type=param_init_type)
+
+            self.w3 = TelechatLinear(in_channels=dim,
+                                     out_channels=hidden_dim,
+                                     has_bias=False,
+                                     expert_num=expert_num,
+                                     outer_batch=dp_moe,
+                                     sigma=sigma,
+                                     mean=mean,
+                                     compute_dtype=compute_dtype,
+                                     param_init_type=param_init_type)
 
         self.w2 = TelechatLinear(in_channels=hidden_dim,
                                  out_channels=dim,
                                  has_bias=True,
                                  sigma=sigma,
                                  mean=mean,
+                                 expert_num=expert_num,
+                                 outer_batch=dp_moe,
                                  compute_dtype=compute_dtype,
                                  param_init_type=param_init_type,
-                                 skip_redistribution=is_dynamic,
                                  keep_prob=1 - self.hidden_dropout_prob)
-
-        self.w3 = TelechatLinear(in_channels=dim,
-                                 out_channels=hidden_dim,
-                                 has_bias=False,
-                                 sigma=sigma,
-                                 mean=mean,
-                                 compute_dtype=compute_dtype,
-                                 param_init_type=param_init_type,
-                                 skip_redistribution=is_dynamic)
 
     def construct(self, x):
         """Forward process of the FeedForward"""
         _check_input_dtype(F.dtype(x), "x", [mstype.float32, mstype.float16, mstype.bfloat16], self.cls_name)
         x = self.cast(x, self.dtype)
-        # [bs, seq, hidden_dim] or [bs * seq, hidden_dim]
-        gate = self.w1(x)  # dp,1 -> dp, mp
-        hidden = self.w3(x)  # dp,1 -> dp, mp
+
+        if self.ffn_concat:
+            gate_hidden_out = self.w_gate_hidden(x)  # dp,1 -> dp, mp
+            gate, hidden = self.split(gate_hidden_out, (self.hidden_dim, self.hidden_dim), 2)
+            gate = self.activate(gate)
+        else:
+            # [bs, seq, hidden_dim] or [bs * seq, hidden_dim]
+            gate = self.w1(x)  # dp,1 -> dp, mp
+            hidden = self.w3(x)  # dp,1 -> dp, mp
         hidden = self.mul(hidden, gate)  # dp,mp -> dp, mp
         output = self.w2(hidden)  # dp,mp -> dp, 1
         return output
@@ -263,8 +304,30 @@ class TelechatFeedForward(Cell):
             raise ValueError("For 'FeedForward', the class variable 'dim' must be a multiple of the num of "
                              "model parallel, but got the dim is {} and the num of model parallel is {}."
                              .format(self.dim, mp))
-        self.w1.shard(((dp, 1), (mp, 1)))
-        self.w1.activation.shard(((dp, mp),))
-        self.w2.shard(((dp, mp), (1, mp)), ((dp, 1), (1,)))
-        self.w3.shard(((dp, 1), (mp, 1)))
-        self.mul.shard(((dp, mp), (dp, mp)))
+        if self.expert_num == 1:
+            if self.ffn_concat:
+                self.w_gate_hidden.shard(((dp, 1), (mp, 1)))
+                self.activate.shard(((dp, 1, mp),))
+                self.w2.shard(((dp, mp), (1, mp)))
+                self.split.add_prim_attr("skip_redistribution", True)
+                self.split.shard(((dp, 1, mp),))
+                self.mul.shard(((dp, mp), (dp, mp)))
+            else:
+                self.w1.shard(((dp, 1), (mp, 1)))
+                self.w1.activation.shard(((dp, mp),))
+                self.w2.shard(((dp, mp), (1, mp)), ((dp, 1), (1,)))
+                self.w3.shard(((dp, 1), (mp, 1)))
+                self.mul.shard(((dp, mp), (dp, mp)))
+        else:
+            logger.info("shard ffn with MoE")
+            ep = parallel_config.expert_parallel
+            dp = parallel_config.data_parallel // ep
+            self.w1.shard(strategy_matmul=((dp, ep, 1, 1), (ep, mp, 1)),
+                          strategy_activation=((dp, ep, mp, 1),))
+            self.w2.shard(strategy_matmul=((dp, ep, 1, mp), (ep, 1, mp)),
+                          strategy_bias=((dp, ep, mp, 1), (1, ep, 1, 1)))
+            self.w3.shard(strategy_matmul=((dp, ep, 1, 1), (ep, mp, 1)))
+            mul_shard = (dp * ep, mp)
+            if parallel_config.use_seq_parallel:
+                mul_shard = (dp, ep, mp)
+            self.mul.shard((mul_shard, mul_shard))

@@ -18,18 +18,22 @@ QwenVLProcessor
 """
 import re
 from typing import Optional, Union, List
-
 import PIL
 import PIL.Image
 import numpy as np
+
 import mindspore as ms
+
 from mindformers import MindFormerModuleType, MindFormerRegister, logger
 from mindformers.dataset.transforms.vision_transforms import BatchPILize, BatchToTensor, BatchNormalize
 from mindformers.models.base_processor import BaseProcessor
 from mindformers.models.image_processing_utils import BaseImageProcessor
 from mindformers.models.multi_modal.base_multi_modal_processor import BatchResizeV2
-from mindformers.models.multi_modal.modal_content import ModalContentTransformTemplate, BaseTextContentBuilder, \
+from mindformers.models.multi_modal.modal_content import (
+    ModalContentTransformTemplate,
+    BaseTextContentBuilder,
     BaseImageContentBuilder
+)
 from mindformers.models.multi_modal.utils import DataRecord
 from mindformers.tools.image_tools import load_image
 

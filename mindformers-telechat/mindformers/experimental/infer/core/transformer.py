@@ -21,17 +21,18 @@ import mindspore.common.dtype as mstype
 from mindspore import Parameter, Tensor, mint, nn, ops
 from mindspore.common.initializer import initializer
 
-from mindformers.experimental.parallel_core.pynative.parallel_state import get_tensor_model_parallel_world_size
+from mindformers.experimental.infer.core.parallel_paged_attention_mgr import ParallelPagedAttentionMgr
 from mindformers.experimental.parallel_core.pynative.transformer.scale_mask_softmax import ScaleMaskSoftmax
 from mindformers.experimental.parallel_core.pynative.utils import divide
 from mindformers.experimental.infer.core import get_act_func, get_attn_mask_func, get_norm
 from mindformers.experimental.infer.core.layers import ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding
+from mindformers.experimental.infer.core.utils import get_tp_world_size
 from mindformers.modules.flash_attention import FlashAttention
 from mindformers.modules.infer_attention import InferRotaryEmbedding
 from mindformers.modules.layers import FreqsMgr, RotaryEmbedding
-from mindformers.modules.paged_attention_mgr import PagedAttentionMgr
 from mindformers.modules.transformer import LowerTriangularMaskWithDynamic
-from mindformers.tools.utils import get_disable_custom_fa, get_use_rope_self_define, is_pynative
+from mindformers.tools.utils import is_pynative
+from mindformers.version_control import need_nz
 
 __all__ = [
     "ParallelMLP",
@@ -106,7 +107,7 @@ class ParallelMLP(nn.Cell):
         self.mlp_has_gate = self.config.mlp_has_gate
         self.ffn_concat = self.config.ffn_concat
 
-        tp_group_size = get_tensor_model_parallel_world_size()
+        tp_group_size = get_tp_world_size()
         self.ffn_hidden_size_per_partition = divide(self.ffn_hidden_size, tp_group_size)
 
         if self.mlp_has_gate:
@@ -174,6 +175,7 @@ class ParallelMLP(nn.Cell):
             compute_dtype=self.config.compute_dtype,
         )
         self.mul = ops.Mul()
+        self.reshape = ops.Reshape()
 
     def construct(self, x):
         """ Construct function of mlp block. """
@@ -181,8 +183,13 @@ class ParallelMLP(nn.Cell):
         if self.mlp_has_gate:
             if self.ffn_concat:
                 gate_hidden_out = self.w_gate_hidden(x)  # dp,1 -> dp, mp  # dp,1 -> dp, mp
-                gate, hidden = mint.split(gate_hidden_out,
-                                          (self.ffn_hidden_size_per_partition, self.ffn_hidden_size_per_partition), -1)
+                bs, seq_len, _ = gate_hidden_out.shape
+                reshape_out = self.reshape(gate_hidden_out,
+                                           (bs, seq_len, self.ffn_hidden_size_per_partition, 2))
+                gate, hidden = mint.split(reshape_out,
+                                          (1, 1), -1)
+                gate = self.reshape(gate, (bs, seq_len, self.ffn_hidden_size_per_partition))
+                hidden = self.reshape(hidden, (bs, seq_len, self.ffn_hidden_size_per_partition))
             else:
                 gate = self.w1(x)  # dp,1 -> dp, mp
                 hidden = self.w3(x)  # dp,1 -> dp, mp
@@ -195,17 +202,6 @@ class ParallelMLP(nn.Cell):
         # [B, S, ffn_H] -> [B, S, H]
         output = self.w2(hidden)
         return output
-
-
-def _merge_heads(x):
-    """ Merge attention heads. """
-    # [B, N, S, D] -> [B, S, N, D]
-    x = x.transpose(0, 2, 1, 3)
-    bs, seq_len, num_heads, head_dim = x.shape
-    # [B, S, N, D] -> [B, S ,H]
-    merged_shape = (bs, seq_len, num_heads * head_dim)
-    x_merged = x.reshape(merged_shape)
-    return x_merged
 
 
 class CoreAttention(nn.Cell):
@@ -266,20 +262,20 @@ class CoreAttention(nn.Cell):
         Inputs:
         ----------
         query_layer : Tensor
-            The query tensor of shape [B, N, S, D].
+            The query tensor of shape [B, N, S_q, D].
         key_layer : Tensor
-            The key tensor of shape [B, N, S, D].
+            The key tensor of shape [B, N, S_k, D].
         value_layer : Tensor
-            The value tensor of shape [B, N, S, D].
+            The value tensor of shape [B, N, S_k, D].
         attention_mask : Tensor
             The attention mask tensor of shape [B, N, S_q, S_k].
 
         Returns:
         -------
         Tensor
-            The attention output tensor of shape [B, S, N*D].
+            The attention output tensor of shape [B, N, S_q, D].
         """
-        # score: [B, N, S, S]
+        # score: [B, N, S_q, S_k]
         score = ops.bmm(query_layer, key_layer.transpose(0, 1, 3, 2))
         score = mint.mul(score, self.inv_norm_factor)
 
@@ -288,12 +284,10 @@ class CoreAttention(nn.Cell):
 
         attention_probs = self.attention_dropout(attention_probs)
 
-        # [B, N, S, S] * [B, N, S, D] -> [B, N, S, D]
+        # [B, N, S_q, S_k] * [B, N, S_v, D] -> [B, N, S_q, D]
         weighted_values = ops.bmm(attention_probs, value_layer)
-        # [B, N, S, D] -> [B, S, N*D]
-        attn_output = _merge_heads(weighted_values)
 
-        return attn_output
+        return weighted_values
 
 
 class ParallelAttention(nn.Cell):
@@ -337,13 +331,13 @@ class ParallelAttention(nn.Cell):
         self.hidden_size = self.config.hidden_size
         self.head_dim = divide(self.hidden_size, self.num_heads)
         self.kv_hidden_size = self.head_dim * self.kv_num_heads
+        self.n_rep = divide(self.num_heads, self.kv_num_heads)
 
         self.sequence_parallel = self.config.parallel_config.use_sequence_parallel
         self.use_flash_attention = self.config.use_flash_attention
         self.norm_factor = math.sqrt(self.head_dim)
-        self.reshape = ops.Reshape()
 
-        self.tp_group_size = get_tensor_model_parallel_world_size()
+        self.tp_group_size = get_tp_world_size()
         self.num_heads_per_partition = divide(self.num_heads, self.tp_group_size)
 
         self.use_gqa = (self.num_heads != self.kv_num_heads)
@@ -351,6 +345,7 @@ class ParallelAttention(nn.Cell):
         if self.use_gqa:
             self._check_gqa_valid()
             self.kv_num_heads_per_partition = divide(self.kv_num_heads, self.tp_group_size)
+            self.repeat_num = divide(self.num_heads, self.kv_num_heads)
         else:
             self.kv_num_heads_per_partition = self.num_heads_per_partition
 
@@ -361,7 +356,7 @@ class ParallelAttention(nn.Cell):
         else:
             raise NotImplementedError(
                 f"attention_type(str) should be 'self_attn' or 'cross_attn', but got {self.attn_type}")
-
+        self.reshape = ops.Reshape()
         self.wo = RowParallelLinear(
             self.hidden_size,
             self.hidden_size,
@@ -372,52 +367,78 @@ class ParallelAttention(nn.Cell):
             param_init_type=self.config.param_init_dtype,
             compute_dtype=self.config.compute_dtype,
         )
-        self.input_layout = "BSH"
-        self.disable_custom_fa = get_disable_custom_fa()
-        if self.disable_custom_fa:
-            self.use_attention_mask = True
-            self.input_layout = "TH"
+
+        self.is_pynative = is_pynative()
         if self.use_flash_attention:
+            if not self.is_pynative:
+                flash_attn_layout = "TH"
+            else:
+                flash_attn_layout = "BSH" if self.use_past else "BNSD"
             self.flash_attention = FlashAttention(head_num=self.num_heads_per_partition,
                                                   scale_value=1.0 / self.norm_factor,
                                                   next_tokens=0,
-                                                  use_attention_mask=True,
-                                                  input_layout=self.input_layout)
+                                                  input_layout=flash_attn_layout)
+        else:
+            self.core_attention = CoreAttention(self.layer_index, self.config)
 
         if self.use_past:
-            kv_shape = (self.config.num_blocks, self.config.block_size, self.kv_num_heads_per_partition, self.head_dim)
-            self.paged_attention_mgr = PagedAttentionMgr(self.num_heads_per_partition,
-                                                         self.head_dim,
-                                                         self.kv_num_heads_per_partition,
-                                                         kv_shape,
-                                                         compute_dtype=self.compute_dtype)
+            if need_nz():
+                kv_shape = (self.config.num_blocks, self.config.block_size,
+                            self.kv_num_heads_per_partition * self.head_dim)
+            else:
+                kv_shape = (self.config.num_blocks, self.config.block_size,
+                            self.kv_num_heads_per_partition, self.head_dim)
+            npu_mem_size = self.config.npu_mem_size if hasattr(self.config, 'npu_mem_size') else 2
+            self.paged_attention_mgr = ParallelPagedAttentionMgr(self.num_heads_per_partition,
+                                                                 self.head_dim,
+                                                                 self.kv_num_heads_per_partition,
+                                                                 kv_shape,
+                                                                 config.seq_length,
+                                                                 compute_dtype=self.compute_dtype,
+                                                                 npu_mem_size=npu_mem_size)
             self.rotary_embedding = InferRotaryEmbedding(rotary_cos_format=2)
         else:
             self.apply_rotary_emb = RotaryEmbedding(self.head_dim, config.rotary_dtype)
 
-            self.core_attention = CoreAttention(self.layer_index, self.config)
-
     def construct(self, x, batch_valid_length, block_tables, slot_mapping, freqs_cis=None,
-                  attn_mask=None, alibi_mask=None, prefix_keys_values=None, encoder_output=None):
+                  attn_mask=None, alibi_mask=None, prefix_keys_values=None, encoder_output=None,
+                  key_cache=None, value_cache=None):
         """Construct function of attention block."""
         # hidden_states: [B, S, H]
         ori_dtype = x.dtype
         bs, seq_len, _ = x.shape
+
         # apply query, key, value projection
         if self.attn_type == "self_attn":
-            if self.sequence_parallel:
-                seq_len = seq_len * self.tp_group_size
-            # [B, S, H] --> [B, S, H + 2 * kv_H]
             if self.qkv_concat:
                 qkv = self.cast(self.w_qkv(x), self.compute_dtype)
-                query, key, value = mint.split(qkv,
-                                               (self.hidden_size_per_partition,
-                                                self.kv_hidden_size_per_partition,
-                                                self.kv_hidden_size_per_partition), -1)
+                bs, seq_len, _ = qkv.shape
+                if self.sequence_parallel:
+                    seq_len = seq_len * self.tp_group_size
+                # [B, S, H] --> [B, S, N, D]
+                reshape_qkv = self.reshape(qkv,
+                                           (bs,
+                                            seq_len,
+                                            self.kv_num_heads_per_partition,
+                                            (self.n_rep + 2) * self.head_dim))
+                query, key, value = mint.split(reshape_qkv,
+                                               (self.head_dim * self.n_rep,
+                                                self.head_dim,
+                                                self.head_dim), -1)
+                if self.use_past:
+                    # [B, S, N, D] --> [B, S, H] ReshapeAndCache only supports 'BSH'
+                    query = self.reshape(query, (bs, seq_len, self.hidden_size_per_partition))
+                    key = self.reshape(key, (bs, seq_len, self.kv_hidden_size_per_partition))
+                    value = self.reshape(value, (bs, seq_len, self.kv_hidden_size_per_partition))
             else:
                 query = self.cast(self.wq(x), self.compute_dtype)
                 key = self.cast(self.wk(x), self.compute_dtype)
                 value = self.cast(self.wv(x), self.compute_dtype)
+                if not self.use_past:
+                    # [B, S, H] --> [B, S, N, D]
+                    query = self.reshape(query, (bs, seq_len, self.num_heads_per_partition, self.head_dim))
+                    key = self.reshape(key, (bs, seq_len, self.kv_num_heads_per_partition, self.head_dim))
+                    value = self.reshape(value, (bs, seq_len, self.kv_num_heads_per_partition, self.head_dim))
         else:
             query = self.cast(self.wq(x), self.compute_dtype)
             if self.qkv_concat:
@@ -427,6 +448,7 @@ class ParallelAttention(nn.Cell):
                 key = self.cast(self.wk(encoder_output), self.compute_dtype)
                 value = self.cast(self.wv(encoder_output), self.compute_dtype)
 
+        # [B, S, H]
         if self.use_past:
             if freqs_cis is not None:
                 query, key = self.rotary_embedding(query, key, freqs_cis, batch_valid_length)
@@ -437,14 +459,17 @@ class ParallelAttention(nn.Cell):
                 if self.is_first_iteration:
                     key, value = self._cat_prefix(key, value, prefix_keys_values)
 
-            key_out = self.paged_attention_mgr(key, value, slot_mapping)
+            key_out = self.paged_attention_mgr(key, value, slot_mapping, batch_valid_length,
+                                               key_cache=key_cache, value_cache=value_cache)
             query = ops.depend(query, key_out)
 
             if self.is_first_iteration:
                 if self.use_flash_attention:
-                    if self.disable_custom_fa:
+                    if self.is_pynative:
+                        context_layer = self.flash_attention(query, key, value, attn_mask, alibi_mask)
+                    else:
                         bs, seq_len, _ = query.shape
-                        # [1, actual_seq_len, H] -> [actual_seq_len, H]
+                        # [1, actual_seq_len, H] --> [actual_seq_len, H]
                         query = self.reshape(query, (-1, self.num_heads_per_partition * self.head_dim))
                         key = self.reshape(key, (-1, self.kv_num_heads_per_partition * self.head_dim))
                         value = self.reshape(value, (-1, self.kv_num_heads_per_partition * self.head_dim))
@@ -452,64 +477,52 @@ class ParallelAttention(nn.Cell):
                                                              batch_valid_length, batch_valid_length)
                         context_layer = self.reshape(context_layer, (bs, seq_len,
                                                                      self.num_heads_per_partition * self.head_dim))
-                    else:
-                        context_layer = self.flash_attention(query, key, value, attn_mask, alibi_mask)
                 else:
-                    # [B, S, H] -> [B, N, S, D]
-                    query = query.reshape(bs, seq_len, -1, self.head_dim).transpose((0, 2, 1, 3))
-                    # [B, S, H] -> [B, S, N, D]
+                    # [B, S, H] --> [B, S, N, D]
+                    query = query.reshape(bs, seq_len, -1, self.head_dim)
                     key = key.reshape(bs, seq_len, -1, self.head_dim)
                     value = value.reshape(bs, seq_len, -1, self.head_dim)
-                    # expand the key_layer and value_layer [B, S, kv_N_per_tp, D]
-                    # to [B, S, N_per_tp, D]
+                    # [B, S, N_kv, D] --> [B, S, N, D]
                     if self.use_gqa:
-                        repeat_num = self.num_heads_per_partition - self.kv_num_heads_per_partition
-                        key = self._repeat_kv(key, repeat_num)
-                        value = self._repeat_kv(value, repeat_num)
-                    else:
-                        key = key.transpose((0, 2, 1, 3))
-                        value = value.transpose((0, 2, 1, 3))
+                        key = mint.repeat_interleave(key, repeats=self.repeat_num, dim=2)
+                        value = mint.repeat_interleave(value, repeats=self.repeat_num, dim=2)
+                    # [B, S, N, D] --> [B, N, S, D]
+                    query = query.transpose(0, 2, 1, 3)
+                    key = key.transpose(0, 2, 1, 3)
+                    value = value.transpose(0, 2, 1, 3)
                     context_layer = self.core_attention(query, key, value, attn_mask)
+                    # [B, N, S, D] --> [B, S, H]
+                    context_layer = context_layer.transpose(0, 2, 1, 3).reshape(
+                        bs, seq_len, self.hidden_size_per_partition)
             else:
-                context_layer = self.paged_attention_mgr.paged_attn(query, batch_valid_length, block_tables)
+                context_layer = self.paged_attention_mgr.paged_attn(query, batch_valid_length, block_tables,
+                                                                    key_cache=key_cache, value_cache=value_cache)
+
+        # [B, S, N, D]
         else:
-            # [B, S, H] -> [B, N, S, D]
-            query = query.reshape(bs, seq_len, -1, self.head_dim).transpose((0, 2, 1, 3))
-            # [B, S, H] -> [B, S, N, D]
-            key = key.reshape(bs, seq_len, -1, self.head_dim)
-            value = value.reshape(bs, seq_len, -1, self.head_dim)
-            # expand the key_layer and value_layer [B, S, kv_N_per_tp, D]
-            # to [B, S, N_per_tp, D]
-            if self.use_gqa:
-                repeat_num = self.num_heads_per_partition - self.kv_num_heads_per_partition
-                key = self._repeat_kv(key, repeat_num)
-                value = self._repeat_kv(value, repeat_num)
-            else:
-                key = key.transpose((0, 2, 1, 3))
-                value = value.transpose((0, 2, 1, 3))
+            # [B, S, N, D] --> [B, N, S, D]
+            query = query.transpose(0, 2, 1, 3)
+            key = key.transpose(0, 2, 1, 3)
+            value = value.transpose(0, 2, 1, 3)
             if freqs_cis is not None:
                 query, key = self.apply_rotary_emb(query, key, freqs_cis)
-            context_layer = self.core_attention(query, key, value, attn_mask)
+            if self.use_flash_attention:
+                context_layer = self.flash_attention(query, key, value, attn_mask)
+            else:
+                # [B, N_kv, S, D] --> [B, N, S, D]
+                if self.use_gqa:
+                    key = mint.repeat_interleave(key, repeats=self.repeat_num, axis=1)
+                    value = mint.repeat_interleave(value, repeats=self.repeat_num, axis=1)
+                context_layer = self.core_attention(query, key, value, attn_mask)
+            # [B, N, S, D] --> [B, S, H]
+            context_layer = context_layer.transpose(0, 2, 1, 3).reshape(
+                bs, seq_len, self.hidden_size_per_partition)
 
         # apply output projection
         output = self.wo(context_layer)
         output = self.cast(output, ori_dtype)
 
         return output
-
-    def _repeat_kv(self, x, rep):
-        """ Expand key, value on num_head dimension. """
-        if rep == 1:
-            return x
-        bs, seq_length, num_groups, head_dim = x.shape()
-        # [B, S, ng, D] -> [B, ng, S, D]
-        x = x.transpose((0, 2, 1, 3))
-        # [B, ng, S, D] -> [B, ng, 1, S*D]
-        x = x.reshape((bs, num_groups, 1, seq_length * head_dim))
-        x = x.tile((1, 1, rep, 1))
-        # [B, ng, rep, S*D] -> [B, N, S, D]
-        x = x.reshape((bs, num_groups * rep, seq_length, head_dim))
-        return x
 
     def _cat_prefix(self, key, value, prefix_keys_values):
         """
@@ -540,6 +553,8 @@ class ParallelAttention(nn.Cell):
 
     def _init_self_attn(self):
         """init qkv linears of self-attention"""
+        self.hidden_size_per_partition = divide(self.hidden_size, self.tp_group_size)
+        self.kv_hidden_size_per_partition = divide(self.kv_hidden_size, self.tp_group_size)
         if self.qkv_concat:
             self.w_qkv = ColumnParallelLinear(
                 self.hidden_size,
@@ -551,8 +566,6 @@ class ParallelAttention(nn.Cell):
                 param_init_type=self.config.param_init_dtype,
                 compute_dtype=self.config.compute_dtype,
             )
-            self.hidden_size_per_partition = divide(self.hidden_size, self.tp_group_size)
-            self.kv_hidden_size_per_partition = divide(self.kv_hidden_size, self.tp_group_size)
         else:
             self.wq = ColumnParallelLinear(
                 self.hidden_size,
@@ -684,14 +697,15 @@ class ParallelTransformerLayer(nn.Cell):
         self.feed_forward = ParallelMLP(config)
 
     def construct(self, x, freqs_cis=None, mask=None, batch_valid_length=None, block_tables=None,
-                  slot_mapping=None, prefix_keys_values=None):
+                  slot_mapping=None, prefix_keys_values=None, key_cache=None, value_cache=None):
         """Construct function of transformer layer."""
         # hidden_states: [B, S, H]
         # norm at the beginning of the transformer layer.
         norm_output = self.attention_norm(x)
         # attention.
         attention_output = self.attention(norm_output, batch_valid_length, block_tables, slot_mapping, freqs_cis,
-                                          mask, prefix_keys_values=prefix_keys_values)
+                                          mask, prefix_keys_values=prefix_keys_values,
+                                          key_cache=key_cache, value_cache=value_cache)
         # residual-connection.
         if self.apply_residual_connection_post_norm:
             residual = norm_output
@@ -757,12 +771,7 @@ class ParallelTransformer(nn.Cell):
         self.cast = ops.Cast()
         self.shape = ops.Shape()
 
-        self.disable_custom_fa = get_disable_custom_fa()
-        self.use_rope_self_define = get_use_rope_self_define()
-        self.fa_need_mask = is_pynative()
-
-        if self.disable_custom_fa:
-            self.prefill_flatten_mask = Tensor(np.triu(np.ones(shape=(128, 128), dtype=np.float16), 1))
+        self.is_pynative = is_pynative()
 
         self.freqs_mgr = FreqsMgr(head_dim=self.head_dim,
                                   seq_length=config.seq_length,
@@ -771,15 +780,18 @@ class ParallelTransformer(nn.Cell):
                                   theta=config.theta,
                                   scaling_factor=config.scaling_factor,
                                   extend_method=config.extend_method,
-                                  parallel_config=config.parallel_config)
+                                  parallel_config=config.parallel_config,
+                                  is_dynamic=config.is_dynamic)
         self.casual_mask = LowerTriangularMaskWithDynamic(seq_length=config.seq_length,
                                                           compute_type=config.compute_dtype,
                                                           is_dynamic=config.is_dynamic,
                                                           pad_token_id=config.pad_token_id,
                                                           use_flash_attention=config.use_flash_attention,
-                                                          use_attn_mask_compression=config.use_attn_mask_compression)
+                                                          use_attn_mask_compression=config.use_attn_mask_compression,
+                                                          use_past=config.use_past)
 
-        if config.parallel_config.vocab_emb_dp:
+        self.tp_group_size = get_tp_world_size()
+        if config.parallel_config.vocab_emb_dp or self.tp_group_size == 1:
             self.tok_embeddings = VocabEmbedding(
                 num_embeddings=config.vocab_size,
                 embedding_dim=config.hidden_size,
@@ -804,7 +816,7 @@ class ParallelTransformer(nn.Cell):
 
     # pylint: disable=W0613
     def construct(self, tokens: Tensor, batch_valid_length=None, batch_index=None, zactivate_len=None,
-                  block_tables=None, slot_mapping=None, prefix_keys_values=None):
+                  block_tables=None, slot_mapping=None, prefix_keys_values=None, key_cache=None, value_cache=None):
         """
         Forward of ParallelTransformer.
 
@@ -822,19 +834,11 @@ class ParallelTransformer(nn.Cell):
         mask = None
         if self.use_past:
             if self.is_first_iteration:
-                if self.use_rope_self_define:
-                    freqs_cis = self.freqs_mgr(seq_len)
+                freqs_cis = self.freqs_mgr.prefill(bs, seq_len)
+                if self.is_pynative:
+                    mask = self.casual_mask(tokens)
                 else:
-                    freqs_cis = self.freqs_mgr.prefill(bs, seq_len)
-
-                if self.use_flash_attention:
-                    if self.disable_custom_fa:  # only support fp16
-                        mask = self.prefill_flatten_mask
-                        freqs_cis = self.freqs_mgr.prefill_flatten()  # mask: [bs, seq, seq]
-                    if self.fa_need_mask:
-                        mask = self.casual_mask(tokens)
-                else:
-                    mask = self.casual_mask(tokens)  # mask: [bs, seq, seq]
+                    mask = self.casual_mask.prefill()
 
                 if prefix_keys_values is not None:
                     if mask is None:
@@ -857,9 +861,12 @@ class ParallelTransformer(nn.Cell):
         # h: [bs, seq/1, hidden_dim]
         for i in range(self.num_layers):
             prefix_kv = prefix_keys_values[i] if prefix_keys_values is not None else None
+            key_cache_i = key_cache[i] if key_cache is not None else None
+            value_cache_i = value_cache[i] if value_cache is not None else None
             hidden_states = self.layers[i](hidden_states, freqs_cis, mask, batch_valid_length=batch_valid_length,
                                            block_tables=block_tables, slot_mapping=slot_mapping,
-                                           prefix_keys_values=prefix_kv)
+                                           prefix_keys_values=prefix_kv,
+                                           key_cache=key_cache_i, value_cache=value_cache_i)
 
         if self.post_norm:
             hidden_states = self.norm_out(hidden_states)

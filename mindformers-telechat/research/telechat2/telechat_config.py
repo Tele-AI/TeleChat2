@@ -18,8 +18,9 @@ from typing import Optional, Union
 
 from mindspore._checkparam import args_type_check
 
+from mindformers.modules.transformer.moe import MoEConfig
 from mindformers.modules.transformer.transformer import default_transformer_config, \
-    TransformerOpParallelConfig
+    TransformerOpParallelConfig, default_moe_config
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 from mindformers.models.configuration_utils import PretrainedConfig
 from mindformers.models.utils import convert_mstype
@@ -64,6 +65,9 @@ class TelechatConfig(PretrainedConfig):
         use_past (`bool`, *optional*, defaults to `False`):
             Whether the model should use the past last key/values attentions
             (if applicable to the model) to speed up decoding.
+        moe_config(MoEConfig):
+            The configuration of MoE (Mixture of Expert). Default is an instance of MoEConfig
+            with default values. Please see `MoEConfig`.
         parallel_config(TransformerOpParallelConfig):
             The parallel configure. Default `default_transformer_config`,
             an instance of `TransformerOpParallelConfig` with default args.
@@ -125,8 +129,10 @@ class TelechatConfig(PretrainedConfig):
                  embedding_init_type=None,
                  res_dtype: str = "float32",
                  qkv_has_bias: bool = False,
-                 wo_has_bias: bool = True,
+                 out_proj_has_bias: bool = True,
+                 qkv_concat: bool = False,
                  parallel_config: Union[dict, TransformerOpParallelConfig] = default_transformer_config,
+                 moe_config: Union[dict, MoEConfig] = default_moe_config,
                  use_past: bool = False,
                  extend_method: str = "None",
                  scaling_factor: float = 1.0,
@@ -153,6 +159,8 @@ class TelechatConfig(PretrainedConfig):
         super(TelechatConfig, self).__init__(**kwargs)
         if isinstance(parallel_config, dict):
             parallel_config = TransformerOpParallelConfig(**parallel_config)
+        if isinstance(moe_config, dict):
+            moe_config = MoEConfig(**moe_config)
         self.batch_size = batch_size
         self.seq_length = seq_length
         self.vocab_size = vocab_size
@@ -168,7 +176,7 @@ class TelechatConfig(PretrainedConfig):
         self.n_kv_heads = n_kv_heads
         self.ffn_dim_multiplier = ffn_dim_multiplier
         self.rms_norm_eps = rms_norm_eps
-        self.wo_has_bias = wo_has_bias
+        self.out_proj_has_bias = out_proj_has_bias
         self.param_init_type = convert_mstype(param_init_type)
         if embedding_init_type is not None:
             self.embedding_init_type = convert_mstype(embedding_init_type)
@@ -208,3 +216,5 @@ class TelechatConfig(PretrainedConfig):
         self.block_size = block_size
         self.num_blocks = num_blocks
         self.quant = quant
+        self.qkv_concat = qkv_concat
+        self.moe_config = moe_config

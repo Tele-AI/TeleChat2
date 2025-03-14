@@ -14,12 +14,16 @@
 # ============================================================================
 """ Transformer-Config dict parse module """
 
-import os
-import copy
 import argparse
 from argparse import Action
+import copy
+import os
 from collections import OrderedDict
+from typing import Union
+
 import yaml
+from mindformers.tools.check_rules import check_yaml_depth_before_loading
+from .template import ConfigTemplate
 
 BASE_CONFIG = 'base_config'
 
@@ -99,16 +103,20 @@ class MindFormerConfig(DictConfig):
         cfg_dict = {}
 
         # load from file
+        load_from_file = False
         for arg in args:
             if isinstance(arg, str):
                 if arg.endswith('yaml') or arg.endswith('yml'):
                     raw_dict = MindFormerConfig._file2dict(arg)
                     cfg_dict.update(raw_dict)
+                    load_from_file = True
 
         # load dictionary configs
         if kwargs is not None:
             cfg_dict.update(kwargs)
 
+        if load_from_file:
+            ConfigTemplate.apply_template(cfg_dict)
         MindFormerConfig._dict2config(self, cfg_dict)
 
     def merge_from_dict(self, options):
@@ -171,7 +179,10 @@ class MindFormerConfig(DictConfig):
 
         filepath = os.path.realpath(filename)
         with open(filepath, encoding='utf-8') as fp:
-            cfg_dict = ordered_yaml_load(fp, yaml_loader=yaml.FullLoader)
+            check_yaml_depth_before_loading(fp)
+            fp.seek(0)
+            cfg_dict = yaml.safe_load(fp)
+            cfg_dict = OrderedDict(sorted(cfg_dict.items()))
 
         # Load base config file.
         if BASE_CONFIG in cfg_dict:
@@ -216,6 +227,78 @@ class MindFormerConfig(DictConfig):
                     MindFormerConfig._dict2config(sub_config, value)
                 else:
                     config[key] = dic[key]
+
+
+    def get_value(self, levels: Union[str, list], default=None):
+        """Get the attribute according to levels, if not exist return default.
+
+        Args:
+            levels : the level to be accessed
+            default : None
+        Returns:
+            default or value of the key to be accessed
+
+        Examples:
+        >>> config = MindFormerConfig(**{'context': {'mode': 'GRAPH_MODE'}, 'parallel': {}})
+        >>> config.get_value(['context', 'mode'])
+        >>> 'GRAPH_MODE'
+        >>> config.get_value(['context', 'mode'], 'DEFAULT_MODE')
+        >>> 'GRAPH_MODE'
+        >>> config.get_value(['context', 'fake_mode'])
+        >>> None
+        >>> config.get_value(['context', 'fake_mode'], 'DEFAULT_MODE')
+        >>> 'DEFAULT_MODE'
+        >>> config.get_value('context.mode', 'DEFAULT_MODE')
+        >>> 'GRAPH_MODE'
+        >>> config.get_value('context.fake_mode', 'DEFAULT_MODE')
+        >>> 'DEFAULT_MODE'
+        """
+
+        if not levels:
+            return default
+        if isinstance(levels, str):
+            levels = levels.split('.')
+        if len(levels) == 1:
+            config = self or {}
+            return config.get(str(levels[-1]), default)
+        if getattr(self, levels[0]):
+            return getattr(self, levels[0]).get_value(
+                levels[1:], default
+            )
+        return default
+
+    def set_value(self, levels: Union[list, str], value):
+        """set the attribute according to levels.
+
+        Args:
+            levels : the level to be accessed
+            value : The value to be set
+        Returns:
+            None
+
+        Examples:
+        >>> config = MindFormerConfig(**{'context': {'mode': 0}, 'parallel': {}, 'test': None})
+        >>> config.set_value('context.mode', 1)
+        >>> config = {'context': {'mode': 1}, 'parallel': {}, 'test': None})
+        >>> config.set_value(['context', 'device_id'], 2)
+        >>> config = {'context': {'mode': 1, device_id: 2}, 'parallel': {}, 'test': None})
+        >>> config.set_value('parallel', {'hello', 'mf'})
+        >>> config = {'context': {'mode': 1, device_id: 2}, 'parallel': {'hello', 'mf'}, 'test': None})
+        >>> config.set_value('test.model', 1)
+        >>> config = {'context': {'mode': 1, device_id: 2}, 'parallel': {'hello', 'mf'}, 'test': {'model': 1}}})
+        >>> config.set_value('test', {'data', 8)
+        >>> config = {'context': {'mode': 1, device_id: 2}, 'parallel': {'hello', 'mf'}, 'test': {'data': 8}}})
+        """
+        if levels:
+            if isinstance(levels, str):
+                levels = levels.split('.')
+            if len(levels) == 1:
+                if isinstance(self, MindFormerConfig):
+                    setattr(self, levels[-1], value)
+                return
+            config = getattr(self, levels[0]) or MindFormerConfig()
+            setattr(self, levels[0], config)
+            self.get(levels[0]).set_value(levels[1:], value)
 
 
 class ActionDict(Action):
@@ -316,22 +399,6 @@ class ActionDict(Action):
             key, value = key_value.split('=', maxsplit=1)
             options[key] = self._parse_value_iter(value)
         setattr(namespace, self.dest, options)
-
-
-def ordered_yaml_load(stream, yaml_loader=yaml.SafeLoader,
-                      object_pairs_hook=OrderedDict):
-    """Load Yaml File in Orderedly."""
-    class OrderedLoader(yaml_loader):
-        pass
-
-    def _construct_mapping(loader, node):
-        loader.flatten_mapping(node)
-        return object_pairs_hook(loader.construct_pairs(node))
-
-    OrderedLoader.add_constructor(
-        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-        _construct_mapping)
-    return yaml.load(stream, OrderedLoader)
 
 
 def ordered_yaml_dump(data, stream=None, yaml_dumper=yaml.SafeDumper,

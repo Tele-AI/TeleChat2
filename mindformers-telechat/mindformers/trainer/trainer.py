@@ -60,9 +60,10 @@ from mindformers.tools.register import MindFormerConfig
 from mindformers.tools.register.config import ordered_yaml_dump
 from mindformers.tools.resume_ckpt import get_resume_checkpoint
 from mindformers.tools.download_tools import download_with_progress_bar
+from mindformers.version_control import check_tft_valid
 from .build_trainer import build_trainer
 from .training_args import TrainingArguments
-from .utils import config2dict
+from .utils import config2dict, get_last_checkpoint
 
 __all__ = ['Trainer']
 
@@ -110,53 +111,53 @@ class Trainer:
         args (Union[str, MindFormerConfig, TrainingArguments], optional):
             The task config which is used to configure the dataset, the hyperparameter, optimizer, etc.
             It supports yaml path, MindFormerConfig or TrainingArguments class.
-            Default: ``None`` .
-        task (str, optional): Supported task type. Default: ``general`` .
+            Default: ``None``.
+        task (str, optional): Supported task type. Default: ``general``.
         model (Union[str, PreTrainedModel], optional):
-            The network for trainer. It supports model name supported or PreTrainedModel. Default: ``None`` .
+            The network for trainer. It supports model name supported or PreTrainedModel. Default: ``None``.
         model_name (str, optional):
             Supported model name. When the incoming model is a custom instance, it is recommended to specify
             the supported model_name to get the base configuration of the model type.
-            Default: ``None`` .
+            Default: ``None``.
         tokenizer (PreTrainedTokenizerBase, optional):
             The tokenizer for text preprocessing. It supports PreTrainedTokenizerBase class.
-            Default: ``None`` .
+            Default: ``None``.
         train_dataset (Union[str, BaseDataset, Dataset, Iterable], optional):
             The training dataset. It supports real dataset path or BaseDateset class or MindSpore Dataset class.
-            Default: ``None`` .
+            Default: ``None``.
         eval_dataset (Union[str, BaseDataset, Dataset, Iterable], optional):
             The evaluate dataset. It supports real dataset path or BaseDateset class or MindSpore Dataset class.
-            Default: ``None`` .
+            Default: ``None``.
         data_collator (Callable, optional):
             Batch data processing function.
-            Default: ``None`` .
+            Default: ``None``.
         optimizers (Optimizer, optional):
             The training network's optimizer. It supports Optimizer class of MindSpore.
-            Default: ``None`` .
+            Default: ``None``.
         compute_metrics (Union[dict, set], optional):
             The metric of evaluating. It supports dict or set in MindSpore's Metric class.
-            Default: ``None`` .
+            Default: ``None``.
         callbacks (Union[Callback, List[Callback]], optional):
             The training callback function. It supports CallBack or CallBack List of MindSpore.
-            Default: ``None`` .
+            Default: ``None``.
         eval_callbacks (Union[Callback, List[Callback]], optional):
             The evaluate callback function. It supports CallBack or CallBack List of MindSpore.
-            Default: ``None`` .
+            Default: ``None``.
         pet_method (str, optional):
             Supported pet method name.
-            Default: ``''`` .
+            Default: ``''``.
         image_processor (BaseImageProcessor, optional):
             The processor for image preprocessing. It supports BaseImageProcessor class.
-            Default: ``None`` .
+            Default: ``None``.
         audio_processor (BaseAudioProcessor, optional):
             The processor for audio preprocessing. It supports BaseAudioProcessor class.
-            Default: ``None`` .
+            Default: ``None``.
         save_config (bool, optional):
             Save current the config of task.
-            Default: ``False`` .
+            Default: ``False``.
         reset_model (bool, optional):
             Reset model instance
-            Default: ``False`` .
+            Default: ``False``.
 
     Returns:
         An instance of Trainer.
@@ -256,7 +257,7 @@ class Trainer:
         if (isinstance(self.args, (str, MindFormerConfig)) or \
             (isinstance(self.args, TrainingArguments) and self.is_model_instance)) and \
                 self.task == 'general' and self.model_name != 'common':
-            logger.warning("When (`args` is MindformerConfig) "
+            logger.warning("When (`args` is MindFormerConfig) "
                            "or (`args` is TrainingArguments and a model instance is passed), "
                            "The `model_name` is invalid and set to 'common'.")
             self.model_name = 'common'
@@ -267,14 +268,21 @@ class Trainer:
         task_config = self.get_task_config(self.task, self.model_name)
 
         self.config = self._config_init(args, task_config)
-
+        self._reassign_monitor_config()
         # build parallel config
         build_parallel_config(self.config)
+
+        if isinstance(args, TrainingArguments):
+            ms.set_auto_parallel_context(pipeline_stages=args.pipeline_stage)
 
         self.rank_id = get_real_rank()
         self.device_num = get_real_group_size()
         self.config.rank_id = self.rank_id
         self.config.device_num = self.device_num
+
+        # set checkpoint options
+        self.config.remove_redundancy = self.config.get('remove_redundancy', False)
+        self.config.load_ckpt_format = self.config.get('load_ckpt_format', 'ckpt')
 
         # set seed
         if self.config.seed and \
@@ -317,6 +325,25 @@ class Trainer:
 
         logger.info("==========Trainer Init Success!==========")
 
+    def _reassign_monitor_config(self):
+        """parse config.monitor_config and supplement settings"""
+        if hasattr(self.config, 'monitor_config') and self.config.monitor_config is not None:
+            monitor_config = self.config.monitor_config
+            self.config.check_for_nan_in_loss_and_grad = monitor_config.get('local_loss_format') is not None
+            dump_local_norm = monitor_config.get('local_norm_format') is not None
+            dump_device_local_norm = monitor_config.get('device_local_norm_format') is not None
+            dump_path = monitor_config.pop('dump_path') or './dump'
+            ms.set_auto_parallel_context(
+                dump_local_norm_path=dump_path,
+                dump_local_norm=dump_local_norm,
+                dump_device_local_norm=dump_device_local_norm
+            )
+            for callback in self.config.callbacks:
+                if "type" in callback and callback["type"] == "TrainingStateMonitor":
+                    callback['config'] = monitor_config
+                    return
+            self.config.callbacks.append({"type": "TrainingStateMonitor", "config": monitor_config})
+
     @args_type_check(train_checkpoint=(str, bool), resume_from_checkpoint=(str, bool),
                      resume_training=(bool, str), auto_trans_ckpt=bool, src_strategy=str,
                      transform_process_num=int, do_eval=bool)
@@ -339,35 +366,35 @@ class Trainer:
                 Used to restore training or fine-tune the weight of the network.
                 It supports real checkpoint path or valid model name of mindformers or bool value.
                 if it's true, the last checkpoint file saved from the previous training round is automatically used.
-                Default: ``False`` .
+                Default: ``False``.
             resume_from_checkpoint (Union[str, bool], optional):
                 Used to restore training or fine-tune the weight of the network.
                 It supports real checkpoint path or valid model name of mindformers or bool value.
                 if it's true, the last checkpoint file saved from the previous training round is automatically used.
                 if `train_checkpoint` is passed in, `resume_from_checkpoint` will be overridden.
-                Default: ``None`` .
+                Default: ``None``.
             resume_training (Union[bool, str], optional):
                 Decide whether to resume training or specify the name of the checkpoint from which to resume training.
                 If set to True, the checkpoint recorded in meta.json will be loaded to resume training.
                 If a checkpoint name is provided, that specific checkpoint will be loaded for resume training.
-                Default: ``None`` .
+                Default: ``None``.
             ignore_data_skip (bool, optional):
                 When resuming training, whether or not to skip the epochs and batches to get the data loading at the
                 same stage as in the previous training. If set to `True`, the training will begin faster (as that
                 skipping step can take a long time) but will not yield the same results as the interrupted training
-                would have. Default: ``None`` .
+                would have. Default: ``None``.
             data_skip_steps (int, optional):
                 Specify the skip steps of train dataset when resume training.
-                It only takes effect when `ignore_data_skip` is set to False. Default: ``None`` .
+                It only takes effect when `ignore_data_skip` is set to False. Default: ``None``.
             auto_trans_ckpt (bool, optional):
-                auto transform checkpoint to load in distributed model. Default: ``None`` .
+                auto transform checkpoint to load in distributed model. Default: ``None``.
             src_strategy (str, optional):
                 The strategy of `load_checkpoint` . Effective only when auto_trans_ckpt is set to True,
-                used for automatic checkpoint transform. Default: ``None`` .
+                used for automatic checkpoint transform. Default: ``None``.
             transform_process_num (int, optional):
-                The number of processes responsible for checkpoint transform. Default: ``None`` .
+                The number of processes responsible for checkpoint transform. Default: ``None``.
             do_eval (bool, optional):
-                Whether evaluations are performed during training. Default: ``False`` .
+                Whether evaluations are performed during training. Default: ``False``.
 
         Raises:
             TypeError: if resume_from_checkpoint is not bool or str type.
@@ -420,8 +447,8 @@ class Trainer:
         self._check_config_type()
         self._check_config_rules()
         self._init_model(is_train=True)
-
-        if self.config.resume_training:
+        # if enable_tft is False or remove_redundancy is True, can use record last_ckpt to json
+        if self.config.resume_training and (not check_tft_valid() or self.config.remove_redundancy):
             if os.path.isfile(self.config.load_checkpoint) and \
                     isinstance(self.config.resume_training, str):
                 logger.warning(f"`resume_training={self.config.resume_training}` is not valid "
@@ -432,10 +459,10 @@ class Trainer:
                     checkpoint_dir=self.config.load_checkpoint,
                     resume_training=self.config.resume_training,
                     resume_by_meta=not self.config.resume_by_last_timestamp_ckpt,
+                    ckpt_format=self.config.load_ckpt_format
                 )
 
         self.config.load_checkpoint = self.get_load_checkpoint(self.config.load_checkpoint)
-
         self.trainer.train(
             config=self.config, network=self.model,
             dataset=self.train_dataset, optimizer=self.optimizers,
@@ -466,36 +493,36 @@ class Trainer:
                 It supports real checkpoint path or valid model name of mindformers or bool value.
                 if it's true, the last checkpoint file saved from the previous training round is automatically used.
                 if resume_training is true, this checkpoint will be used to restore training of the network.
-                Default: ``False`` .
+                Default: ``False``.
             resume_from_checkpoint (Union[str, bool], optional):
                 Used to restore training or fine-tune the weight of the network.
                 It supports real checkpoint path or valid model name of mindformers or bool value.
                 if it's true, the last checkpoint file saved from the previous training round is automatically used.
                 if resume_training is true, this checkpoint will be used to restore training of the network.
                 if `finetune_checkpoint` is passed in, `resume_from_checkpoint` will be overridden.
-                Default: ``None`` .
+                Default: ``None``.
             resume_training (Union[bool, str], optional):
                 Decide whether to resume training or specify the name of the checkpoint from which to resume training.
                 If set to True, the checkpoint recorded in meta.json will be loaded to resume training.
                 If a checkpoint name is provided, that specific checkpoint will be loaded for resume training.
-                Default: ``None`` .
+                Default: ``None``.
             ignore_data_skip (bool, optional):
                 When resuming training, whether or not to skip the epochs and batches to get the data loading at the
                 same stage as in the previous training. If set to `True` , the training will begin faster (as that
                 skipping step can take a long time) but will not yield the same results as the interrupted training
-                would have. Default: ``None`` .
+                would have. Default: ``None``.
             data_skip_steps (int, optional):
                 Specify the skip steps of train dataset when resume training.
-                It only takes effect when `ignore_data_skip` is set to False. Default: ``None`` .
-            auto_trans_ckpt(bool, optional):
-                Auto transform checkpoint to load in distributed model. Default: ``None`` .
+                It only takes effect when `ignore_data_skip` is set to False. Default: ``None``.
+            auto_trans_ckpt (bool, optional):
+                Auto transform checkpoint to load in distributed model. Default: ``None``.
             src_strategy (str, optional):
                 The strategy of `resume_from_checkpoint` . Effective only when auto_trans_ckpt is set to True,
-                used for automatic checkpoint transform. Default: ``None`` .
+                used for automatic checkpoint transform. Default: ``None``.
             transform_process_num (int, optional):
-                The number of processes responsible for checkpoint transform. Default: ``None`` .
+                The number of processes responsible for checkpoint transform. Default: ``None``.
             do_eval (bool, optional):
-                Whether evaluations are performed during training. Default: ``False`` .
+                Whether evaluations are performed during training. Default: ``False``.
 
         Raises:
             TypeError: if load_checkpoint is not bool or str type.
@@ -572,6 +599,7 @@ class Trainer:
                     checkpoint_dir=self.config.load_checkpoint,
                     resume_training=self.config.resume_training,
                     resume_by_meta=not self.config.resume_by_last_timestamp_ckpt,
+                    ckpt_format=self.config.load_ckpt_format
                 )
 
         self.config.load_checkpoint = self.get_load_checkpoint(self.config.load_checkpoint)
@@ -603,7 +631,7 @@ class Trainer:
                 Used to evaluate the weight of the network.
                 It supports real checkpoint path or valid model name of mindformers or bool value.
                 if it's true, the last checkpoint file saved from the previous training round is automatically used.
-                Default: ``False`` .
+                Default: ``False``.
             auto_trans_ckpt (bool, optional):
                 Auto transform checkpoint to load in distributed model. Default: ``None``.
             src_strategy (str, optional):
@@ -686,18 +714,18 @@ class Trainer:
                 Used to predict the weight of the network.
                 It supports real checkpoint path or valid model name of mindformers or bool value.
                 if it's true, the last checkpoint file saved from the previous training round is automatically used.
-                Default: ``None`` .
-            auto_trans_ckpt(bool, optional):
-                Auto transform checkpoint to load in distributed model. Default: ``None`` .
+                Default: ``None``.
+            auto_trans_ckpt (bool, optional):
+                Auto transform checkpoint to load in distributed model. Default: ``None``.
             src_strategy (str, optional):
                 The strategy of `resume_from_checkpoint` . Effective only when auto_trans_ckpt is set to True,
-                used for automatic checkpoint transform. Default: ``None`` .
+                used for automatic checkpoint transform. Default: ``None``.
             transform_process_num (int, optional):
                 The number of processes responsible for checkpoint transform. Default: ``None``.
             input_data (Union[Tensor, np.ndarray, Image, str, list], optional):
-                The predict data. Default: ``None`` .
+                The predict data. Default: ``None``.
             batch_size (int, optional):
-                Batch size of predict data. Default: ``None`` .
+                Batch size of predict data. Default: ``None``.
             kwargs (Any):
                 Additional parameters.
 
@@ -751,7 +779,6 @@ class Trainer:
         self._init_model()
 
         self.config.load_checkpoint = self.get_load_checkpoint(self.config.load_checkpoint)
-        self._check_load_checkpoint()
 
         if input_data is None:
             input_data = build_dataset_loader(self.config.eval_dataset.data_loader)
@@ -976,7 +1003,7 @@ class Trainer:
 
     @staticmethod
     def get_task_config(task, model_name):
-        """"get task config based on task and model_name."""
+        """get task config based on task and model_name."""
         default_config_path = SUPPORT_TASKS.get(task).get(model_name)
         relative_config_path = default_config_path[default_config_path.rfind("configs/"):]
         current_config_path = os.path.join(os.getcwd(), relative_config_path)
@@ -1000,15 +1027,7 @@ class Trainer:
         output_folder = self.config.output_dir
         checkpoint_dir = os.path.join(
             output_folder, DEFAULT_CHECKPOINT_DIR, 'rank_{}'.format(self.rank_id))
-        output_checkpoint_path = [
-            checkpoint for checkpoint in os.listdir(checkpoint_dir)
-            if checkpoint.endswith('.ckpt')
-        ]
-        if not output_checkpoint_path:
-            return None
-        output_checkpoint_path = sorted(output_checkpoint_path,
-                                        key=lambda x: os.path.getmtime(os.path.join(checkpoint_dir, x)))
-        return os.path.join(checkpoint_dir, output_checkpoint_path[-1])
+        return get_last_checkpoint(checkpoint_dir, self.config.load_ckpt_format)
 
     def get_load_checkpoint(self, checkpoint):
         """get checkpoint path which will be loaded."""
@@ -1166,6 +1185,7 @@ class Trainer:
                 raise ValueError(f"train dataset path must be exist, but got {self.train_dataset}.")
             self.config.train_dataset.data_loader.dataset_dir = self.train_dataset
             self.train_dataset = None
+
         if isinstance(self.eval_dataset, str):
             logger.info("..........Init Eval Dataset..........")
             if not os.path.exists(self.eval_dataset):
@@ -1334,7 +1354,7 @@ class Trainer:
 
     def _check_config_rules(self):
         """Check config rules."""
-        if self.config.auto_trans_ckpt:
+        if self.config.auto_trans_ckpt and self.config.load_ckpt_format == 'ckpt':
             if not is_publicly_accessible_path(get_output_root_path()):
                 raise ValueError(f"When device num > {get_device_num_per_node()} and auto_trans_ckpt is set to True,"
                                  "the output_dir should be a shared directory that can be accessed by all nodes."
@@ -1409,19 +1429,6 @@ class Trainer:
                 return
         return
 
-    def _check_load_checkpoint(self):
-        """Check load_checkpoint and auto_trans_ckpt in config."""
-        if not self.config.load_checkpoint:
-            if self.config.auto_trans_ckpt:
-                self.config.auto_trans_ckpt = False
-                logger.warning("load_checkpoint is None and `auto_trans_ckpt=True`, set `auto_trans_ckpt=False`.")
-            return
-        if (self.config.use_parallel and not self.config.auto_trans_ckpt
-                and os.path.isfile(self.config.load_checkpoint)
-                and self.config.load_checkpoint.endswith('.ckpt')):
-            self.config.auto_trans_ckpt = True
-            logger.info("If set `use_parallel=True` and load complete ckpt, set `auto_trans_ckpt=True`.")
-
     def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True) -> str:
         """
         Upload `self.model` and `self.tokenizer` to the model hub on the repo `self.args.hub_model_id`.
@@ -1431,8 +1438,6 @@ class Trainer:
                 Message to commit while pushing, defaults to "End of training".
             blocking (Optional[bool]):
                 Whether the function should return only when the `git push` has finished, default is True
-            kwargs (Optional[Dict[str, Any]]):
-                model_name(Optional[str]): model name in the hub.
 
         Returns:
             The URL of the repository where the model was pushed if `blocking=False`, or a `Future` object tracking the
@@ -1521,12 +1526,12 @@ def _reset_config_for_save(config: dict = None):
     if config.get('context') is not None:
         context_config = config2dict(config.pop('context'))
         parallel_context_config = config2dict(config.pop('parallel'))
-        moe_conifg = config2dict(config.pop('moe_config'))
+        moe_config = config2dict(config.pop('moe_config'))
         recompute_config = config2dict(config.pop('recompute_config'))
         parallel_config = config2dict(config.pop('parallel_config'))
         config_dict.setdefault('context', context_config)
         config_dict.setdefault('parallel', parallel_context_config)
-        config_dict.setdefault('moe_conifg', moe_conifg)
+        config_dict.setdefault('moe_config', moe_config)
         config_dict.setdefault('recompute_config', recompute_config)
         config_dict.setdefault('parallel_config', parallel_config)
 

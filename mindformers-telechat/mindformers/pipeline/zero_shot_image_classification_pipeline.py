@@ -23,9 +23,11 @@ from mindformers.mindformer_book import MindFormerBook
 from mindformers.tools.image_tools import load_image
 from mindformers.models import PreTrainedModel, BaseImageProcessor, PreTrainedTokenizer
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.utils import deprecated
 from .base_pipeline import Pipeline
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="zero_shot_image_classification")
 class ZeroShotImageClassificationPipeline(Pipeline):
     """Pipeline For Zero Shot Image Classification

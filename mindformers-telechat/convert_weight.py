@@ -20,6 +20,8 @@ import importlib
 import torch
 import mindspore as ms
 
+from mindformers.tools.utils import str2bool
+
 dtype_map = {
     'fp32': ms.float32,
     'bf16': ms.bfloat16,
@@ -33,6 +35,7 @@ reversed_dtype_map = {
 
 convert_map = {
     'llama': 'mindformers.models.llama.convert_weight.convert_pt_to_ms',
+    'qwen2_5': 'research.qwen2_5.convert_weight.convert_weight',
     'glm': 'mindformers.models.glm.convert_weight.convert_pt_to_ms',
     'glm-n': 'mindformers.models.glm2.convert_weight.convert_pt_to_ms',
     'qwen': 'research.qwen.convert_weight.convert_pt_to_ms',
@@ -41,7 +44,6 @@ convert_map = {
     'baichuan': 'research.baichuan.convert_weight.convert_pt_to_ms',
     'baichuan2': 'research.baichuan2.convert_weight.convert_pt_to_ms',
     'gpt': 'mindformers.models.gpt2.convert_weight.convert_pt_to_ms',
-    'bloom': 'mindformers.models.bloom.convert_weight.convert_pt_to_ms',
     'blip': 'mindformers.models.blip2.convert_weight.convert_pt_to_ms',
     'wizardcoder': 'research.wizardcoder.convert_weight.convert_pt_to_ms',
     'skywork': 'research.skywork.convert_weight.convert_pt_to_ms',
@@ -55,11 +57,15 @@ convert_map = {
     'qwenvl': 'research.qwenvl.convert_weight.convert_pt_to_ms',
     'yi': 'research.yi.convert_weight.convert_pt_to_ms',
     'deepseek': 'research.deepseek.convert_weight.convert_pt_to_ms',
+    'deepseek1_5': 'research.deepseek1_5.convert_weight.convert_pt_to_ms',
     'qwen2': 'research.qwen2.convert_weight.convert_pt_to_ms',
     'qwen2-moe': 'research.qwen2.convert_moe_weight.convert_pt_to_ms',
     'cogvlm2': 'mindformers.models.cogvlm2.convert_weight.convert_pt_to_ms',
     'llava': 'research.llava.convert_weight.convert_pt_to_ms',
-    "whisper": "mindformers.models.whisper.convert_weight.convert_pt_to_ms"
+    'whisper': 'mindformers.models.whisper.convert_weight.convert_pt_to_ms',
+    'yizhao': 'research.yizhao.convert_weight.convert_pt_to_ms',
+    'llava_next': 'research.llava_next.convert_weight.convert_pt_to_ms',
+    'internvl2': 'research.internvl2.convert_weight.convert_pt_to_ms'
 }
 reversed_convert_map = {
     'llama': 'mindformers.models.llama.convert_reversed.convert_ms_to_pt',
@@ -71,7 +77,6 @@ reversed_convert_map = {
     'baichuan': 'research.baichuan.convert_reversed.convert_ms_to_pt',
     'baichuan2': 'research.baichuan2.convert_reversed.convert_ms_to_pt',
     'gpt': 'mindformers.models.gpt2.convert_reversed.convert_ms_to_pt',
-    'bloom': 'mindformers.models.bloom.convert_reversed.convert_ms_to_pt',
     'blip': 'mindformers.models.blip2.convert_reversed.convert_ms_to_pt',
     'wizardcoder': 'research.wizardcoder.convert_reversed.convert_ms_to_pt',
     'skywork': 'research.skywork.convert_reversed.convert_ms_to_pt',
@@ -84,7 +89,9 @@ reversed_convert_map = {
     'codegeex2': 'mindformers.models.codegeex2.convert_reversed.convert_ms_to_pt',
     'yi': 'research.yi.convert_reversed.convert_ms_to_pt',
     'deepseek': 'research.deepseek.convert_reversed.convert_ms_to_pt',
-    "whisper": "mindformers.models.whisper.convert_reversed.convert_ms_to_pt"
+    'deepseek1_5': 'research.deepseek1_5.convert_reversed.convert_ms_to_pt',
+    'whisper': 'mindformers.models.whisper.convert_reversed.convert_ms_to_pt',
+    'yizhao': 'research.yizhao.convert_reversed.convert_ms_to_pt'
 }
 
 if __name__ == '__main__':
@@ -94,11 +101,8 @@ if __name__ == '__main__':
     parser.add_argument('--input_path', default=None, type=str, required=True)
     parser.add_argument('--output_path', default=None, type=str, required=True)
     parser.add_argument('--dtype', default=None, type=str, required=False)
+    parser.add_argument('--qkv_concat', default=False, type=str2bool, required=False)
 
-    parser.add_argument('--n_head', default=32, type=int, required=False,
-                        help="Only for bloom, 16 for bloom_560m or 32 for bloom_7.1b")
-    parser.add_argument('--hidden_size', default=4096, type=int, required=False,
-                        help="Only for bloom, 1024 for bloom_560m or 4096 for bloom_7.1b")
     parser.add_argument('--layers', default=12, type=int, required=False,
                         help="Only for gpt2 and wizardcoder. "
                              "The number of layers of the model to be converted from hf to ms")
@@ -107,7 +111,9 @@ if __name__ == '__main__':
     parser.add_argument('--telechat_type', default="telechat_12b", type=str, required=False,
                         help="Only for telechat. Telechat version.")
     args, extra_args = parser.parse_known_args()
-    extra_args = [i for item in extra_args for i in item.split("=")]
+    extra_args = [i
+                  for item in extra_args
+                  for i in item.split("=")]
 
     extra_kwargs = copy.copy(vars(args))
     extra_kwargs.pop('model')
@@ -136,4 +142,8 @@ if __name__ == '__main__':
 
     model_name, func_name = module_func.rsplit('.', 1)
     convert_func = getattr(importlib.import_module(model_name), func_name)
-    convert_func(input_path=args.input_path, output_path=args.output_path, dtype=dtype, **extra_kwargs)
+
+    if args.model == "qwen2_5":
+        convert_func(args)
+    else:
+        convert_func(input_path=args.input_path, output_path=args.output_path, dtype=dtype, **extra_kwargs)

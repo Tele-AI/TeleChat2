@@ -25,7 +25,7 @@ from mindformers.utils.convert_utils import pt2ms
 # pylint: disable=W0613
 def convert_pt_to_ms(input_path, output_path, dtype=None, **kwargs):
     """ Convert pytorch model file to MindSpore model file. """
-    model_hf = AutoModel.from_pretrained(os.path.dirname(input_path), trust_remote_code=True).half()
+    model_hf = AutoModel.from_pretrained(os.path.dirname(input_path)).half()
 
     print('parameter convert....')
     ms_param = []

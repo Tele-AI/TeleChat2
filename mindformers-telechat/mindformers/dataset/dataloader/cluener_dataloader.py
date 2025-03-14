@@ -18,12 +18,15 @@
 import os
 import json
 from typing import Optional, Union, List, Tuple
+
 from mindspore.dataset import GeneratorDataset
 
+from mindformers.utils import deprecated
 from ...tools.register import MindFormerRegister, MindFormerModuleType
 from ..labels import cluener_labels
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.DATASET_LOADER)
 class CLUENERDataLoader:
     """CLUENER Dataloader"""
@@ -85,6 +88,7 @@ class CLUENERDataLoader:
         return GeneratorDataset(cluener_dataset, column_names)
 
 
+@deprecated(version="1.5.0")
 class CLUENERDataSet:
     """CLUENER DataSet"""
     def __init__(self, dataset_dir, stage="train"):

@@ -42,7 +42,7 @@ for path in sys.path:
         if new_path not in sys.path:
             sys.path.append(new_path)
 # pylint: disable=C0413
-from research.internlm.internlm import InternLMForCausalLM
+from research.internlm.internlm_model import InternLMForCausalLM
 from research.internlm.internlm_config import InternLMConfig
 
 

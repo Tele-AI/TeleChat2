@@ -18,12 +18,13 @@ import os
 import importlib.util
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple, Iterator
-
+import setproctitle
 from tqdm import tqdm
+
 import mindspore
 from mindspore import Model, Tensor
 from mindspore.common import initializer
-import setproctitle
+
 from lm_eval import utils
 from lm_eval.__main__ import cli_evaluate
 from lm_eval.api.instance import Instance
@@ -38,10 +39,11 @@ from mindformers import (
     build_context,
     build_parallel_config,
     AutoModel,
-    MindFormerRegister
+    AutoTokenizer
 )
 from mindformers.trainer.utils import transform_and_load_checkpoint
-
+from mindformers.tools import set_output_path
+from mindformers.tools.utils import is_version_ge
 eval_logger = utils.eval_logger
 
 
@@ -60,29 +62,23 @@ class MFLM(TemplateLM):
     def __init__(
             self,
             pretrained: str,
-            use_past: Optional[bool] = False,
-            device_id: Optional[int] = None,
+            use_past: Optional[bool] = None,
             batch_size: Optional[int] = 1,
             max_length: Optional[int] = None,
             truncation: Optional[bool] = False,
             add_bos_token: Optional[bool] = False,
             prefix_token_id: Optional[int] = None,
-            max_batch_size: Optional[int] = 64,
-            use_parallel: Optional[bool] = False,
-            dp: Optional[int] = 1,
-            tp: Optional[int] = 1,
+            use_parallel: Optional[bool] = None,
+            dp=None,
+            tp=None,
             **kwargs
     ) -> None:
         super().__init__()
 
         self.batch_size = int(batch_size)
-        self._device = device_id
-        self.batch_sizes = {}
-        self.batch_schedule = 1
         self._max_length = max_length
         self.truncation = truncation
         self.add_bos_token = add_bos_token
-        self.max_batch_size = max_batch_size
 
         model_config = self._get_config(
             pretrained=pretrained,
@@ -92,9 +88,12 @@ class MFLM(TemplateLM):
             dp=dp,
             tp=tp
         )
+        self.pad_token_id = model_config.model.model_config.pad_token_id
+        self.is_dynamic = model_config.model.model_config.is_dynamic
+        self.use_past = model_config.model.model_config.use_past
 
-        self._create_model(model_config)
         self._create_tokenizer(pretrained=pretrained)
+        self._create_model(model_config)
 
         self.custom_prefix_token_id = prefix_token_id
         if prefix_token_id is not None:
@@ -134,10 +133,6 @@ class MFLM(TemplateLM):
         return 256
 
     @property
-    def device(self):
-        return self._device
-
-    @property
     def rank(self):
         return self._rank
 
@@ -153,10 +148,10 @@ class MFLM(TemplateLM):
             self,
             pretrained: str,
             batch_size: int,
-            use_parallel: bool = False,
-            use_past: bool = False,
-            tp: int = 1,
-            dp: int = 1
+            use_parallel=None,
+            use_past=None,
+            tp=None,
+            dp=None
     ) -> MindFormerConfig:
         """parse yaml configuration file"""
         # search yaml config file
@@ -164,70 +159,55 @@ class MFLM(TemplateLM):
         if len(config_path) != 1:
             raise Exception("There is no or more than one config file in the model directory.")
         self._config = MindFormerConfig(config_path[0])
+        set_output_path(self._config.output_dir)
 
-        self._config.pretrained = pretrained
-        self._config.parallel_config.model_parallel = tp
-        self._config.use_parallel = use_parallel
-        self._config.parallel_config.data_parallel = dp
-        self._config.auto_trans_ckpt = use_parallel
-
-        if self._device:
-            self._config.context.device_id = self._device
-        else:
-            self._device = self._config.context.device_id
-
+        if tp is not None:
+            self._config.parallel_config.model_parallel = tp
+        if use_parallel is not None:
+            self._config.use_parallel = use_parallel
+        if dp is not None:
+            self._config.parallel_config.data_parallel = dp
         if self._max_length:
             self._config.processor.tokenizer.model_max_length = self._max_length
         else:
             self._max_length = self._config.processor.tokenizer.model_max_length
-
         if self._max_length:
             self._config.model.model_config.seq_length = self._max_length
-
+        if use_past is not None:
+            self._config.model.model_config.use_past = use_past
         self._config.model.model_config.parallel_config = self._config.parallel_config
         self._config.model.model_config.batch_size = batch_size
-        self._config.model.model_config.use_past = use_past
+        if self._config.moe_config:
+            self._config.model.model_config.moe_config = self._config.moe_config
 
         build_context(self._config)
+        eval_logger.info(f"Build context finished.")
         build_parallel_config(self._config)
 
         return self._config
 
     def _create_model(self, config) -> None:
         """Initialize Model"""
-        self._model = AutoModel.from_config(config)
+        if is_version_ge(mindspore.__version__, "2.5.0"):
+            from mindspore.nn.utils import no_init_parameters
+            with no_init_parameters():  # Delay initialization
+                self._model = AutoModel.from_config(config)
+        else:
+            self._model = AutoModel.from_config(config)
+        eval_logger.info(f"Build model finished.")
 
         if not config.load_checkpoint:
-            raise ValueError("There is no model ckpt in the model directory.")
-        eval_logger.info("----------------Transform and load checkpoint----------------")
+            raise Exception("There is no model ckpt in the model directory.")
+        eval_logger.info("----------------Load checkpoint----------------")
         seq_length = config.model.model_config.seq_length
-        # set auto transform ckpt
-        if config.use_parallel:
-            config.auto_trans_ckpt = True
-            eval_logger.info("----------------auto trans ckpt----------------")
-        else:
-            config.auto_trans_ckpt = False
         input_ids = Tensor(shape=(self.batch_size, seq_length), dtype=mindspore.int32, init=initializer.One())
         infer_data = self._model.prepare_inputs_for_predict_layout(input_ids)
         transform_and_load_checkpoint(config, Model(self._model), self._model, infer_data, do_predict=True)
 
     def _create_tokenizer(self, pretrained: str) -> None:
         """Initialize Tokenizer"""
-        tokenizer_kwargs = dict(self.config.processor.tokenizer)
-        tokenizer_type = tokenizer_kwargs.pop('type')
-        try:
-            tokenizer_class = MindFormerRegister.get_cls(module_type='tokenizer', class_name=tokenizer_type)
-        except ValueError as e:
-            tokenizer_py_path = [str(file.resolve()) for file in Path(pretrained).glob('*tokenizer*.py')]
-            if len(tokenizer_py_path) != 1:
-                raise Exception("There is no or more than one tokenizer python script in the model directory.") from e
-            tokenizer_class = load_class_from_file(tokenizer_py_path[0], tokenizer_type)
-        except Exception as e:
-            raise e
-
-        self.tokenizer = tokenizer_class(
-            **tokenizer_kwargs
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained, trust_remote_code=True)
+        eval_logger.info(f"Build tokenizer finished.")
 
     def tok_encode(
             self, string: str, left_truncate_len: Optional[int] = None, add_special_tokens=None
@@ -259,14 +239,12 @@ class MFLM(TemplateLM):
     def tok_batch_encode(
             self,
             strings: List[str],
-            padding_side: str = "left",
             left_truncate_len: Optional[int] = None,
             truncation: bool = False,
     ) -> Tuple[mindspore.Tensor, mindspore.Tensor]:
         """encode tokens in batches"""
         # encode a batch of strings. converts to tensors and pads automatically, unlike tok_encode.
         old_padding_side = self.tokenizer.padding_side
-        self.tokenizer.padding_side = padding_side
 
         add_special_tokens = {"add_special_tokens": False or self.add_bos_token}
 
@@ -288,7 +266,7 @@ class MFLM(TemplateLM):
         return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
 
     def _model_call(self, inps):
-        logits = self.model(inps)[0]
+        logits = self.model(input_ids=inps.astype(mindspore.int32))[0]
         return logits
 
     def _model_generate(self, context, max_length, **generation_kwargs):
@@ -302,12 +280,13 @@ class MFLM(TemplateLM):
         if do_sample is False and generation_kwargs.get("temperature") == 0.0:
             generation_kwargs.pop("temperature")
 
-        generation_kwargs.pop('attention_mask')
+        if 'attention_mask' in generation_kwargs:
+            generation_kwargs.pop('attention_mask')
 
         return self.model.generate(
             input_ids=context.tolist(),
             max_length=max_length,
-            pad_token_id=self.tokenizer.pad_token_id,
+            pad_token_id=self.pad_token_id,
             use_cache=True,
             **generation_kwargs,
         )
@@ -400,6 +379,8 @@ class MFLM(TemplateLM):
         """handle loglikelihood_tokens request type"""
         res = []
 
+        self.model.set_dynamic_inputs()  # Set dynamic inputs for model
+
         def _collate(req: Tuple[Tuple[str, str], List[int], List[int]]):
             toks = req[1] + req[2]
             return -len(toks), tuple(toks)
@@ -462,7 +443,7 @@ class MFLM(TemplateLM):
 
             # create encoder attn mask and batched conts, if seq2seq
 
-            batched_inps = pad_and_concat(padding_len_inp, inps, padding_side="right")
+            batched_inps = pad_and_concat(padding_len_inp, inps, padding_side="right", pad_token_id=self.pad_token_id)
 
             multi_logits = mindspore.ops.log_softmax(
                 self._model_call(batched_inps), axis=-1
@@ -483,7 +464,7 @@ class MFLM(TemplateLM):
 
                 # Check if per-token argmax is exactly equal to continuation
                 greedy_tokens = logits.argmax(axis=-1)
-                eval_logger.info(f"answer:{self.tokenizer.decode(greedy_tokens)}")
+                eval_logger.info(f"\nanswer:{self.tokenizer.decode(greedy_tokens)}")
                 # eval_logger.info(f"{self.tokenizer.decode(res)}")
 
                 # check for one-token continuation cache hits.
@@ -543,7 +524,11 @@ class MFLM(TemplateLM):
         )
 
         chunks = re_ords.get_batched(self.batch_size)
+        batch_size = self.batch_size
         for chunk in chunks:
+            if not self.is_dynamic and self.use_past and len(chunk) != batch_size:
+                batch_size = len(chunk)
+                self._model.phase_cache.clear()
             contexts, all_gen_kwargs = zip(*chunk)
             # we assume all gen kwargs in the batch are the same
             # this is safe to assume because the `grouper` object ensures it.
@@ -657,6 +642,7 @@ def pad_and_concat(
         max_length: int,
         tensors: List[mindspore.Tensor],
         padding_side: Literal["right", "left"] = "right",
+        pad_token_id: int = 0
 ):
     """
     Method for padding a list of tensors given the maximum tensor
@@ -673,28 +659,12 @@ def pad_and_concat(
         if tensor_len < max_length:
             if padding_side == "right":
                 # right-pad
-                tensors[i] = mindspore.ops.cat(
-                    [
-                        tensor,
-                        mindspore.ops.zeros(
-                            max_length - tensor_len,
-                            dtype=mindspore.int64,
-                        ),
-                    ],
-                    axis=0,
-                ).unsqueeze(0)
+                tensors[i] = mindspore.ops.pad(tensor, [
+                    0, max_length - tensor_len], mode="constant", value=pad_token_id).unsqueeze(0)
             else:
                 # left-pad
-                tensors[i] = mindspore.ops.cat(
-                    [
-                        mindspore.ops.zeros(
-                            max_length - tensor_len,
-                            dtype=mindspore.int64,
-                        ),
-                        tensor,
-                    ],
-                    axis=0,
-                ).unsqueeze(0)
+                tensors[i] = mindspore.ops.pad(tensor, [
+                    max_length - tensor_len, 0], mode="constant", value=pad_token_id).unsqueeze(0)
         else:
             tensors[i] = tensor.unsqueeze(0)
 

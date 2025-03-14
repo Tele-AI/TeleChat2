@@ -13,9 +13,12 @@
 # limitations under the License.
 # ============================================================================
 """Dropout"""
+import mindspore as ms
 from mindspore import nn
 import mindspore.common.dtype as mstype
-from mindspore.ops import operations as P
+from mindspore.common.generator import default_generator
+from mindspore.common.tensor import Tensor
+# from mindspore.ops import operations as P
 
 # MindSpore 2.0 has changed the APIs of _checkparam, the following try except is for compatibility
 try:
@@ -40,7 +43,9 @@ class Dropout(nn.Cell):
         Validator.check_value_type('drop_prob', drop_prob, [float], self.cls_name)
         keep_prob = 1.0 - drop_prob
         self.keep_prob = keep_prob
-        self.dropout = P.Dropout(keep_prob)
+        self.generator_step = Tensor(1, mstype.int64)
+        self.seed, self.offset = default_generator._step(self.generator_step) # pylint: disable=protected-access
+        self.dropout = ms.ops.auto_generate.DropoutExt().add_prim_attr("side_effect_hidden", True)
 
     def construct(self, x):
         r"""
@@ -50,7 +55,7 @@ class Dropout(nn.Cell):
         if not self.training:
             return x
 
-        out, _ = self.dropout(x)
+        out, _ = self.dropout(input=x, p=self.keep_prob, seed=self.seed, offset=self.offset)
         return out
 
     def extend_repr(self):

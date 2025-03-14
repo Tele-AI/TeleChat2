@@ -27,7 +27,7 @@ from mindformers.utils.convert_utils import ms2pt
 def _name_replace(name: str):
     """replace mindformers parameter name to huggingface."""
     name = name.replace('tok_embeddings.embedding_weight', 'tok_embeddings.weight')
-    name = name.replace('w', 'wqkv')
+    name = name.replace('.w.', '.wqkv.')
     name = name.replace('.norm_out.', '.norm.')
     name = name.replace('lm_head', 'output')
     return name

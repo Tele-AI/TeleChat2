@@ -90,7 +90,6 @@ class GoldenMoENet(nn.Cell):
                                ffn_dim_multiplier=ffn_dim_multiplier,
                                compute_dtype=compute_dtype,
                                param_init_type=param_init_type,
-                               is_dynamic=False,
                                parallel_config=parallel_config)
         self.feed_forward = MoEV2(ffn=ffn,
                                   dim=hidden_size,

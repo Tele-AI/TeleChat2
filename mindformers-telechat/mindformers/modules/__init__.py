@@ -29,6 +29,7 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerOpParallelConfig,
     TransformerRecomputeConfig,
+    TransformerSwapConfig,
     VocabEmbedding
 )
 from .layers import (

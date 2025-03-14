@@ -43,5 +43,6 @@ def build_data_handler(config, module_type: str = 'data_handler', class_name: st
     if config is not None:
         if isinstance(config, dict) and not isinstance(config, MindFormerConfig):
             config = MindFormerConfig(**config)
-        return MindFormerRegister.get_cls(MindFormerModuleType.DATA_HANDLER, config.type)(config)
-    return MindFormerRegister.get_cls(module_type, class_name)(kwargs)
+        return MindFormerRegister.get_cls(
+            MindFormerModuleType.DATA_HANDLER, config.type)(config, **kwargs)
+    return MindFormerRegister.get_cls(module_type, class_name)(**kwargs)

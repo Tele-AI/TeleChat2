@@ -25,14 +25,12 @@ from .hub import (
     SESSION_ID,
     cached_file,
     convert_file_size_to_int,
-    download_url,
     extract_commit_hash,
     get_checkpoint_shard_files,
     get_file_from_repo,
     has_file,
     http_user_agent,
-    is_offline_mode,
-    is_remote_url
+    is_offline_mode
 )
 
 __all__ = []

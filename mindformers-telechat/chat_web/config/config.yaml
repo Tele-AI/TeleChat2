@@ -1,11 +1,11 @@
 server:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 11111  # the port that server is listening
   uvicorn_level: 'info'
   access_log: True  # whether open server logging
 
 web_demo:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 7860
 
 model:

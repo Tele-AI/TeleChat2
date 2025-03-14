@@ -17,9 +17,6 @@
 
 import re
 import math
-from collections import OrderedDict
-
-import yaml
 
 import mindspore.ops as P
 import mindspore.nn as nn
@@ -75,8 +72,8 @@ def calculate_dividable_vocab_size(vocab_size, denominator=128):
     padded_vocab_size = math.ceil(vocab_size / denominator) * denominator
     if padded_vocab_size != vocab_size:
         logger.warning(
-            f"Add {padded_vocab_size - vocab_size} padded tokens to the"
-            + f"vocab size {vocab_size} to make it dividable by {denominator}"
+            f"Add {padded_vocab_size - vocab_size} padded tokens to the "
+            f"vocab size {vocab_size} to make it dividable by {denominator}"
         )
     return padded_vocab_size
 
@@ -271,29 +268,9 @@ def save_strategy_file(state_dict, strategy_file_name):
     except BaseException as e:
         logger.critical(
             f"Failed to save the checkpoint file {strategy_file_name}. Maybe don't have "
-            "the permission to write files, or the disk space is insufficient and so on."
+            f"the permission to write files, or the disk space is insufficient and so on."
         )
         raise e
-
-
-def load_yaml(stream, yaml_loader=yaml.SafeLoader, object_pairs_hook=OrderedDict):
-    """Load yaml file in orderedly.
-
-    Args:
-        stream: yaml file stream.
-        yaml_loader (yaml.Loader, optional): yaml loader.
-        object_pairs_hook (optional): object pairs hook.
-    """
-
-    class OrderedLoader(yaml_loader):
-        pass
-
-    def _construct_mapping(loader, node):
-        loader.flatten_mapping(node)
-        return object_pairs_hook(loader.construct_pairs(node))
-
-    OrderedLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping)
-    return yaml.load(stream, OrderedLoader)
 
 
 def valid_lora_config(model_config, params):

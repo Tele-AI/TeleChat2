@@ -17,7 +17,9 @@
 from .checkpointing import get_checkpoint_name
 from .checkpointing import save_checkpoint
 from .checkpointing import load_checkpoint
+from .checkpointing import get_last_checkpoint
 
 __all__ = ["get_checkpoint_name",
            "save_checkpoint",
-           "load_checkpoint"]
+           "load_checkpoint",
+           "get_last_checkpoint"]

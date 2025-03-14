@@ -17,6 +17,10 @@ from mindformers.models.configuration_utils import PretrainedConfig
 from mindformers.modules.transformer import TransformerOpParallelConfig
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 from mindformers.core.parallel_config import default_parallel_config
+from mindformers.tools.utils import calculate_pipeline_stage
+from mindformers.tools.register.config import DictConfig
+from mindformers.models.llama import LlamaConfig
+from mindformers.models.eva02 import EVA02Config
 
 __all__ = ['CogVLM2Config']
 
@@ -45,8 +49,9 @@ class CogVLM2Config(PretrainedConfig):
         Class, CogVLM2Config
     """
     def __init__(self,
-                 vision_model: PretrainedConfig,
-                 llm_model: PretrainedConfig,
+                 vision_model: DictConfig = None,
+                 llm_model: DictConfig = None,
+                 layers_per_stage: list = None,
                  freeze_vision: bool = False,
                  freeze_adapter: bool = False,
                  freeze_llm: bool = False,
@@ -66,6 +71,15 @@ class CogVLM2Config(PretrainedConfig):
         if isinstance(parallel_config, dict):
             parallel_config = TransformerOpParallelConfig(**parallel_config)
         self.batch_size = batch_size
+
+        if vision_model is None:
+            model_config = EVA02Config()
+            model_config.type = model_config.__class__.__name__
+            vision_model = DictConfig(arch='EVAModel', model_config=model_config)
+        if llm_model is None:
+            model_config = LlamaConfig()
+            model_config.type = model_config.__class__.__name__
+            llm_model = DictConfig(arch='CogVLM2VideoLM', model_config=model_config)
 
         self.vision_model = vision_model
         self.llm_model = llm_model
@@ -88,6 +102,7 @@ class CogVLM2Config(PretrainedConfig):
         self.llm_model.model_config.is_dynamic = is_dynamic
 
         self.parallel_config = parallel_config
+        self.layers_per_stage = layers_per_stage
         self.vision_model.model_config.parallel_config = parallel_config
         self.llm_model.model_config.parallel_config = parallel_config
 
@@ -103,3 +118,31 @@ class CogVLM2Config(PretrainedConfig):
         self.top_k = llm_model_config.top_k
         self.top_p = llm_model_config.top_p
         self.do_sample = llm_model_config.do_sample
+
+        if self.layers_per_stage is not None:
+            if len(self.layers_per_stage) != parallel_config.pipeline_stage:
+                raise ValueError("The length of layers_per_stage must be equal to pipeline_stage.")
+            model_layers = []
+            model_layers.append(self.vision_model.model_config.num_hidden_layers)
+            model_layers.append(llm_model_config.num_layers)
+
+            pipeline_stage = calculate_pipeline_stage(self.layers_per_stage, model_layers)
+            stage_index = 0
+            self.vision_model.model_config.pipeline_stage = pipeline_stage[stage_index]
+            self.vision_model.model_config.start_stage = pipeline_stage[stage_index]['start_stage']
+            self.vision_model.model_config.stage_num = pipeline_stage[stage_index]['stage_num']
+            self.vision_model.model_config.offset = pipeline_stage[stage_index]['offset']
+            stage_index += 1
+            self.llm_model.model_config.pipeline_stage = pipeline_stage[stage_index]
+            self.llm_model.model_config.start_stage = pipeline_stage[stage_index]['start_stage']
+            self.llm_model.model_config.stage_num = pipeline_stage[stage_index]['stage_num']
+            self.llm_model.model_config.offset = pipeline_stage[stage_index]['offset']
+        else:
+            self.vision_model.model_config.start_stage = 0
+            self.vision_model.model_config.stage_num = 1
+            self.llm_model.model_config.pipeline_stage = {}
+            self.llm_model.model_config.pipeline_stage['start_stage'] = 1
+            self.llm_model.model_config.pipeline_stage['stage_num'] = parallel_config.pipeline_stage - 1
+            self.llm_model.model_config.pipeline_stage['offset'] = 0
+            self.llm_model.model_config.start_stage = 1
+            self.llm_model.model_config.stage_num = parallel_config.pipeline_stage - 1

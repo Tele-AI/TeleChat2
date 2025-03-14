@@ -19,12 +19,15 @@ from collections import OrderedDict
 from typing import Optional, Union, List, Tuple
 import json
 import copy
+from PIL import Image
 
 from mindspore.dataset import GeneratorDataset
-from PIL import Image
+
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.utils import deprecated
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.DATASET_LOADER)
 class MultiImgCapDataLoader:
     """Multiple Image-Caption Dataloader"""
@@ -91,6 +94,7 @@ class MultiImgCapDataLoader:
                                 **kwargs)
 
 
+@deprecated(version="1.5.0")
 class MultiImgCapDataSet:
     """MultiImgCapDataSet API.
 

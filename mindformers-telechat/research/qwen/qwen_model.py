@@ -18,12 +18,12 @@ import copy
 import numpy as np
 import mindspore.common.dtype as mstype
 from mindspore import log as logger
-from mindspore import nn
+from mindspore import nn, mint
 from mindspore.common.tensor import Tensor
 from mindspore.context import ParallelMode
 from mindspore.ops import functional as F
 from mindspore.ops import operations as P
-from mindspore.parallel._utils import _get_parallel_mode, _is_sharding_propagation
+from mindspore.parallel._utils import _get_parallel_mode
 
 try:
     from mindspore._checkparam import Validator
@@ -35,14 +35,12 @@ from mindformers.models.modeling_utils import PreTrainedModel
 from mindformers.models.utils import lazy_inline
 from mindformers.tools.logger import _LogActionOnce
 from mindformers.tools.register.register import MindFormerModuleType, MindFormerRegister
-from mindformers.tools.utils import get_use_rope_self_define
-from mindformers.modules.layers import Linear, _check_input_dtype, _args_type_validator_check, _valid_value_checks,\
+from mindformers.modules.layers import Linear, _check_input_dtype, _args_type_validator_check, _valid_value_checks, \
     FreqsMgr
 from mindformers.models.llama.llama_layer import LlamaEmbedding, LlamaSiLU, LlamaRMSNorm
 from mindformers.models.llama.llama_transformer import LLamaDecodeLayer
 from mindformers.models.utils import LayerSetting
 from mindformers.version_control import check_valid_flash_attention
-
 from qwen_config import QwenConfig
 
 
@@ -99,22 +97,13 @@ class QwenForCausalLM(QwenPreTrainedModel):
         self.slice = P.StridedSlice()
         self.mul = P.Mul()
         self.sub_batch_valid_len = P.Sub()
-        self.gather = P.Gather(1)
+        self.gather = P.Gather()
 
-        if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
-            self.shard(config.parallel_config)
-            if config.parallel_config.pipeline_stage > 1:
-                self.lm_head.pipeline_stage = config.parallel_config.pipeline_stage - 1
+        self.shard(config.parallel_config)
+        if config.parallel_config.pipeline_stage > 1:
+            self.lm_head.pipeline_stage = config.parallel_config.pipeline_stage - 1
 
         self.load_checkpoint(config)
-
-    # pylint: disable=W0613
-    def prepare_inputs_for_generation(self, input_ids, **kwargs):
-        if self.config.is_dynamic and "origin_inputs" in kwargs:
-            input_ids = kwargs["origin_inputs"]
-        return {
-            "input_ids": Tensor(input_ids, mstype.int32)
-        }
 
     # pylint: disable=W0613
     def prepare_inputs_for_predict_layout(self, input_ids, **kwargs):
@@ -167,6 +156,7 @@ class QwenForCausalLM(QwenPreTrainedModel):
                                   block_tables=block_tables, slot_mapping=slot_mapping)
         pre_gather = (not self.use_past or self.is_first_iteration) and batch_valid_length is not None
         if pre_gather:
+            batch_valid_length = mint.cumsum(batch_valid_length, 0)
             output = self.gather(output, self.sub_batch_valid_len(batch_valid_length, 1), 1)
         logits = self.lm_head(output)
 
@@ -253,7 +243,8 @@ class QwenModel(QwenPreTrainedModel):
                                           config.parallel_config,
                                           config.pp_interleave_num)
         for layer_id in range(config.num_layers):
-            layer = QwenDecodeLayer(layer_id,
+            layer = QwenDecodeLayer(config.seq_length,
+                                    layer_id,
                                     dim=config.hidden_size,
                                     n_heads=config.num_heads,
                                     intermediate_size=config.intermediate_size,
@@ -268,20 +259,22 @@ class QwenModel(QwenPreTrainedModel):
                                     use_flash_attention=self.use_flash_attention,
                                     block_size=config.block_size,
                                     num_blocks=config.num_blocks,
-                                    parallel_config=config.parallel_config)
+                                    parallel_config=config.parallel_config,
+                                    is_dynamic=config.is_dynamic)
 
             self.layer_setting(layer, layer_id)
 
             self.layers.append(layer)
 
-        self.use_rope_self_define = get_use_rope_self_define()
         self.freqs_mgr = FreqsMgr(head_dim=self.head_dim,
                                   seq_length=self.seq_length,
                                   max_position_embedding=config.max_position_embedding,
                                   rotary_dtype=config.rotary_dtype,
                                   theta=config.theta,
                                   scaling_factor=config.scaling_factor,
-                                  extend_method=config.extend_method)
+                                  extend_method=config.extend_method,
+                                  is_dynamic=config.is_dynamic)
+        self.freqs_mgr.shard(config.parallel_config)
         self.casual_mask = CausalMaskForQwen(seq_length=config.seq_length,
                                              compute_type=config.compute_dtype,
                                              is_dynamic=config.is_dynamic,
@@ -297,17 +290,16 @@ class QwenModel(QwenPreTrainedModel):
 
         self.shape = P.Shape()
 
-        if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
-            self.shard(config.parallel_config)
+        self.shard(config.parallel_config)
 
-            self.wte.pipeline_stage = 0
-            if config.parallel_config.pipeline_stage > 1:
-                self.ln_f.pipeline_stage = config.parallel_config.pipeline_stage - 1
-                self.wte.set_comm_fusion(2)
-                self.ln_f.set_comm_fusion(2)
-            else:
-                self.wte.set_comm_fusion(config.parallel_config.gradient_aggregation_group)
-                self.ln_f.set_comm_fusion(config.parallel_config.gradient_aggregation_group)
+        self.wte.pipeline_stage = 0
+        if config.parallel_config.pipeline_stage > 1:
+            self.ln_f.pipeline_stage = config.parallel_config.pipeline_stage - 1
+            self.wte.set_comm_fusion(2)
+            self.ln_f.set_comm_fusion(2)
+        else:
+            self.wte.set_comm_fusion(config.parallel_config.gradient_aggregation_group)
+            self.ln_f.set_comm_fusion(config.parallel_config.gradient_aggregation_group)
 
     # pylint: disable=W0613
     def construct(self, input_ids: Tensor, init_reset=True, batch_valid_length=None, batch_index=None,
@@ -328,13 +320,8 @@ class QwenModel(QwenPreTrainedModel):
         mask = None
         if self.use_past:
             if self.is_first_iteration:
-                if not self.use_flash_attention:
-                    mask = self.casual_mask(input_ids)
-                    mask = self.casual_mask.post_process(mask)
-                if self.use_rope_self_define:
-                    freqs_cis = self.freqs_mgr(seq_len)
-                else:
-                    freqs_cis = self.freqs_mgr.prefill(bs, seq_len)
+                freqs_cis = self.freqs_mgr.prefill(bs, seq_len)
+                mask = self.casual_mask.prefill()
             else:
                 freqs_cis = self.freqs_mgr.increment(batch_valid_length)
         else:
@@ -363,17 +350,21 @@ class QwenDecodeLayer(LLamaDecodeLayer):
     """Qwen decode layer"""
 
     def __init__(self,
+                 seq_length,
                  layer_id,
                  intermediate_size,
                  parallel_config,
                  compute_dtype=mstype.float16,
                  param_init_type=mstype.float32,
+                 is_dynamic=False,
                  **kwargs):
-        super().__init__(layer_id,
+        super().__init__(seq_length,
+                         layer_id,
                          intermediate_size=intermediate_size,
                          parallel_config=parallel_config,
                          compute_dtype=compute_dtype,
                          param_init_type=param_init_type,
+                         is_dynamic=is_dynamic,
                          **kwargs)
 
         self.feed_forward = QwenFeedForward(dim=self.hidden_size,
@@ -383,16 +374,14 @@ class QwenDecodeLayer(LLamaDecodeLayer):
 
         dp = parallel_config.data_parallel
         mp = parallel_config.model_parallel
-        if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
-            self.feed_forward.shard(parallel_config)
-            self.feed_forward.mul.shard(((dp, 1, mp), (dp, 1, mp)))
+        self.feed_forward.shard(parallel_config)
+        self.feed_forward.mul.shard(((dp, 1, mp), (dp, 1, mp)))
         if parallel_config.use_seq_parallel and self.is_first_iteration:
             self.feed_forward.w2.shard(((dp, mp), (1, mp)), out_strategy_matmul=((dp * mp, 1),))
 
-        if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
-            self.attention.wq.bias_add.shard(((dp, mp), (mp,)))
-            self.attention.wk.bias_add.shard(((dp, mp), (mp,)))
-            self.attention.wv.bias_add.shard(((dp, mp), (mp,)))
+        self.attention.wq.bias_add.shard(((dp, mp), (mp,)))
+        self.attention.wk.bias_add.shard(((dp, mp), (mp,)))
+        self.attention.wv.bias_add.shard(((dp, mp), (mp,)))
 
 
 class QwenFeedForward(nn.Cell):
@@ -426,8 +415,7 @@ class QwenFeedForward(nn.Cell):
     def __init__(self, dim,
                  intermediate_size=0,
                  compute_dtype=mstype.float16,
-                 param_init_type=mstype.float32,
-                 is_dynamic=False):
+                 param_init_type=mstype.float32):
         super().__init__()
 
         hidden_dim = intermediate_size
@@ -443,22 +431,19 @@ class QwenFeedForward(nn.Cell):
                          out_channels=hidden_dim,
                          has_bias=False,
                          compute_dtype=compute_dtype,
-                         param_init_type=param_init_type,
-                         skip_redistribution=is_dynamic)
+                         param_init_type=param_init_type)
 
         self.w2 = Linear(in_channels=hidden_dim,
                          out_channels=dim,
                          has_bias=False,
                          compute_dtype=compute_dtype,
-                         param_init_type=param_init_type,
-                         skip_redistribution=is_dynamic)
+                         param_init_type=param_init_type)
 
         self.w3 = Linear(in_channels=dim,
                          out_channels=hidden_dim,
                          has_bias=False,
                          compute_dtype=compute_dtype,
-                         param_init_type=param_init_type,
-                         skip_redistribution=is_dynamic)
+                         param_init_type=param_init_type)
 
     def construct(self, x):
         """Forward process of the FeedForward"""
@@ -507,8 +492,13 @@ class CausalMaskForQwen(nn.Cell):
         self.use_flash_attention = use_flash_attention
         self.multiply_data = Tensor([-10000.0], dtype=compute_type)
         self.one = Tensor([1.0], dtype=compute_type)
-        self.lower_triangle_mask = Tensor(np.tril(np.ones(shape=(seq_length, seq_length))), mstype.float32)
-
+        if self.is_dynamic:
+            mask_coeff = 1.0 if compute_type is mstype.bfloat16 else -10000.0
+            self.lower_triangle_mask = Tensor(
+                np.triu(np.ones(shape=(128, 128), dtype=np.float16), 1) * mask_coeff, dtype=compute_type
+            )
+        else:
+            self.lower_triangle_mask = Tensor(np.tril(np.ones(shape=(seq_length, seq_length))), mstype.float32)
         self.shape = P.Shape()
         self.cast = P.Cast()
         self.reshape = P.Reshape()
@@ -537,6 +527,9 @@ class CausalMaskForQwen(nn.Cell):
         # the returned shape is [bs, seq_length, seq_length]
         attention_mask = self.mul(mask_right, lower_triangle)
         return attention_mask
+
+    def prefill(self):
+        return self.lower_triangle_mask
 
     def increment(self, seq_range, batch_valid_length, zactivate_len=None):
         if zactivate_len is not None:

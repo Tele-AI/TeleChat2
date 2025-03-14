@@ -14,6 +14,7 @@
 # ============================================================================
 """Server Config"""
 import yaml
+from mindformers.tools.check_rules import check_yaml_depth_before_loading
 
 
 class ServerConfig:
@@ -26,6 +27,8 @@ class ServerConfig:
     """
     def __init__(self, path):
         with open(path, 'r', encoding='utf-8') as f:
+            check_yaml_depth_before_loading(f)
+            f.seek(0)
             self.config = yaml.load(f, Loader=yaml.SafeLoader)
 
     def __getitem__(self, item):

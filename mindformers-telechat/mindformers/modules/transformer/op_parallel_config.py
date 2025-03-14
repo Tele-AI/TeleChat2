@@ -58,12 +58,14 @@ class MoEParallelConfig(_Config):
     """
 
     def __init__(self, data_parallel=1, model_parallel=1, expert_parallel=1, context_parallel=1,
-                 use_seq_parallel=False, select_recompute=False):
+                 use_seq_parallel=False, select_recompute=False, enable_deredudency=False, npu_nums_per_device=1):
         Validator.check_positive_int(data_parallel, "data_parallel")
         Validator.check_positive_int(model_parallel, "model_parallel")
         Validator.check_positive_int(context_parallel, "context_parallel")
         Validator.check_positive_int(expert_parallel, "expert_parallel")
         Validator.check_bool(use_seq_parallel, "use_seq_parallel")
+        Validator.check_bool(enable_deredudency, "enable_deredudency")
+        Validator.check_positive_int(npu_nums_per_device, "npu_nums_per_device")
         self._dpmp = OpParallelConfig(data_parallel=data_parallel,
                                       model_parallel=model_parallel,
                                       context_parallel=context_parallel,
@@ -72,6 +74,8 @@ class MoEParallelConfig(_Config):
         self.expert_parallel = expert_parallel
         self.use_seq_parallel = use_seq_parallel
         self.select_recompute = select_recompute
+        self.enable_deredudency = enable_deredudency
+        self.npu_nums_per_device = npu_nums_per_device
 
     @property
     def data_parallel(self):
@@ -130,13 +134,13 @@ class OpParallelConfig(_Config):
         Configuration for operator parallelism, used to set the method of operator-level parallelism.
 
         Args:
-            data_parallel (int, optional): The number of data parallel. Default: ``1`` .
-            model_parallel (int, optional): The number of model parallel. Default: ``1`` .
-            use_seq_parallel (bool, optional): Whether to use sequence parallelism. Default: ``False`` .
-            context_parallel (int, optional): The number of context parallelism. Default: ``1`` .
-            select_recompute (bool, optional): Whether to select recomputation. Default: ``False`` .
+            data_parallel (int, optional): The number of data parallel. Default: ``1``.
+            model_parallel (int, optional): The number of model parallel. Default: ``1``.
+            use_seq_parallel (bool, optional): Whether to use sequence parallelism. Default: ``False``.
+            context_parallel (int, optional): The number of context parallelism. Default: ``1``.
+            select_recompute (bool, optional): Whether to select recomputation. Default: ``False``.
             context_parallel_algo (str, optional):  The context parallelism algorithm,
-                with options ``"colossalai_cp"`` and ``"ulysses_cp"`` . Default: ``"colossalai_cp"`` .
+                with options ``"colossalai_cp"`` and ``"ulysses_cp"``. Default: ``"colossalai_cp"``.
 
         Returns:
             Instance of OpParallelConfig.
@@ -257,11 +261,13 @@ class _PipeLineConfig(_Config):
             >>> config=_PipeLineConfig(pipeline_stage=1, micro_batch_num=1)
     """
 
-    def __init__(self, pipeline_stage=1, micro_batch_num=1):
+    def __init__(self, pipeline_stage=1, micro_batch_num=1, seq_split_num=1):
         Validator.check_positive_int(pipeline_stage, "pipeline_stage")
         Validator.check_positive_int(micro_batch_num, "micro_batch_num")
+        Validator.check_positive_int(seq_split_num, "micro_batch_num")
         self.pipeline_stage = pipeline_stage
         self.micro_batch_num = micro_batch_num
+        self.seq_split_num = seq_split_num
 
     @property
     def pipeline_stage(self):
@@ -271,7 +277,6 @@ class _PipeLineConfig(_Config):
     def pipeline_stage(self, value):
         Validator.check_positive_int(value, "pipeline_stage")
         self._pipeline_stage = value
-        context.set_auto_parallel_context(pipeline_stages=value)
 
     @property
     def micro_batch_num(self):
@@ -281,6 +286,16 @@ class _PipeLineConfig(_Config):
     def micro_batch_num(self, value):
         Validator.check_positive_int(value, "micro_batch_num")
         self._micro_batch_num = value
+
+    @property
+    def seq_split_num(self):
+        return self._seq_split_num
+
+    @seq_split_num.setter
+    def seq_split_num(self, value):
+        Validator.check_positive_int(value, "seq_split_num")
+        self._seq_split_num = value
+
 
 
 # In case the user doesn't pass a config as args.

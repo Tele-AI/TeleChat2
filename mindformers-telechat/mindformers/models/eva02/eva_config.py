@@ -45,6 +45,7 @@ class EVA02Config(PretrainedConfig):
                  intermediate_size: int = 2048,
                  ref_feat_shape: int = 16,
                  num_classes: int = 512,
+                 offset: int = 0,
                  hidden_dropout_prob: float = 0.0,
                  attention_dropout_prob: float = 0.0,
                  drop_path_rate: float = 0.,
@@ -71,6 +72,7 @@ class EVA02Config(PretrainedConfig):
                  parallel_config: Union[dict, TransformerOpParallelConfig] = default_transformer_config,
                  moe_config: Union[dict, MoEConfig] = default_moe_config,
                  init_values=None,
+                 pipeline_stage=None,
                  **kwargs):
         super().__init__(**kwargs)
         if isinstance(parallel_config, dict):
@@ -118,3 +120,12 @@ class EVA02Config(PretrainedConfig):
         self.parallel_config = parallel_config
         self.moe_config = moe_config
         self.init_values = init_values
+        self.offset = offset
+
+        if pipeline_stage is not None:
+            self.start_stage = pipeline_stage['start_stage']
+            self.stage_num = pipeline_stage['stage_num']
+            self.offset = pipeline_stage['offset']
+        else:
+            self.start_stage = 0
+            self.stage_num = 1

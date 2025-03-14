@@ -1,0 +1,7 @@
+datasets:
+  - json_path: XX.json
+    sampling_strategy: "first:60%"
+  - json_path: XXX.json
+    sampling_strategy: "first:8%"
+  - json_path: XXX.json
+    sampling_strategy: "first:33%"

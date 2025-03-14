@@ -35,39 +35,15 @@ from mindformers.tools.register import MindFormerConfig
 
 CONFIG_MAPPING_NAMES = OrderedDict(
     [
-        ("bert", "BertConfig"),
-        ("blip2", "Blip2Config"),
-        ("bloom", "BloomConfig"),
-        ("clip", "CLIPConfig"),
-        ("glm", "GLMConfig"),
         ("glm2", "ChatGLM2Config"),
-        ("gpt2", "GPT2Config"),
-        ("llama", "LlamaConfig"),
-        ("mae", "ViTMAEConfig"),
-        ("pangualpha", "PanguAlphaConfig"),
-        ("sam", "SamConfig"),
-        ("swin", "SwinConfig"),
-        ("t5", "T5Config"),
-        ("vit", "ViTConfig")
+        ("llama", "LlamaConfig")
     ]
 )
 
 MODEL_NAMES_MAPPING = OrderedDict(
     [
-        ("bert", "BertModel"),
-        ("blip2", "Blip2Llm"),
-        ("bloom", "BloomModel"),
-        ("clip", "CLIPModel"),
-        ("glm", "GLMChatModel"),
         ("glm2", "ChatGLM2Model"),
-        ("gpt2", "GPT2Model"),
-        ("llama", "LlamaModel"),
-        ("mae", "ViTMAEModel"),
-        ("pangualpha", "PanguAlphaModel"),
-        ("sam", "SamModel"),
-        ("swin", "SwinModel"),
-        ("t5", "T5ForConditionalGeneration"),
-        ("vit", "ViTModel")
+        ("llama", "LlamaModel")
     ]
 )
 
@@ -444,7 +420,7 @@ class AutoConfig:
             model_type (str): The model type like "bert" or "gpt".
             config (PretrainedConfig): The config to register.
             exist_ok (bool, optional): If set to True, no error will be raised even if model_type already exists.
-                Default: ``False`` .
+                Default: ``False``.
         """
         if issubclass(config, PretrainedConfig) and config.model_type != model_type:
             raise ValueError(

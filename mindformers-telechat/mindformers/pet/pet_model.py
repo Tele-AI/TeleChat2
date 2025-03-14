@@ -89,11 +89,17 @@ class PetModel(PreTrainedModel):
     def to_embeddings(self, tokens):
         return self.pet_model.to_embeddings(tokens)
 
-    def construct(self, input_ids, labels=None, position_ids=None, attention_mask=None, input_position=None,
-                  input_embeds=None, init_reset=True, batch_valid_length=None, batch_index=None,
-                  zactivate_len=None, block_tables=None, slot_mapping=None):
-        return self.pet_model(input_ids, labels, input_position, position_ids, attention_mask, input_embeds,
-                              init_reset, batch_valid_length, batch_index, zactivate_len, block_tables, slot_mapping)
+    def convert_name(self, weight_name):
+        return self.pet_model.convert_name(weight_name)
+
+    def convert_weight_dict(self, source_dict, **kwargs):
+        return self.pet_model.convert_weight_dict(source_dict, **kwargs)
+
+    def convert_map_dict(self, source_dict, **kwargs):
+        return self.pet_model.convert_map_dict(source_dict, **kwargs)
+
+    def construct(self, *inputs, **kwargs):
+        return self.pet_model(*inputs, **kwargs)
 
 
 @args_type_check(config=(dict, PetConfig))

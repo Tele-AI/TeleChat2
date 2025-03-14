@@ -15,6 +15,7 @@
 """
 Convert utils.
 """
+import numpy as np
 import torch
 import mindspore as ms
 from mindspore.ops.operations import Cast
@@ -58,3 +59,47 @@ def is_lora_param(key: str) -> bool:
     if 'lora' in key.lower():
         return True
     return False
+
+
+def qkv_concat_hf2mg(qkv_weights: np.ndarray, num_heads, n_kv_heads, hidden_size):
+    """
+    convert qkv_concat weight with huggingface format to megatron format.
+    """
+    qkv_dim = len(qkv_weights.shape)
+    if qkv_dim == 2:
+        w, h = qkv_weights.shape
+    elif qkv_dim == 1:
+        # cur qkv_weight is bias
+        w = qkv_weights.shape[0]
+        qkv_weights = qkv_weights.reshape(w, -1)
+        h = 1
+    else:
+        raise ValueError("qkv_weights shape is not supported.")
+    n_rep = num_heads // n_kv_heads
+    q_channel = hidden_size
+    kv_channel = hidden_size // n_rep
+    q_weight = qkv_weights[: q_channel, :]
+    k_weight = qkv_weights[q_channel: q_channel + kv_channel, :]
+    v_weight = qkv_weights[q_channel + kv_channel: q_channel + 2 * kv_channel, :]
+    q_w_reshape = q_weight.reshape(n_kv_heads, hidden_size // n_kv_heads, -1)
+    k_w_reshape = k_weight.reshape(n_kv_heads, hidden_size // num_heads, -1)
+    v_w_reshape = v_weight.reshape(n_kv_heads, hidden_size // num_heads, -1)
+    cat_qkv_weight = np.concatenate((q_w_reshape, k_w_reshape, v_w_reshape), axis=1)
+    out_qkv_weight = cat_qkv_weight.reshape(w, h)
+    if qkv_dim == 1:
+        out_qkv_weight = out_qkv_weight.reshape(w,)
+    return out_qkv_weight
+
+
+def ffn_concat_hf2mg(ffn_weights: np.ndarray, ffn_hidden_size):
+    """
+        convert ffn_concat weight with huggingface format to megatron format.
+    """
+    w, h = ffn_weights.shape
+    gate_weight = ffn_weights[: w // 2, :]
+    hidden_weight = ffn_weights[w // 2: w // 2 * 2, :]
+    gate_w_reshape = gate_weight.reshape(ffn_hidden_size, 1, -1)
+    hidden_w_reshape = hidden_weight.reshape(ffn_hidden_size, 1, -1)
+    cat_ffn_weight = np.concatenate((gate_w_reshape, hidden_w_reshape), axis=1)
+    out_ffn_weight = cat_ffn_weight.reshape(w, h)
+    return out_ffn_weight

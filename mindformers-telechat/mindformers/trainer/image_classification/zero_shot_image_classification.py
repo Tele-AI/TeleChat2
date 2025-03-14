@@ -14,7 +14,6 @@
 # ============================================================================
 """Image Classification Trainer."""
 from typing import Optional, List, Union
-
 import numpy as np
 from PIL.Image import Image
 
@@ -28,6 +27,7 @@ from mindformers.models import PreTrainedModel, PreTrainedTokenizerBase, BaseIma
 from mindformers.tools.logger import logger
 from mindformers.tools.register import MindFormerRegister, \
     MindFormerModuleType, MindFormerConfig
+from mindformers.utils import deprecated
 from ...dataset.dataloader import build_dataset_loader
 from ..config_args import ConfigArguments
 from ..training_args import TrainingArguments
@@ -36,6 +36,7 @@ from ..base_trainer import BaseTrainer
 __all__ = ['ZeroShotImageClassificationTrainer']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER)
 class ZeroShotImageClassificationTrainer(BaseTrainer):
     """
@@ -51,7 +52,7 @@ class ZeroShotImageClassificationTrainer(BaseTrainer):
     """
 
     def __init__(self, model_name: str = None):
-        super(ZeroShotImageClassificationTrainer, self).__init__("zero_shot_image_classification", model_name)
+        super().__init__("zero_shot_image_classification", model_name)
 
     def train(self, *args, **kwargs):
         raise NotImplementedError(

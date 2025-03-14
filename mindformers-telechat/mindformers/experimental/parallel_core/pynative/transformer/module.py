@@ -41,15 +41,39 @@ def get_default_dict_for_module(cell, recurse=False):
 
 
 class Module(nn.Cell):
-    """specific extensions of cell with support for pipelining."""
-    def __init__(self, config=None, share_embeddings_and_output_weights=True, **kwargs):
-        super(Module, self).__init__(**kwargs)
+    """
+    Specific extensions of cell with support for pipelining.
+
+    Args:
+        config (dict): the configuration of model. Default: ``None``. If it is not None, the `self.pre_process`,
+            `self.post_process` will be set according to the pipeline stage.
+        share_embeddings_and_output_weights (bool): decide whether to share the embeddings and output weights.
+            Default: ``True``. If it is not True, `shared_embedding_or_output_weight()` and
+            `initialize_word_embeddings()` could not be called.
+
+    Raises:
+        RuntimeError: If more than one weight were set 'share' attribute in a pipeline stage.
+        RuntimeError: If there is one weight with 'share' attribute in the model, but parameter sharing requires
+            two weights with 'share' attribute in first stage and last stage respectively.
+        RuntimeError: If `share_embeddings_and_output_weights` is not true when
+            `shared_embedding_or_output_weight()` is called.
+        RuntimeError: If `share_embeddings_and_output_weights` is not true when
+            `initialize_word_embeddings()` is called.
+        ValueError: If the model is in the last stage and the sum of weights is not 0.
+
+    Supported Platforms:
+        ``Ascend``
+    """
+    # pylint: disable=W1113
+    def __init__(self, config=None, share_embeddings_and_output_weights=True, *args, **kwargs):
+        super(Module, self).__init__(*args, **kwargs)
         self.share_embeddings_and_output_weights = share_embeddings_and_output_weights
         self.shared_weight_name_list = []
         if config is not None:
             self.config = config
             self.share_embeddings_and_output_weights = not config.untie_embeddings_and_output_weights
-            if get_pipeline_model_parallel_world_size() > 1:
+            pp_world_size = get_pipeline_model_parallel_world_size()
+            if pp_world_size is not None and pp_world_size > 1:
                 self.pre_process = is_pipeline_first_stage()
                 self.post_process = is_pipeline_last_stage()
 

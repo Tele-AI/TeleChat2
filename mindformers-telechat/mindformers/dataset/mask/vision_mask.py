@@ -16,17 +16,21 @@
 # ============================================================================
 """Self-Define Vision Mask Policy."""
 import numpy as np
+
 from mindspore.dataset.transforms import py_transforms
+
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.utils import deprecated
 
 __all__ = ['SimMask', 'MaeMask']
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.MASK_POLICY)
 class SimMask(py_transforms.PyTensorOperation):
     """SimMIM Mask Policy."""
     def __init__(self, input_size=192, mask_patch_size=32, model_patch_size=4, mask_ratio=0.6):
-        super(SimMask, self).__init__()
+        super().__init__()
         self.input_size = input_size
         self.mask_patch_size = mask_patch_size
         self.model_patch_size = model_patch_size
@@ -58,11 +62,12 @@ class SimMask(py_transforms.PyTensorOperation):
         return "Mask generator for simmin arch."
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.MASK_POLICY)
 class MaeMask(py_transforms.PyTensorOperation):
     """MAE Mask Policy."""
     def __init__(self, input_size=192, patch_size=4, mask_ratio=0.75):
-        super(MaeMask, self).__init__()
+        super().__init__()
         if not 0 < mask_ratio < 1:
             raise ValueError('masking ratio must be kept between 0 and 1, but get mask_ratio {mask_ratio}.')
         # seq_length

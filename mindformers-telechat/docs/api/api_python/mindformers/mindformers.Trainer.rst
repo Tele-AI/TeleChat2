@@ -3,12 +3,12 @@ mindformers.Trainer
 
 .. py:class:: mindformers.Trainer(args: Optional[Union[str, MindFormerConfig, TrainingArguments]] = None, task: Optional[str] = 'general', model: Optional[Union[str, PreTrainedModel]] = None, model_name: Optional[str] = None, tokenizer: Optional[PreTrainedTokenizerBase] = None, train_dataset: Optional[Union[str, BaseDataset, Dataset, Iterable]] = None, eval_dataset: Optional[Union[str, BaseDataset, Dataset, Iterable]] = None, data_collator: Optional[Callable] = None, optimizers: Optional[Optimizer] = None, compute_metrics: Optional[Union[dict, set]] = None, callbacks: Optional[Union[Callback, List[Callback]]] = None, eval_callbacks: Optional[Union[Callback, List[Callback]]] = None, pet_method: Optional[str] = '', image_processor: Optional[BaseImageProcessor] = None, audio_processor: Optional[BaseAudioProcessor] = None, save_config: bool = False, reset_model: bool = False)
 
-    Trainer是通用的任务执行组件，通过参数中的task名称或者配置文件可以指定任务并且初始化一个与该任务相关的trainer实例。用户可以通过封装trainer实例中的train, finetune, evaluate和predict来实现不同的任务。同时，用户还可以自定义model, optimizer, dataset, tokenizer, processor, train_one_step, callback, metric等。
+    Trainer是通用的任务执行组件，通过参数中的task名称或者配置文件可以指定任务并且初始化一个与该任务相关的trainer实例。用户可以通过封装trainer实例中的train、finetune、evaluate和predict来实现不同的任务。同时，用户还可以自定义model、optimizer、dataset、tokenizer、processor、train_one_step、callback、metric等。
 
     可以通过以下方式对Trainer进行初始化：
 
-    1. 定义 `task` 和 `model_name`，例如：task='text_generation'，model_name='gpt2'。指定正确的 `task` 和 `model_name`，便可以通过MindFormerBook发现相应的YAML配置，并且将YAML信息任务的配置。
-    2. 定义 `task` 和 `model`，例如：task='text_generation'，model='gpt2'。其中， `model` 可以是一个模型实例或者模型名称，如果 `model` 是模型名称，它会覆盖 `model_name`。
+    1. 定义 `task` 和 `model_name`，例如：task='text_generation'，model_name='llama2'。指定正确的 `task` 和 `model_name`，会自动使用相应任务和模型的配置文件初始化Trainer。
+    2. 定义 `task` 和 `model`，例如：task='text_generation'，model='llama2'。其中， `model` 可以是一个模型实例或者模型名称，如果 `model` 是模型名称，它会覆盖 `model_name`。
     3. 定义 `task`、 `model_name` 和 `model`，此时 `model` 是模型实例。
     4. 定义 `args` 为MindFormerConfig实例或者YAML文件路径。此时也可以通过 `model` 参数传递模型实例，否则会通过 `args` 配置信息来实例化模型。
     5. 定义 `args` 为TrainingArguments实例，并且 `model` 是模型实例。
@@ -66,7 +66,7 @@ mindformers.Trainer
             - **finetune_checkpoint** (Union[str, bool], 可选) - 在训练或者微调中，用于重新设置神经网络的权重，支持真实的checkpoint路径、MindFormers中的模型名称，或者布尔值。如果值为True，则自动使用上一轮训练保存的checkpoint文件。默认值： ``False`` 。
             - **resume_from_checkpoint** (Union[str, bool], 可选) - 在训练或者微调中，用于重新设置神经网络的权重，支持真实的checkpoint路径、MindFormers中的模型名称，或者布尔值。如果值为True，则自动使用上一轮训练保存的checkpoint文件。如果finetune_checkpoint有传入的话，resume_from_checkpoint会被覆盖。默认值： ``None`` 。
             - **resume_training** (Union[bool, str], 可选) - 指定是否恢复训练，或者指定checkpoint名称来恢复训练。如果值为True，则加载meta.json中指定的checkpoint来恢复训练。如果指定的是checkpoint名称，则该名称的checkpoint会被加载用于恢复训练。默认值： ``None`` 。
-            - **ignore_data_skip** (bool, 可选) - 在恢复训练时，是否跳过执行过的批次，加载与前一次训练相同阶段的数据。如果值为True，则训练任务启动更快（因为跳过了一些步骤），但是由于训练被中断，所以无法获得相同的结果。默认值： ``None`` 。
+            - **ignore_data_skip** (bool, 可选) - 在恢复训练时，是否跳过执行过的批次，加载与前一次训练相同阶段的数据。如果值为True，则训练任务启动更快（因为跳过了一些步骤），但是由于训练被中断，无法获得相同的结果。默认值： ``None`` 。
             - **data_skip_steps** (int, 可选) - 在恢复训练时，指定在训练数据集中跳过的步数。只有 `ignore_data_skip` 值为False时生效。默认值： ``None`` 。
             - **auto_trans_ckpt** (bool, 可选) - 自动转换checkpoint，加载到分布式的模型中。默认值： ``None`` 。
             - **src_strategy** (str, 可选) - 加载checkpoint的策略，只有auto_trans_ckpt为True时才生效。默认值： ``None`` 。

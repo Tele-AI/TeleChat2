@@ -1,0 +1,156 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+use_parallel: True
+run_mode: 'predict'
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'deepseekV2' 
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  max_call_depth: 10000
+  max_device_memory: "54GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+# default parallel of device num = 16 for Atlas 800
+parallel_config:
+  data_parallel: 1
+  model_parallel: 16
+  pipeline_stage: 1
+  expert_parallel: 1
+  micro_batch_num: 20
+  vocab_emb_dp: True
+  use_seq_parallel: False
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# model config
+model:
+  model_config:
+    type: DeepseekV2Config
+    auto_register: deepseek2_config.DeepseekV2Config
+    batch_size: 1 # add for increase predict
+    seq_length: 8192
+    hidden_size: 5120
+    num_layers: 60
+    num_heads: 128
+    max_position_embeddings: 163840
+    intermediate_size: 12288
+    kv_lora_rank: 512
+    q_lora_rank: 1536
+    qk_rope_head_dim: 64
+    v_head_dim: 128
+    qk_nope_head_dim: 128
+    vocab_size: 102400
+    multiple_of: 256
+    rms_norm_eps: 1.0e-6
+    bos_token_id: 100000
+    eos_token_id: 100001
+    pad_token_id: 100001
+    ignore_token_id: -100
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float32"
+    scaling_factor:
+      beta_fast: 32.0
+      beta_slow: 1.0
+      factor: 40.0
+      mscale: 0.707
+      mscale_all_dim: 0.707
+      original_max_position_embeddings: 4096
+    param_init_type: "bfloat16"
+    use_past: False
+    extend_method: "YARN"
+    use_flash_attention: False
+    offset: 0
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1
+    max_decode_length: 1024
+    top_k: 5
+    top_p: 1
+    theta: 10000.0
+    do_sample: False
+  arch:
+    type: DeepseekV2ForCausalLM
+    auto_register: deepseek2_model.DeepseekV2ForCausalLM
+
+#moe
+moe_config:
+  expert_num: 160
+  # capacity_factor should be large enable to ensure dropless routing
+  capacity_factor: 160.0
+  aux_loss_factor: 0.05
+  num_experts_chosen: 6
+  topk_method: "group_limited_greedy"
+  routing_policy: "TopkRouterV2"
+  enable_sdrop: True
+  shared_expert_num: 2
+  routed_scaling_factor: 16.0
+  norm_topk_prob: False
+  first_k_dense_replace: 1
+  moe_intermediate_size: 1536 # moe_layer hidden_layer
+  # greedy_group_limited strategy, select topk_group from n_group
+  topk_group: 3
+  n_group: 8
+  aux_loss_factors: []
+  aux_loss_types: []
+  z_loss_factor: 0.0
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    unk_token: '<unk>'
+    bos_token: '<｜begin▁of▁sentence｜>'
+    eos_token: '<｜end▁of▁sentence｜>'
+    pad_token: '<｜end▁of▁sentence｜>'
+    type: LlamaTokenizerFast
+    vocab_file: './path/tokenizer.model'
+    tokenizer_file: './path/tokenizer.json'
+  type: LlamaProcessor
+
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+layer_scale: False
+layer_decay: 0.65
+lr_scale_factor: 256

@@ -168,6 +168,7 @@ class DeepseekV2Config(PretrainedConfig):
                  top_k: int = 5,
                  top_p: float = 1.0,
                  do_sample: bool = True,
+                 return_extra_loss: bool = True,
                  **kwargs):
         super(DeepseekV2Config, self).__init__(**kwargs)
         if isinstance(parallel_config, dict):
@@ -246,3 +247,4 @@ class DeepseekV2Config(PretrainedConfig):
         self.use_paged_attention = use_paged_attention
         self.block_size = block_size
         self.num_blocks = num_blocks
+        self.return_extra_loss = return_extra_loss

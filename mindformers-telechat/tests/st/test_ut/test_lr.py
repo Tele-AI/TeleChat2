@@ -18,7 +18,7 @@ import mindspore as ms
 from mindspore import Tensor
 from mindformers.core.lr import (
     LinearWithWarmUpLR, CosineWithWarmUpLR, PolynomialWithWarmUpLR,
-    CosineWithRestartsAndWarmUpLR, ConstantWarmUpLR,
+    CosineWithRestartsAndWarmUpLR, ConstantWarmUpLR, ConstantWithCoolDownLR,
     CosineAnnealingLR, CosineAnnealingWarmRestarts)
 
 ms.set_context(mode=1, device_target='CPU')
@@ -43,6 +43,7 @@ def test_lr_schedule():
     t_mult = 2
 
     constant_with_warmup_lr_std = [0.0005, 0.005, 0.005]
+    constant_with_cooldown_lr_std = [0.0005, 0.005, 0.00012255, 2e-7, 1e-7]
     linear_lr_std = [0.0005, 0.005, 0.0005]
     cosine_lr_std = [0.0005, 0.005, 0.00012236]
     cosine_with_restarts_lr_std = [0.0005, 0.005, 0.00012236]
@@ -53,6 +54,13 @@ def test_lr_schedule():
     constant_warmup = ConstantWarmUpLR(learning_rate=learning_rate,
                                        warmup_steps=warmup_steps,
                                        total_steps=total_steps)
+    constant_cooldown = ConstantWithCoolDownLR(learning_rate=learning_rate,
+                                               warmup_steps=warmup_steps,
+                                               keep_steps=10,
+                                               decay_steps=10,
+                                               final_steps=10,
+                                               lr_end1=2e-7,
+                                               lr_end2=1e-7)
     linear_warmup = LinearWithWarmUpLR(learning_rate=learning_rate,
                                        warmup_steps=warmup_steps,
                                        total_steps=total_steps)
@@ -75,6 +83,7 @@ def test_lr_schedule():
                                                                  eta_min=lr_end)
 
     constant_warmup_lr = []
+    constant_cooldown_lr = []
     linear_warmup_lr = []
     cosine_warmup_lr = []
     cosine_restarts_warmup_lr = []
@@ -95,6 +104,8 @@ def test_lr_schedule():
             cosine_annealing_lr.append(cosine_annealing(step).asnumpy())
             cosine_annealing_warm_restarts_lr.append(cosine_annealing_warm_restarts(step).asnumpy())
 
+    constant_cooldown_lr.extend([constant_cooldown(Tensor(step, ms.int32)).asnumpy() for step in [1, 15, 29, 35, 45]])
+
     error = 1e-8
     for i in range(3):
         assert abs(constant_warmup_lr[i] - constant_with_warmup_lr_std[i]) < error
@@ -104,3 +115,6 @@ def test_lr_schedule():
         assert abs(polynomial_warmup_lr[i] - polynomial_lr_std[i]) < error
         assert abs(cosine_annealing_lr[i] - cosine_annealing_lr_std[i]) < error
         assert abs(cosine_annealing_warm_restarts_lr[i] - cosine_annealing_warm_restarts_lr_std[i]) < error
+
+    for i in range(5):
+        assert abs(constant_cooldown_lr[i] - constant_with_cooldown_lr_std[i]) < error

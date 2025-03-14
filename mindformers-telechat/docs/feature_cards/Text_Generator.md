@@ -1,5 +1,13 @@
 # 文本生成推理
 
+> ## 🚨 弃用说明
+>
+> 本文档已过时，不再进行维护，并将在 *1.5.0* 版本下架，其中可能包含过时的信息或已被更新的功能替代。建议参考最新的 **[官方文档](https://www.mindspore.cn/mindformers/docs/zh-CN/dev/index.html)** ，以获取准确的信息。
+>
+> 如果您仍需使用本文档中的内容，请仔细核对其适用性，并结合最新版本的相关资源进行验证。
+>
+> 如有任何问题或建议，请通过 **[社区Issue](https://gitee.com/mindspore/mindformers/issues/new)** 提交反馈。感谢您的理解与支持！
+
 Mindformers大模型套件提供了text generator方法，旨在让用户能够便捷地使用生成类语言模型进行文本生成任务，包括但不限于解答问题、填充不完整文本或翻译源语言到目标语言等。
 
 当前该方法支持Minformers大模型套件中6个生成类语言模型
@@ -365,18 +373,18 @@ export INPUT_DATA=input.txt
 bash run_dist_gen.sh "python generate_custom.py --model_type gpt2 --batch_size 2 --checkpoint_path ./gpt2_ckpt --use_parallel True --data_parallel 2 --model_parallel 1" /path/to/hccl_2p_xxx.json '[0,2]' 2
 ```
 
+输出日志：
+
+```text
+['An increasing sequence: one, two, three, four, five. And so on.\n\nThe first is the first sequence of the second sequence, which is called the first and second sequence.\n\nThe second sequence is called the third and fourth sequence, and so on.\n\nThe third and fourth sequence is called the first and second sequence, and so on. The fourth sequence is called the first and second sequence, and so on.\n\nThe fifth sequence is called the second and third sequence, and so on.\n\nThe sixth sequence is called the third and fourth sequence, and so on.\n\nThe seventh sequence is called the second']
+```
+
 与mp切分区别点：
 
 1. 输入文本条数需为dp倍数，此处dp为2，因此准备两条输入
 2. `batch_size`设置为2，与输入文本输入条数匹配
 3. 纯dp权重与mp切分不一致，可以将原权重按预期文件结构组织 `./gpt2_ckpt/rank_xx/xxx.ckpt`
 4. 修改模型并行策略，dp=2，mp=1
-
-输出日志：
-
-```text
-["An increasing sequence: one, two, three, five, six, seven, nine, 10, 11, 12, 13.\n\nThe first is the most important. The first is the most important because it's the one that's most important. The first is the most important because it's the one that's most important because it's the one that's most important because it's the one that's most important because it's the one that's most important because it's the one that's most important because it's the one that's most important because it's the one that's most important because it's the one that's most important because it's the one", 'I love Beijing, but I\'m also a bit worried that it might become the next Hong Kong," said Mr. Wang.\n\n"I think the government is going to be very worried, but I don\'t know what will happen. We\'re going to be in a situation where we\'re going to have to deal with the Chinese people, and I think that\'s what we\'re going through," he added.\n\nChina has been a major player in international trade since the late 1980s, when it was the world\'s second-largest economy. But in recent years the Chinese have become more assertive in their economic and political relations with other nations, including the']
-```
 
 ## SLoRA推理
 

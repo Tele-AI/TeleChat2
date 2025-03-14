@@ -54,7 +54,7 @@ def convert_pt_to_ms(input_path, output_path, dtype=None, **kwargs):
     print(f"Trying to convert huggingface checkpoint in '{ckpt_dir}'.", flush=True)
     try:
         from transformers import AutoModelForCausalLM
-        model_hf = AutoModelForCausalLM.from_pretrained(ckpt_dir, trust_remote_code=True)
+        model_hf = AutoModelForCausalLM.from_pretrained(ckpt_dir)
     # pylint: disable=W0703
     except Exception as e:
         print(f"Can not find huggingface checkpoint in '{ckpt_dir}', Error {e}.", flush=True)

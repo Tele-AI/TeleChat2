@@ -20,8 +20,10 @@ import collections
 from mindspore.dataset import GeneratorDataset
 
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.utils import deprecated
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.DATASET_LOADER)
 class SQuADDataLoader:
     """SQuAD Dataloader"""
@@ -122,6 +124,7 @@ class SQuADDataLoader:
         return GeneratorDataset(squad_dataset, column_names, **kwargs)
 
 
+@deprecated(version="1.5.0")
 class SQuADDataset:
     """SQuAD Dataset"""
 
@@ -256,6 +259,7 @@ class SQuADDataset:
         return examples
 
 
+@deprecated(version="1.5.0")
 def convert_examples_to_features(examples, tokenizer, max_seq_len, max_question_len,
                                  doc_stride, is_training):
     """Convert examples to features"""
@@ -470,6 +474,7 @@ def _check_is_max_context(doc_spans, cur_span_index, position):
     return cur_span_index == best_span_index
 
 
+@deprecated(version="1.5.0")
 class SquadExample:
     """
     A single training/test example for the Squad dataset, as loaded from disk.
@@ -537,6 +542,7 @@ class SquadExample:
         return False
 
 
+@deprecated(version="1.5.0")
 class InputFeatures:
     """A single set of features of data."""
 

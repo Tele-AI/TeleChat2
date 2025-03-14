@@ -19,8 +19,10 @@ MindFormers Transformers API.
 from .enums import *
 from .fused_softmax import *
 from .rotary_pos_embedding import *
+from .dropout import Dropout
 
 __all__ = []
 __all__.extend(enums.__all__)
 __all__.extend(fused_softmax.__all__)
 __all__.extend(rotary_pos_embedding.__all__)
+__all__.extend(dropout.__all__)

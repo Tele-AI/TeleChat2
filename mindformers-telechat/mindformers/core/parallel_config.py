@@ -16,7 +16,8 @@
 from mindspore.parallel._cost_model_context import _set_rp_matmul_mem_coef
 
 from mindformers.modules.transformer.moe import default_moe_config, MoEConfig
-from mindformers.modules.transformer import TransformerOpParallelConfig, TransformerRecomputeConfig
+from mindformers.modules.transformer import TransformerOpParallelConfig, TransformerRecomputeConfig, \
+    TransformerSwapConfig
 from mindformers.tools.logger import logger
 
 default_recompute_config = TransformerRecomputeConfig()
@@ -41,6 +42,14 @@ def build_parallel_config(config):
             config.moe_config = MoEConfig(**config.moe_config)
     else:
         config.moe_config = default_moe_config
+
+    if config.swap_config:
+        if not isinstance(config.swap_config, TransformerSwapConfig):
+            logger.info("initial swap_config from dict: %s", config.swap_config)
+            config.swap_config = TransformerSwapConfig(**config.swap_config)
+    else:
+        config.swap_config = TransformerSwapConfig()
+
     if config.recompute_config:
         if not isinstance(config.recompute_config, TransformerRecomputeConfig):
             logger.info("initial recompute_config from dict: %s", config.recompute_config)
@@ -54,8 +63,9 @@ def build_parallel_config(config):
                 logger.info("pipeline_stage = %s > 1, vocab_emd_dp will be reset to False.",
                             config.parallel_config.pipeline_stage)
                 config.parallel_config.vocab_emb_dp = False
-            _set_rp_matmul_mem_coef(config.parallel_config.pop('mem_coeff', 0.1))
+            _set_rp_matmul_mem_coef(config.parallel_config.get('mem_coeff', 0.1))
             config.parallel_config = TransformerOpParallelConfig(recompute=config.recompute_config,
+                                                                 swap=config.swap_config,
                                                                  **config.parallel_config)
     else:
         config.parallel_config = default_parallel_config

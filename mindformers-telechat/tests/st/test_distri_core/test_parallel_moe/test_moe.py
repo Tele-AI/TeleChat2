@@ -63,6 +63,45 @@ class TestMoE:
         assert ret == 0, "msrun failed, please check msrun_log_graph/worker_*.log"
 
 
+    @pytest.mark.skip(reason="skip graph_aux_loss_free st")
+    @pytest.mark.run(order=3)
+    def test_moe_with_aux_loss_free(self):
+        """
+        Feature: test_moe_with_aux_loss_free
+        Description: run graph mode moe with auxlossfree to generate golden ckpt and loss
+        Exception: AssertionError
+        """
+        os.environ['GRAPH_OP_RUN'] = "1"
+        scripts_name = "run_moe.py"
+        device_num = 1
+
+        rm_list = ["npy_golden*",
+                   "msrun_log_graph*",
+                   "kernel_meta*",
+                   "golden_moe*"]
+
+        for rm_path in rm_list:
+            rm_path = os.path.join(os.getcwd(), rm_path)
+            print(f"removing {rm_path}")
+            os.system(f"rm -rf {rm_path}")
+
+        sh_path = os.path.split(os.path.realpath(__file__))[0]
+        scripts_path = os.path.join(sh_path, scripts_name)
+
+        scripts_cmd = f"{scripts_path} --generate_golden --aux_loss_free --dp=1 --ep=1 --batch_size=2"
+        cmd = f"msrun --worker_num={device_num} " + \
+                    f"--local_worker_num={device_num} " + \
+                    f"--master_port=3722 " + \
+                    f"--log_dir=msrun_log_aux_loss_free " + \
+                    f"--join=True " + \
+                    f"--cluster_time_out=300 " + \
+                    f"{scripts_cmd}"
+        print(f"\nrun cmd:\n{cmd}")
+        ret = os.system(cmd)
+        os.system(f"grep -E 'ERROR|error' {sh_path}/msrun_log_aux_loss_free/worker_0.log -C 3")
+        assert ret == 0, "msrun failed, please check msrun_log_aux_loss_free/worker_*.log"
+
+
     @pytest.mark.skip(reason="skip dp1 st")
     @pytest.mark.run(order=2)
     def test_moe_pynative_dp1(self):
@@ -349,3 +388,109 @@ class TestMoE:
 
         assert np.allclose(golden_loss[-1], pynative_loss[-1], rtol=1e-3), \
                f"relative error between pynative loss and golden loss exceeds 1e-3, please your code."
+
+    @pytest.mark.skip(reason="skip short sequence parallel st")
+    @pytest.mark.run(order=4)
+    def test_moe_golden_dp2ep2mp2_use_seq_parallel(self):
+        """
+        Feature: test_moe_pynative
+        Description: run graph mode moe to test short sequence parallel
+        Exception: AssertionError
+        """
+        os.environ['HCCL_BUFFSIZE'] = "1"
+        scripts_name = "run_moe.py"
+        device_num = 4
+
+        rm_list = ["npy_pynative_dp2*", "msrun_log_golden_dp2ep2mp2_use_seq_parallel*", "kernel_meta*"]
+        print("")
+        for rm_path in rm_list:
+            rm_path = os.path.join(os.getcwd(), rm_path)
+            print(f"removing {rm_path}")
+            os.system(f"rm -rf {rm_path}")
+
+        sh_path = os.path.split(os.path.realpath(__file__))[0]
+        scripts_path = os.path.join(sh_path, scripts_name)
+
+        scripts_cmd = f"{scripts_path} --generate_golden --dp=2 --ep=2 --mp=2 --hidden_act='silu' --use_seq_parallel"
+        cmd = f"msrun --worker_num={device_num} " + \
+                    f"--local_worker_num={device_num} " + \
+                    f"--master_port=3721 " + \
+                    f"--log_dir=msrun_log_golden_dp2ep2mp2_use_seq_parallel " + \
+                    f"--join=True " + \
+                    f"--cluster_time_out=300 " + \
+                    f"{scripts_cmd}"
+        print(f"\nrun cmd:\n{cmd}")
+        ret = os.system(cmd)
+        os.system(f"grep -E 'ERROR|error' {sh_path}/msrun_log_golden_dp2ep2mp2_use_seq_parallel/worker_0.log -C 3")
+        assert ret == 0, "msrun failed, please check msrun_log_golden_dp2ep2mp2_use_seq_parallel/worker_*.log"
+
+    @pytest.mark.skip(reason="skip comm_comp_parallel st")
+    @pytest.mark.run(order=4)
+    def test_moe_golden_dp2ep2mp2_comp_comm_parallel(self):
+        """
+        Feature: test_moe_pynative
+        Description: run graph mode moe to test comp_comm_parallel
+        Exception: AssertionError
+        """
+        os.environ['HCCL_BUFFSIZE'] = "1"
+        scripts_name = "run_moe.py"
+        device_num = 4
+
+        rm_list = ["npy_pynative_dp2*", "msrun_log_golden_dp2ep2mp2_comp_comm_parallel*", "kernel_meta*"]
+        for rm_path in rm_list:
+            rm_path = os.path.join(os.getcwd(), rm_path)
+            print(f"removing {rm_path}")
+            os.system(f"rm -rf {rm_path}")
+
+        sh_path = os.path.split(os.path.realpath(__file__))[0]
+        scripts_path = os.path.join(sh_path, scripts_name)
+
+        scripts_cmd = f"{scripts_path} --generate_golden --dp=2 --ep=2 --mp=2 --hidden_act='silu' " + \
+                                     f"--comp_comm_parallel --comp_comm_parallel_degree=2"
+        cmd = f"msrun --worker_num={device_num} " + \
+                    f"--local_worker_num={device_num} " + \
+                    f"--master_port=3721 " + \
+                    f"--log_dir=msrun_log_golden_dp2ep2mp2_comp_comm_parallel " + \
+                    f"--join=True " + \
+                    f"--cluster_time_out=300 " + \
+                    f"{scripts_cmd}"
+        print(f"\nrun cmd:\n{cmd}")
+        ret = os.system(cmd)
+        os.system(f"grep -E 'ERROR|error' {sh_path}/msrun_log_golden_dp2ep2mp2_comp_comm_parallel/worker_0.log -C 3")
+        assert ret == 0, "msrun failed, please check msrun_log_golden_dp2ep2mp2_comp_comm_parallel/worker_*.log"
+
+
+    @pytest.mark.skip(reason="skip comm_comp_parallel st")
+    @pytest.mark.run(order=4)
+    def test_moe_golden_dp4ep4mp1_use_allgather_dispatcher(self):
+        """
+        Feature: moe feature allgather dispatcher
+        Description: test moe feature allgather dispatcher
+        Exception: AssertionError
+        """
+        os.environ['HCCL_BUFFSIZE'] = "1"
+        scripts_name = "run_moe.py"
+        device_num = 4
+
+        rm_list = ["npy_pynative_dp4*", "msrun_log_golden_use_allgather_dispatcher*", "kernel_meta*"]
+        for rm_path in rm_list:
+            rm_path = os.path.join(os.getcwd(), rm_path)
+            print(f"removing {rm_path}")
+            os.system(f"rm -rf {rm_path}")
+
+        sh_path = os.path.split(os.path.realpath(__file__))[0]
+        scripts_path = os.path.join(sh_path, scripts_name)
+
+        scripts_cmd = f"{scripts_path} --generate_golden --dp=4 --ep=4 --mp=1 --hidden_act='silu' " + \
+                                     f"--use_allgather_dispatcher=True"
+        cmd = f"msrun --worker_num={device_num} " + \
+                    f"--local_worker_num={device_num} " + \
+                    f"--master_port=3721 " + \
+                    f"--log_dir=msrun_log_golden_use_allgather_dispatcher " + \
+                    f"--join=True " + \
+                    f"--cluster_time_out=300 " + \
+                    f"{scripts_cmd}"
+        print(f"\nrun cmd:\n{cmd}")
+        ret = os.system(cmd)
+        os.system(f"grep -E 'ERROR|error' {sh_path}/msrun_log_golden_use_allgather_dispatcher/worker_0.log -C 3")
+        assert ret == 0, "msrun failed, please check msrun_log_golden_use_allgather_dispatcher/worker_*.log"

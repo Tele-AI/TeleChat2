@@ -32,6 +32,7 @@ from mindformers import __version__
 from mindformers.tools import MindFormerConfig
 from mindformers.tools.generic import experimental_mode_func_checker, is_experimental_mode
 from mindformers.tools.logger import logger
+from mindformers.tools.check_rules import check_yaml_depth_before_loading
 from mindformers.models.build_config import build_model_config
 from mindformers.models.utils import CONFIG_NAME, ms_type_to_str
 from mindformers.mindformer_book import MindFormerBook, print_path_or_list
@@ -41,9 +42,7 @@ from mindformers.tools import (
     custom_object_save,
     add_model_info_to_auto_map,
     cached_file,
-    download_url,
     extract_commit_hash,
-    is_remote_url,
 )
 
 __all__ = ["PretrainedConfig"]
@@ -113,14 +112,16 @@ class PretrainedConfig(PushToHubMixin):
         configuration.
 
     Args:
-        name_or_path (str, optional):
-            Store the string that was passed to :func:`mindformers.models.PreTrainedModel.from_pretrained`
-            as `pretrained_model_name_or_path` if the configuration was created with such a method.
-            Default: ``""`` .
-        checkpoint_name_or_path (str, optional):
-            The path or name of the checkpoint file. Default: ``None`` .
-        mindformers_version (str, optional):
-            The version of MindSpore Transformers. Default: ``None`` .
+        **kwargs (Any): keyword arguments.
+
+            - name_or_path (str, optional):
+              Store the string that was passed to :func:`mindformers.models.PreTrainedModel.from_pretrained`
+              as `pretrained_model_name_or_path` if the configuration was created with such a method.
+              Default: ``""``.
+            - checkpoint_name_or_path (str, optional):
+              The path or name of the checkpoint file. Default: ``None``.
+            - mindformers_version (str, optional):
+              The version of MindSpore Transformers. Default: ``None``.
 
     Returns:
         PretrainedConfig, a PretrainedConfig instance.
@@ -207,6 +208,7 @@ class PretrainedConfig(PushToHubMixin):
         self._commit_hash = kwargs.pop("_commit_hash", None)
 
         self.checkpoint_name_or_path = kwargs.pop("checkpoint_name_or_path", None)
+        self.rl_config = kwargs.pop("rl_config", None)
 
         # version info
         self.mindformers_version = kwargs.pop("mindformers_version", None)
@@ -287,9 +289,11 @@ class PretrainedConfig(PushToHubMixin):
                 If yaml_name_or_path is model name,
                 it supports model names beginning with mindspore or the model name itself,
                 such as "mindspore/vit_base_p16" or "vit_base_p16".
-            pretrained_model_name_or_path (str, optional):
-                Equal to "yaml_name_or_path", if "pretrained_model_name_or_path" is set,
-                "yaml_name_or_path" is useless. Default: ``None`` .
+            kwargs (Any): Keyword arguments.
+
+                - pretrained_model_name_or_path (str, optional):
+                  Equal to "yaml_name_or_path", if "pretrained_model_name_or_path" is set,
+                  "yaml_name_or_path" is useless. Default: ``None``.
 
         Returns:
             A model config, which inherited from PretrainedConfig.
@@ -433,8 +437,8 @@ class PretrainedConfig(PushToHubMixin):
         Saves the pre-trained configuration to the specified directory
 
         Args:
-            save_directory (str, optional): a directory to save config yaml. Default: ``None`` .
-            save_name (str, optional): the name of save files. Default: ``"mindspore_model"`` .
+            save_directory (str, optional): a directory to save config yaml. Default: ``None``.
+            save_name (str, optional): the name of save files. Default: ``"mindspore_model"``.
         """
         save_json = kwargs.pop("save_json", False)
 
@@ -508,6 +512,8 @@ class PretrainedConfig(PushToHubMixin):
         meraged_dict = {}
         if os.path.exists(save_path):
             with open(save_path, 'r') as file_reader:
+                check_yaml_depth_before_loading(file_reader)
+                file_reader.seek(0)
                 meraged_dict = yaml.safe_load(file_reader.read())
             file_reader.close()
         meraged_dict.update(wraped_config)
@@ -648,9 +654,6 @@ class PretrainedConfig(PushToHubMixin):
             # Special case when pretrained_model_name_or_path is a local file
             resolved_config_file = pretrained_model_name_or_path
             is_local = True
-        elif is_remote_url(pretrained_model_name_or_path):
-            configuration_file = pretrained_model_name_or_path
-            resolved_config_file = download_url(pretrained_model_name_or_path)
         else:
             configuration_file = kwargs.pop("_configuration_file", CONFIG_NAME)
 
@@ -781,7 +784,7 @@ class PretrainedConfig(PushToHubMixin):
                 parameters will be saved.
             use_diff (bool, optional): If set to `True`, only the difference between the config instance and
                 the default :class:`mindformers.models.PretrainedConfig` is serialized to JSON file.
-                Default: ``True`` .
+                Default: ``True``.
         """
         flags_ = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         with os.fdopen(os.open(json_file_path, flags_, 0o750), 'w', encoding="utf-8") as writer:
@@ -793,7 +796,7 @@ class PretrainedConfig(PushToHubMixin):
 
         Args:
             use_diff (bool, optional): If set to `True`, only the difference between the config instance and
-                the default `PretrainedConfig()` is serialized to JSON string. Default: ``True`` .
+                the default `PretrainedConfig()` is serialized to JSON string. Default: ``True``.
 
         Returns:
             str, string containing all the attributes that make up this configuration instance in JSON format.
@@ -856,7 +859,40 @@ class PretrainedConfig(PushToHubMixin):
 
         self.dict_ms_dtype_to_str(serializable_config_dict)
         self._to_diff_dict_helper(serializable_config_dict)
+        self.delete_from_dict(serializable_config_dict)
         return serializable_config_dict
+
+    def delete_from_dict(self, config_dict):
+        """
+        Deletes keys from the nested dictionary `config_dict` based on the `blacklist`.
+        Handles dot notation for nested keys.
+
+        Args:
+        - config_dict (dict): The dictionary to be processed.
+        """
+        blacklist = [
+            'dataset_config.modal_to_text_transform.model_transform_template',
+            'vision_model.model_config.parallel_config',
+            'llm_model.model_config.parallel_config'
+        ]
+        for key in blacklist:
+            keys = key.split('.')
+            self._delete_by_keys(config_dict, keys)
+
+    def _delete_by_keys(self, config_dict, keys):
+        """
+        Helper function to delete a key based on a list of keys (dot notation).
+        Args:
+        - config_dict (dict): The dictionary to be processed.
+        - keys (list): The list of keys to traverse and delete.
+        """
+        if len(keys) == 1:
+            if keys[0] in config_dict:
+                del config_dict[keys[0]]  # Delete the key if it's the last part of the dot notation
+        else:
+            key = keys[0]
+            if key in config_dict and isinstance(config_dict[key], dict):
+                self._delete_by_keys(config_dict[key], keys[1:])
 
     def dict_ms_dtype_to_str(self, d: Dict[str, Any]) -> None:
         """
@@ -882,7 +918,7 @@ class PretrainedConfig(PushToHubMixin):
 
         Args:
             auto_class (Union[str, type], optional): The auto class to register this new configuration with.
-                Default: ``"AutoConfig"`` .
+                Default: ``"AutoConfig"``.
         """
         if not isinstance(auto_class, str):
             auto_class = auto_class.__name__

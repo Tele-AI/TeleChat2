@@ -336,6 +336,7 @@ class SwinTransformerBlock(nn.Cell):
         self.add_3d = P.Add().shard(((dp, 1, 1), (dp, 1, 1)))
         self.window_partition = WindowPartition(self.window_size)
         self.window_reverse = WindowReverse()
+        self.cast = P.Cast()
 
     def construct(self, x):
         """construct function"""

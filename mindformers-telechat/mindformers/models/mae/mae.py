@@ -273,7 +273,7 @@ class ViTMAEForPreTraining(MAEPreTrainedModel):
         self.patchify = Patchify(patch_size=config.patch_size, parallel_config=parallel_config)
         self.unpatchify = UnPatchify(
             patch_size=config.patch_size, seq_length=num_patches, parallel_config=parallel_config)
-
+        self.cast = P.Cast()
         self.stride_slice = P.StridedSlice().shard(((1, 1, 1),))
         self.add = P.Add().shard(((dp, 1, 1), (1, 1, 1)))
         self.expand_dim = P.ExpandDims().shard(((dp, 1),))

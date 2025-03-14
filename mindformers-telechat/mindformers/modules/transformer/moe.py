@@ -25,7 +25,7 @@ import mindspore.ops as ops
 
 from mindspore.common.tensor import Tensor
 from mindspore.common.parameter import Parameter
-from mindspore.common.initializer import initializer
+from mindspore.common.initializer import initializer, Normal
 from mindspore.ops.operations._sequence_ops import TensorToScalar
 import mindspore.common.dtype as mstype
 import mindspore.communication.management as D
@@ -108,6 +108,11 @@ class MoEConfig:
                 the more overlap there will be but will consume more memory. Default: 2. This parameter is effective
                 only when comp_comm_parallel enable.
             routing_policy (str): The routing policy to use in MoE layer. Default: TopkRouterV1.
+            moe_shared_expert_overlap (bool): Whether to enable shared expert parallel, which can overlap
+                the computing of the shared expert and the communication of the routing expert. Default: False.
+            use_gmm (bool): Whether to enable MOVE3 module, which uses gmm op instead of bmm. Default: False.
+            enable_gmm_safe_tokens (bool): Whether to pad safe token. If use MOVE3 module,
+                when an expert accept 0 token, gmm will report error. Default: False.
 
         Supported Platforms:
             ``Ascend`` ``GPU``
@@ -125,9 +130,12 @@ class MoEConfig:
                  hot_expert_num=0, cold_token_percent=1.0, moe_module_name="", routing_policy="TopkRouterV1",
                  norm_topk_prob=True, enable_sdrop=False, use_fused_ops_topkrouter=False, router_dense_type="float32",
                  shared_expert_num=0, use_shared_expert_gating=False, max_router_load=128 * 1024,
-                 topk_method="greedy", topk_group=None, n_group=None,
+                 topk_method="greedy", topk_group=None, n_group=None, enable_deredundency=False, npu_nums_per_device=1,
                  first_k_dense_replace=True, moe_intermediate_size=1407, routed_scaling_factor=1.0,
-                 aux_loss_types=None, aux_loss_factors=None, z_loss_factor=0.):
+                 aux_loss_types=None, aux_loss_factors=None, z_loss_factor=0., balance_via_topk_bias=False,
+                 topk_bias_update_rate=0., use_allgather_dispatcher=False, moe_shared_expert_overlap=False,
+                 expert_model_parallel=None, use_gating_sigmoid=False, use_gmm=False, enable_gmm_safe_tokens=False,
+                 use_fused_ops_permute=False, callback_moe_droprate=False):
         Validator.check_positive_int(expert_num, "expert_num")
         Validator.check_positive_float(aux_loss_factor, "aux_loss_factor")
         Validator.check_positive_int(num_experts_chosen, "num_experts_chosen")
@@ -187,6 +195,18 @@ class MoEConfig:
         self.aux_loss_types, self.aux_loss_factors = _check_aux_loss_config(aux_loss_types, aux_loss_factors)
         self.z_loss_factor = z_loss_factor
         self.max_router_load = max_router_load
+        self.balance_via_topk_bias = balance_via_topk_bias
+        self.topk_bias_update_rate = topk_bias_update_rate
+        self.use_allgather_dispatcher = use_allgather_dispatcher
+        self.moe_shared_expert_overlap = moe_shared_expert_overlap
+        self.expert_model_parallel = expert_model_parallel
+        self.use_gating_sigmoid = use_gating_sigmoid
+        self.enable_deredundency = enable_deredundency
+        self.npu_nums_per_device = npu_nums_per_device
+        self.use_gmm = use_gmm
+        self.enable_gmm_safe_tokens = enable_gmm_safe_tokens
+        self.use_fused_ops_permute = use_fused_ops_permute
+        self.callback_moe_droprate = callback_moe_droprate
 
     def __eq__(self, other) -> bool:
         return isinstance(other, MoEConfig) and (self.to_dict() == other.to_dict())
@@ -230,11 +250,13 @@ def _check_moe_config(moe_config=None, parallel_config=None):
     if device_num % parallel_config.expert_parallel != 0:
         raise ValueError(f"device_num: {device_num} must be a multiple of expert_parallel: "
                          f"{parallel_config.expert_parallel}.")
-    if parallel_config.data_parallel % parallel_config.expert_parallel != 0:
-        raise ValueError(f"data parallel: {parallel_config.data_parallel} must be a multiple of "
-                         f"expert_parallel: {parallel_config.expert_parallel} when using MoE.")
-    if parallel_config.data_parallel * parallel_config.model_parallel > device_num:
+    if parallel_config.data_parallel * parallel_config.context_parallel % parallel_config.expert_parallel != 0:
+        raise ValueError(f"data parallel * context parallel: "
+                         f"{parallel_config.data_parallel * parallel_config.context_parallel} "
+                         f"must be a multiple of expert_parallel: {parallel_config.expert_parallel} when using MoE.")
+    if parallel_config.data_parallel * parallel_config.context_parallel * parallel_config.model_parallel > device_num:
         raise ValueError(f"The product of the data parallel: {parallel_config.data_parallel} and "
+                         f"context parallel: {parallel_config.context_parallel} and "
                          f"model parallel: {parallel_config.model_parallel} "
                          f"should be less than device_num: {device_num}.")
 
@@ -637,29 +659,50 @@ class MoEV2(Cell):
                  dim,
                  moe_config=default_moe_config,
                  parallel_config=default_moeparallel_config,
-                 return_extra_loss=False):
+                 return_extra_loss=False,
+                 init_method_std=0.01):
         super(MoEV2, self).__init__()
         self.hidden_size = dim
         self.expert_dim = moe_config.expert_num
         self.return_extra_loss = return_extra_loss
         self.capacity_factor = moe_config.capacity_factor
         self.num_experts_chosen = moe_config.num_experts_chosen
-        self.dp_group = parallel_config.data_parallel
-        self.dp = parallel_config.data_parallel
+        self.dp_group = parallel_config.data_parallel * parallel_config.context_parallel
+        self.dp = parallel_config.data_parallel * parallel_config.context_parallel
         self.ep = parallel_config.expert_parallel
         self.mp = parallel_config.model_parallel
+        self.use_allgather_dispatcher = moe_config.use_allgather_dispatcher
         self.group_wise_a2a = moe_config.group_wise_a2a if self.mp > 1 else False
         self.add_loss = P.Add()
-        self.dp_moe = self.dp // self.ep
-        self.dp_range = Tensor(np.arange(self.dp_group).reshape(-1, 1), mstype.int32)  # (dp, 1) = [[0],[1],[2]...[dp]]
 
         self.ffn = ffn
         Validator.check_string(moe_config.routing_policy, ["TopkRouterV2"], "routing_policy")
+        self.ffn_forward = self._ffn_forward
+        router_parallel_config = copy.deepcopy(parallel_config)
+        self.mp_moe = moe_config.expert_model_parallel if moe_config.expert_model_parallel is not None \
+            else parallel_config.model_parallel
+        if moe_config.expert_model_parallel is not None:
+            self.dp = self.dp * self.mp // self.mp_moe
+            self.dp_group = self.dp
+            self.mp = self.mp_moe
+            router_parallel_config.data_parallel = self.dp
+            router_parallel_config.model_parallel = self.mp
+            router_parallel_config.context_parallel = 1
+        self.dp_moe = self.dp // self.ep
+        self.dp_range = Tensor(np.arange(self.dp_group).reshape(-1, 1), mstype.int32)  # (dp, 1) = [[0],[1],[2]...[dp]]
+        self.use_seq_parallel = parallel_config.use_seq_parallel
+        if self.use_seq_parallel:
+            self.ffn_forward = self._ffn_forward_sq
+            router_parallel_config.data_parallel = self.dp * self.mp
+            router_parallel_config.model_parallel = 1
+            router_parallel_config.context_parallel = 1
+            self.dp_group *= self.mp
         self.router = Router(d_model=self.hidden_size,
                              moe_config=moe_config,
                              routing_policy=moe_config.routing_policy,
                              training=(not get_predict_run_mode()),
-                             parallel_config=parallel_config)
+                             parallel_config=router_parallel_config,
+                             init_method_std=init_method_std)
 
         self.reshape = P.Reshape()
         self.shape = P.Shape()
@@ -680,8 +723,82 @@ class MoEV2(Cell):
         self.stride_slice_outer_ep = P.StridedSlice().shard(((self.dp_moe, self.ep, 1, 1, 1),))
         self.stride_slice_outer_dp = P.StridedSlice().shard(((self.dp_moe, 1, self.ep, 1, 1),))
         self.transpose_5dim_ep1 = P.Transpose().shard(((self.dp_moe, self.ep, 1, 1, 1),))
+        # outer dp
+        self.transpose_mp1 = P.Transpose().shard(((self.dp_moe, self.ep, self.mp, 1, 1, 1),))
+        self.transpose_mp2 = P.Transpose().shard(((self.dp_moe, 1, self.ep, self.mp, 1, 1),))
+        self.stride_slice_allgather = P.StridedSlice().shard(((self.dp_moe, self.ep, 1, 1, 1),))
+        # interleave
+        self.comp_comm_parallel = moe_config.comp_comm_parallel
+        self.comp_comm_parallel_degree = moe_config.comp_comm_parallel_degree
+        if self.comp_comm_parallel:
+            self.split = P.Split(axis=2, output_num=self.comp_comm_parallel_degree).shard(((self.dp_group, 1, 1, 1),))
+            self.concat = P.Concat(2).shard(tuple((self.dp_group, 1, 1, 1) \
+                                                  for _ in range(self.comp_comm_parallel_degree)))
+            self.split.add_prim_attr("enable_interleave", 1)
+            self.concat.add_prim_attr("enable_interleave", 1)
 
-    def ffn_forward(self, expert_input, capacity):
+    def ffn_parallel_forward(self, expert_input, capacity):
+        """
+        use comp_comm_overlap Computing the FFN.
+        """
+        if self.comp_comm_parallel:
+            sub_capacity = capacity // self.comp_comm_parallel_degree
+            output_list = []
+            for sub_expert_input in self.split(expert_input):
+                sub_expert_output = self.ffn_forward(sub_expert_input, sub_capacity)
+                output_list.append(sub_expert_output)
+            expert_output = self.concat(output_list)
+        else:
+            expert_output = self.ffn_forward(expert_input, capacity)
+        return expert_output
+
+    def _ffn_forward_sq(self, expert_input, capacity):
+        """
+        use sp Computing the FFN.
+        """
+        # (dp_moe, ep, mp, E, n, h) <-- (dp, E, n, h)
+        expert_input = self.reshape(expert_input, (self.dp_moe, self.ep, self.mp,
+                                                   self.expert_dim, capacity, self.hidden_size))
+        # dp_moe <==> outer_dp <==> dp // ep
+        # (dp_moe, E, ep, mp, n, h) <-- (dp_moe, ep, mp, E, n, h)
+        expert_input = self.transpose_mp1(expert_input, (0, 3, 1, 2, 4, 5))
+        expert_input = self.reshape(expert_input, (self.dp_moe, self.expert_dim, self.ep,
+                                                   self.mp * capacity, self.hidden_size))
+        expert_input = self.stride_slice_outer_dp_mp(expert_input, (0, 0, 0, 0, 0),
+                                                     (self.dp_moe, self.expert_dim, self.ep,
+                                                      self.mp * capacity, self.hidden_size),
+                                                     (1, 1, 1, 1, 1))
+        expert_input = self.stride_slice_outer_ep_mp(expert_input, (0, 0, 0, 0, 0),
+                                                     (self.dp_moe, self.expert_dim, self.ep,
+                                                      self.mp * capacity, self.hidden_size),
+                                                     (1, 1, 1, 1, 1))
+        expert_input = self.stride_slice_allgather(expert_input, (0, 0, 0, 0, 0),
+                                                   (self.dp_moe, self.expert_dim, self.ep,
+                                                    self.mp * capacity, self.hidden_size),
+                                                   (1, 1, 1, 1, 1))
+
+        # ffns
+        expert_input = self.reshape(expert_input, (self.dp_moe, -1, self.hidden_size))
+        expert_output = self.ffn(expert_input)
+        expert_output = self.reshape(expert_output, (self.dp_moe, self.expert_dim, self.ep,
+                                                     self.mp * capacity, self.hidden_size))
+
+        # all2all
+        expert_output = self.stride_slice_outer_ep_mp(expert_output, (0, 0, 0, 0, 0),
+                                                      (self.dp_moe, self.expert_dim, self.ep,
+                                                       self.mp * capacity, self.hidden_size),
+                                                      (1, 1, 1, 1, 1))
+        expert_output = self.stride_slice_outer_dp_mp(expert_output, (0, 0, 0, 0, 0),
+                                                      (self.dp_moe, self.expert_dim, self.ep,
+                                                       self.mp * capacity, self.hidden_size),
+                                                      (1, 1, 1, 1, 1))
+        expert_output = self.reshape(expert_output, (self.dp_moe, self.expert_dim, self.ep,
+                                                     self.mp, capacity, self.hidden_size))
+        expert_output = self.transpose_mp2(expert_output, (0, 2, 3, 1, 4, 5))
+        expert_output = self.reshape(expert_output, (self.dp * self.mp, self.expert_dim, -1, self.hidden_size))
+        return expert_output
+
+    def _ffn_forward(self, expert_input, capacity):
         """
         Computing the FFN.
         """
@@ -745,7 +862,7 @@ class MoEV2(Cell):
         expert_output = self.reshape(expert_output, (self.dp, self.expert_dim, -1, self.hidden_size))
         return expert_output
 
-    def construct(self, input_tensor, extra_loss=0.):
+    def construct(self, input_tensor, extra_loss=0., seq_chunk=None):
         """forward process"""
         input_tensor_shape = self.shape(input_tensor)
         input_tensor = self.reshape(input_tensor, (self.dp_group, -1, self.hidden_size))  # (dp, N, h) <-- (B*S, h)
@@ -753,14 +870,17 @@ class MoEV2(Cell):
         # calculate router, we do not use router_aux_loss right now
         # (dp, E, n)int32, (dp, N, k)int32, (dp, N, k)fp16, (1,) <-- (dp, N, h),
         # where 0<= dispatch_index < 1+N, 0<= combine_index <E*(1+n)
-        dispatch_policy, combine_policy, router_coeff, router_aux_loss = self.router(input_tensor)
+        dispatch_policy, combine_policy, router_coeff, router_aux_loss = self.router(input_tensor, seq_chunk=seq_chunk)
 
         # dispatch
         expert_capacity = dispatch_policy.shape[-1]
         # (dp, E, n, h) <-- (dp, N, h), (dp, E, n)
         expert_input = self.router.router.dispatch(input_tensor, dispatch_policy)
-        # ffn, (E, dp, n, h) <-- (E, dp, n, h)
-        expert_output = self.ffn_forward(expert_input, expert_capacity)
+        if self.use_allgather_dispatcher:
+            expert_output = self.ffn(expert_input)
+        else:
+            # ffn, (E, dp, n, h) <-- (E, dp, n, h)
+            expert_output = self.ffn_parallel_forward(expert_input, expert_capacity)
         # combine, (dp, N, k, h) <-- (dp, E*(1+n), h), (dp, N, k)
         output_tensor = self.router.router.combine(expert_output, combine_policy, router_coeff)
         output_tensor = self.reshape(output_tensor, input_tensor_shape)  # (B*S, h) <-- (dp, N, h)
@@ -796,9 +916,10 @@ class Router(Cell):
                  moe_config,
                  routing_policy=None,
                  training=True,
-                 parallel_config=None):
+                 parallel_config=None,
+                 init_method_std=0.01):
         super(Router, self).__init__()
-        dp = parallel_config.data_parallel
+        dp = parallel_config.data_parallel * parallel_config.context_parallel
         self.d_model = d_model
         self.moe_config = moe_config
         self.expert_dim = moe_config.expert_num
@@ -809,8 +930,8 @@ class Router(Cell):
         self.noisy_policy = None  # candidate: ["jitter", "rsample", "None"]
         self.noisy_epsilon = 1e-2
         self.noise = Tensor(np.random.uniform(1 - self.noisy_epsilon, 1 + self.noisy_epsilon, (d_model,)))
-
-        self.dense = Dense(in_channels=self.d_model, out_channels=self.expert_dim,
+        weight_init = Normal(sigma=init_method_std, mean=0)
+        self.dense = Dense(in_channels=self.d_model, out_channels=self.expert_dim, weight_init=weight_init,
                            has_bias=False, dtype=moe_config.router_dense_type)
         self.dense.matmul.shard(((dp, 1), (1, 1)))
         self.mul = P.Mul()
@@ -828,7 +949,8 @@ class Router(Cell):
         if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
             self.mul.shard(((dp, 1, 1), (dp,)))
 
-    def construct(self, input_tensor):
+    def construct(self, input_tensor, seq_chunk=None):
+        """ Router construct"""
         input_tensor = self.cast(input_tensor, self.moe_config.router_dense_type)
         if self.noisy_policy == "jitter" and self.training:
             # Here, we temporarily implement the multiplicative jitter this way,
@@ -836,6 +958,8 @@ class Router(Cell):
             input_tensor = self.mul(input_tensor, self.noise)
 
         router_logits = self.dense(input_tensor)
+        if self.routing_policy == "TopkRouterV2":
+            return self.router(router_logits, seq_chunk=seq_chunk)
         return self.router(router_logits)
 
 
@@ -1103,7 +1227,7 @@ class TopkRouterV2(Cell):
                  parallel_config=None):
         super(TopkRouterV2, self).__init__()
 
-        dp = parallel_config.data_parallel
+        dp = parallel_config.data_parallel * parallel_config.context_parallel
         self.mp = parallel_config.model_parallel
         self.ep = parallel_config.expert_parallel
         self.d_model = d_model
@@ -1119,11 +1243,37 @@ class TopkRouterV2(Cell):
         self.off_value = Tensor(0.0, mstype.float32)
         self.range = Tensor(np.tile(np.arange(moe_config.max_router_load) + 1,
                                     (self.num_experts_chosen, 1)), mstype.float32)
+        # aux loss free
+        if self.moe_config.balance_via_topk_bias:
+            self.topk_bias = Parameter(initializer('zeros', (self.expert_dim), mstype.float32),
+                                       requires_grad=False, parallel_optimizer=False)
+            self.one_over_expert_dim = Tensor([1 / self.expert_dim], mstype.float32)
+            self.sign = P.Sign().shard(((1,),))
+            self.gate_gather = P.Gather(batch_dims=2).shard(((dp, 1, 1), (dp, 1, 1)))
+            self.afb_add = P.Add().shard(((1,), (1,)))
+            self.afb_sub = P.Sub().shard(((1,), (1,)))
+            self.afb_add_topk_bias = P.Add().shard(((dp, 1, 1), (1,)))
+            self.afb_add_topk_bias.recompute(False)
+            self.assign = P.Assign().shard(((1,), (1,)))
+            self.assign.recompute(False)
+            self.afb_mul = P.Mul().shard(((1,), ()))
+            self.afb_reduce_mean = P.ReduceMean(keep_dims=False).shard(((1, 1),))
+            self.afb_topk = P.TopK().shard(((dp, 1, 1),))
+            self.afb_topk.recompute(False)
+            self.expert_load = Parameter(initializer('zeros', (self.expert_dim), mstype.float32),
+                                         requires_grad=False, parallel_optimizer=False)
+            self.assign_add = P.AssignAdd().shard(((1,), (1,)))
+            self.assign_add.recompute(False)
+
+        if self.moe_config.topk_method == "noaux_tc":
+            self.tc_topk = P.TopK().shard(((dp, 1, 1, 1),))
+            self.tc_sum = P.ReduceSum(keep_dims=False).shard(((dp, 1, 1, 1),))
 
         self.cast = P.Cast()
         self.reshape = P.Reshape()
         self.shape = P.Shape()
-        self.softmax = P.Softmax(axis=-1).shard(((dp, 1, 1,),))
+        self.gating_activation = P.Softmax(axis=-1).shard(((dp, 1, 1,),)) \
+            if not moe_config.use_gating_sigmoid else P.Sigmoid().shard(((dp, 1, 1,),))
         self.topk = P.TopK().shard(((dp, 1, 1),))
         self.argmax = P.ArgMaxWithValue(axis=-1, keep_dims=False).shard(((dp, 1, 1),))
         self.onehot_2d = P.OneHot().shard(((dp, 1, 1), (), ()))
@@ -1147,13 +1297,7 @@ class TopkRouterV2(Cell):
         self.reduce_sum_keep = P.ReduceSum(keep_dims=True).shard(((dp, 1, 1),))
         self.div_3d = P.RealDiv().shard(((dp, 1, 1), (dp, 1, 1)))
         self.concat_3d = P.Concat(1).shard(((dp, 1, 1), (dp, 1, 1)))
-        self.zeros = Tensor(np.zeros((dp, self.expert_dim, 1, d_model)), mstype.float16)
-        self.zeros_3d = Tensor(np.zeros((dp, 1, d_model)), mstype.float16)
-        self.dispatch_gather = P.Gather(batch_dims=1).shard(((dp, 1, 1), (dp, 1, 1),))
-        self.concat = P.Concat(2).shard(((dp, 1, 1, 1), (dp, 1, 1, 1)))
-        self.combine_gather = P.Gather(batch_dims=1).shard(((dp, 1, 1), (dp, 1, 1),))
-        self.mul_router_coeff = P.Mul().shard(((dp, 1, 1, 1), (dp, 1, 1, 1)))
-        self.sum_router_coeff = P.ReduceSum(keep_dims=False).shard(((dp, 1, 1, 1),))
+        self.zeros_op = P.Zeros().shard(((dp, 1, 1),))
         self.not_equal = P.NotEqual().shard(((dp, 1, 1), ()))
 
         # sort indexing
@@ -1179,7 +1323,7 @@ class TopkRouterV2(Cell):
         self.reduce_mean_2d = P.ReduceMean(keep_dims=False).shard(((dp, 1),))
         self.add_scalar = P.Add()
         # auxiliary loss config
-        self.aux_loss_config = dict(zip(set(moe_config.aux_loss_types), moe_config.aux_loss_factors))
+        self.aux_loss_config = dict(zip(moe_config.aux_loss_types, moe_config.aux_loss_factors))
 
         # dynamic capacity
         self.on_value_int = Tensor(1, mstype.int32)
@@ -1189,11 +1333,74 @@ class TopkRouterV2(Cell):
         self.sub = P.Sub()
         self.mod_expert = P.Mod()
         self.tensor2scalar = TensorToScalar()
+        if moe_config.callback_moe_droprate:
+            self.fi_parameter = Parameter(initializer("zeros", (dp, self.expert_dim), mstype.float32),
+                                        requires_grad=False, parallel_optimizer=False)
+            self.assign_fi = P.Assign().shard(((dp, 1), (dp, 1)))
+            self.assign_fi.recompute(False)
 
+        # allgather dispatcer
+        self.use_allgather_dispatcher = moe_config.use_allgather_dispatcher
+        self.outer_dp = dp // self.ep
+        self.inner_dp = self.ep
+        if self.use_allgather_dispatcher:
+            self.dispatch_gather = P.Gather(batch_dims=2).shard(((self.outer_dp, 1, 1, 1), (self.outer_dp, 1, 1, 1),))
+            self.reshape_redist = P.Reshape().add_prim_attr("skip_redistribution", True)
+            self.tile_5d = P.Tile().shard(((self.outer_dp, 1, self.ep, 1, 1),))
+            self.concat = P.Concat(3).shard(((self.outer_dp, 1, self.ep, 1, 1), (self.outer_dp, 1, self.ep, 1, 1)))
+            self.zeros = Parameter(
+                initializer('zeros', shape=(
+                    self.outer_dp, self.inner_dp, self.ep * self.expert_dim, 1, d_model),
+                            dtype=mstype.bfloat16),
+                name='zeros', requires_grad=False, parallel_optimizer=False)
+            self.tile_idx = P.Tile().shard(((self.outer_dp, self.inner_dp, 1, 1, 1),))
+            self.tile_coeff = P.Tile().shard(((self.outer_dp, self.inner_dp, 1, 1, 1, 1),))
+            self.combine_gather = P.Gather(batch_dims=3).shard(((self.outer_dp, self.inner_dp, 1, 1, 1),
+                                                                (self.outer_dp, self.inner_dp, 1, 1, 1)))
+            self.mul_router_coeff = P.Mul().shard(((self.outer_dp, self.inner_dp, 1, 1, 1, 1),
+                                                   (self.outer_dp, self.inner_dp, 1, 1, 1, 1)))
+            self.sum_router_coeff = P.ReduceSum(keep_dims=False).shard(((self.outer_dp, self.inner_dp, 1, 1, 1, 1),))
+            self.reduce_sum_5d = P.ReduceSum(keep_dims=False).shard(((self.outer_dp, 1, 1, 1, 1),))
+            ################# help for mask #############
+            ones_per_row = self.expert_dim // self.ep
+            indices = np.arange(ones_per_row) + (np.arange(dp) * ones_per_row)[:, None] % self.expert_dim
+            one_hot_array = np.zeros((dp, self.expert_dim), dtype=int)
+            one_hot_array[np.arange(dp)[:, None], indices] = 1
+            self.one_hot = Tensor(np.tile(one_hot_array,
+                                          (self.ep, 1)
+                                          ).reshape(self.outer_dp, self.inner_dp, self.ep, self.expert_dim, 1),
+                                  mstype.float16)
+            self.mul_onehot = P.Mul().shard(((self.outer_dp, 1, self.ep, 1, 1), (self.outer_dp, 1, self.ep, 1, 1)))
+            ################# help for mask end ##########
+        else:
+            self.dispatch_gather = P.Gather(batch_dims=1).shard(((dp, 1, 1), (dp, 1, 1),))
+            self.concat = P.Concat(2).shard(((dp, 1, 1, 1), (dp, 1, 1, 1)))
+            self.zeros = Parameter(
+                initializer('zeros', shape=(dp, self.expert_dim, 1, d_model), dtype=mstype.bfloat16),
+                name='zeros', requires_grad=False, parallel_optimizer=False)
+            self.combine_gather = P.Gather(batch_dims=1).shard(((dp, 1, 1), (dp, 1, 1),))
+            self.mul_router_coeff = P.Mul().shard(((dp, 1, 1, 1), (dp, 1, 1, 1)))
+            self.sum_router_coeff = P.ReduceSum(keep_dims=False).shard(((dp, 1, 1, 1),))
+
+        self.seq_split_num = parallel_config.seq_split_num
+        self.seq_pipe = self.seq_split_num > 1
+        if self.seq_pipe:
+            self.pi_cache = Parameter(initializer('zeros', (dp, self.expert_dim), mstype.float32),
+                                      requires_grad=False, parallel_optimizer=False)
+            self.fi_cache = Parameter(initializer('zeros', (dp, self.expert_dim), mstype.float32),
+                                      requires_grad=False, parallel_optimizer=False)
+            self.assign_cache = P.Assign().shard(((dp, 1), (dp, 1)))
+            self.add_cache = P.Add().shard(((dp, 1), (dp, 1)))
+            self.mul_cache = P.Mul().shard(((dp, 1), ()))
         # topkrouter
         if self.moe_config.use_fused_ops_topkrouter:
             # pylint: disable=W0212
             self.topkrouter = P._inner_ops.TopKRouter().shard(((dp, 1, 1),))
+        # interleave
+        if self.moe_config.comp_comm_parallel:
+            self.comp_comm_parallel_degree = self.moe_config.comp_comm_parallel_degree
+        else:
+            self.comp_comm_parallel_degree = 1
 
     def dispatch(self, input_tensor, dispatch_index):
         r"""
@@ -1208,10 +1415,25 @@ class TopkRouterV2(Cell):
                 - **expert_input** (Tensor) - Tensor of shape :math:`(data\_parallel, expert\_num,
                 expert\_capacity, hidden\_size)`.(dp, E, n, h).
         """
-        input_tensor_padded = self.concat_3d(
-            (self.cast(self.zeros_3d, F.dtype(input_tensor)), input_tensor))  # (dp, 1+N, h) <-- (dp, N, h)
-        # (dp, E, n, h) <-- (dp, N, h), (dp, E, n)
-        expert_input = self.dispatch_gather(input_tensor_padded, dispatch_index, 1)
+        zeros_3d = self.zeros_op((input_tensor.shape[0], 1, input_tensor.shape[-1]),
+                                 dtype=F.dtype(input_tensor))
+        input_tensor_padded = self.concat_3d((zeros_3d, input_tensor)) # (dp, 1+N, h) <-- (dp, N, h)
+        if self.use_allgather_dispatcher:
+            # (outer_dp, inner_dp, 1+N, h) <-- (dp, 1+N, h)
+            input_tensor_padded = self.reshape(input_tensor_padded, (
+                self.outer_dp, self.inner_dp, input_tensor_padded.shape[1], input_tensor_padded.shape[2]
+            ))
+            # (outer_dp, inner_dp, E, n) <-- (dp, E, n)
+            dispatch_index = self.reshape(dispatch_index, (
+                self.outer_dp, self.inner_dp, dispatch_index.shape[1], dispatch_index.shape[2]))
+            # (outer_dp, innert_dp, E, n, h)
+            expert_input = self.dispatch_gather(input_tensor_padded, dispatch_index, 2)
+            # (dp, E, n, h)
+            expert_input = self.reshape(expert_input, (
+                self.dp_group, self.expert_dim, expert_input.shape[-2], expert_input.shape[-1]))
+        else:
+            # (dp, E, n, h) <-- (dp, N, h), (dp, E, n)
+            expert_input = self.dispatch_gather(input_tensor_padded, dispatch_index, 1)
         return expert_input
 
     def combine(self, expert_output, combine_index, router_coeff):
@@ -1229,59 +1451,127 @@ class TopkRouterV2(Cell):
                 - **output_tensor** (Tensor) - Tensor of shape :math:`(data\_parallel, tokens\_per\_group,
                 hidden\_size)`.(dp, N, h).
         """
-        expert_output = self.concat(
-            (self.cast(self.zeros, F.dtype(expert_output)), expert_output))  # (dp, E, 1+n, h) <-- (dp, E, n, h)
-        expert_output = self.reshape(
-            expert_output, (expert_output.shape[0],
-                            expert_output.shape[1] * expert_output.shape[2],
-                            expert_output.shape[3]))  # (dp, E*(1+n), h) <-- (dp, E, 1+n, h)
-        output_tensor = self.combine_gather(
-            expert_output, combine_index, 1)  # (dp, N, k, h) <-- (dp, E*(1+n), h), (dp, N, k)
-        router_coeff = self.cast(router_coeff, F.dtype(expert_output))
-        # (dp, N, k, h) <-- (dp, N, k, h) (dp, N, k, 1)
-        output_tensor = self.mul_router_coeff(
-            output_tensor,
-            self.reshape(router_coeff, (router_coeff.shape[0], router_coeff.shape[1], router_coeff.shape[2], 1)))
-        output_tensor = self.sum_router_coeff(output_tensor, 2)  # reduce sum # (dp, N, h) <-- (dp, N, k, h)
+        if self.use_allgather_dispatcher:
+            hidden_size = expert_output.shape[-1]
+            # (outer_dp, inner_dp, ep, E//ep, n*h)
+            expert_output = self.reshape(expert_output, (
+                self.outer_dp, self.inner_dp, self.ep, self.expert_dim // self.ep, -1))
+            # (outer_dp, inner_dp, ep, E, n*h)
+            expert_output = self.tile_5d(expert_output, (1, 1, 1, self.ep, 1))
+            # (outer_dp, inner_dp, ep, E, n*h) <-- (outer_dp, inner_dp, ep, E, 1),(outer_dp, inner_dp, ep, E, n*h)
+            expert_output = self.mul_onehot(self.one_hot, expert_output)
+            # (outer_dp, inner_dp, ep*E, n, h)
+            expert_output = self.reshape(expert_output, (
+                self.outer_dp, self.inner_dp, self.expert_dim * self.ep, -1, hidden_size
+            ))
+            # (outer_dp, inner_dp, ep*E, 1+n, h)
+            expert_output = self.concat(
+                (self.cast(self.zeros, F.dtype(expert_output)), expert_output))
+            # (outer_dp, inner_dp, ep, E*(1+n), h)
+            expert_output = self.reshape_redist(expert_output, (
+                self.outer_dp, self.inner_dp, self.ep, -1, hidden_size))
+            # (outer_dp, 1, ep, n, k) <-- (dp, n, k)
+            combine_index = self.reshape(combine_index, (
+                self.outer_dp, 1, self.ep, -1, combine_index.shape[2]))
+            # (outer_dp, inner_dp, ep, n, k)
+            combine_index = self.tile_idx(combine_index, (1, self.inner_dp, 1, 1, 1))
+            # (outer_dp, inner_dp, ep, n, k, h)
+            output_tensor = self.combine_gather(expert_output, combine_index, 3)
+            router_coeff = self.cast(router_coeff, F.dtype(expert_output))
+            # (outer_dp, 1, ep, n, k, 1)
+            router_coeff = self.reshape(router_coeff, (
+                self.outer_dp, 1, self.ep, router_coeff.shape[1], router_coeff.shape[2], 1))
+            # (outer_dp, inner_dp, ep, n, k, 1)
+            router_coeff = self.tile_coeff(router_coeff, (
+                1, self.inner_dp, 1, 1, 1, 1))
+            # (outer_dp, inner_dp, ep, n, k, h)
+            output_tensor = self.mul_router_coeff(output_tensor, router_coeff)
+            # (outer_dp, inner_dp, ep, n, h) <-- (outer_dp, inner_dp, ep, n, k, h)
+            output_tensor = self.sum_router_coeff(output_tensor, 4)
+            # (outer_dp, ep, n, h) <-- (outer_dp, inner_dp, ep, n, h)
+            output_tensor = self.reduce_sum_5d(output_tensor, 1)
+            # (dp, n, h) <-- (outer_dp, ep, n, h)
+            output_tensor = self.reshape(output_tensor, (
+                self.dp_group, output_tensor.shape[2], hidden_size))
+        else:
+            expert_output = self.concat(
+                (self.cast(self.zeros, F.dtype(expert_output)), expert_output))  # (dp, E, 1+n, h) <-- (dp, E, n, h)
+            expert_output = self.reshape(
+                expert_output, (expert_output.shape[0],
+                                expert_output.shape[1] * expert_output.shape[2],
+                                expert_output.shape[3]))  # (dp, E*(1+n), h) <-- (dp, E, 1+n, h)
+            output_tensor = self.combine_gather(
+                expert_output, combine_index, 1)  # (dp, n, k, h) <-- (dp, E*(1+n), h), (dp, n, k)
+            router_coeff = self.cast(router_coeff, F.dtype(expert_output))
+            # (dp, n, k, h) <-- (dp, n, k, h) (dp, n, k, 1)
+            output_tensor = self.mul_router_coeff(
+                output_tensor,
+                self.reshape(router_coeff, (router_coeff.shape[0], router_coeff.shape[1], router_coeff.shape[2], 1)))
+            # (dp, n, h) <-- (dp, n, k, h)
+            output_tensor = self.sum_router_coeff(output_tensor, 2)
         return output_tensor
 
-    def construct(self, router_logits):
+    def construct(self, router_logits, seq_chunk=None):
         """
         Calculate dispatch_policy, combine_policy, router_coeff.
         """
         z_loss = self.z_loss_func(router_logits, self.z_loss_coeff)
         extra_loss = z_loss
 
-        router_prob = self.softmax(router_logits)  # (dp, N, expert_dim)fp32 <-- (dp, N, expert_dim)fp32
-        if self.moe_config.topk_method == "group_limited_greedy":
-            # (dp, N, n_group)fp32 <-- (dp, N, expert_dim)fp32
-            group_scores = self.reshape(
-                router_prob, (router_prob.shape[0], router_prob.shape[1], self.moe_config.n_group, -1)).max(axis=-1)
+        router_prob = self.gating_activation(router_logits)  # (dp, N, expert_dim)fp32 <-- (dp, N, expert_dim)fp32
+        # normalize if use sigmoid activate for auxiliary loss
+        router_prob_for_aux = self._normalize(router_prob) if self.moe_config.use_gating_sigmoid else router_prob
+        if self.moe_config.topk_method in ("group_limited_greedy", "noaux_tc"):
+            if self.moe_config.balance_via_topk_bias:
+                router_prob_with_bias = self.afb_add_topk_bias(router_prob, self.topk_bias)
+            else:
+                router_prob_with_bias = router_prob
+            group_scores = self.reshape(router_prob_with_bias,
+                                        (router_prob_with_bias.shape[0],
+                                         router_prob_with_bias.shape[1],
+                                         self.moe_config.n_group, -1))
+            if self.moe_config.topk_method == "noaux_tc":
+                top_2, _ = self.tc_topk(group_scores, 2)
+                group_scores = self.tc_sum(top_2, -1)
+            else:
+                group_scores = group_scores.max(axis=-1)
             top_values, _ = self.topk(group_scores, self.moe_config.topk_group)  # (dp, N, top_k)
             group_mask = self.cast(
                 group_scores.ge(self.tile(top_values.min(axis=-1, keepdims=True),
                                           (1, 1, self.moe_config.n_group))), mstype.float32)
             score_mask = self.reshape(
                 group_mask, (group_mask.shape[0], group_mask.shape[1], group_mask.shape[2], 1))  # (dp, N,  n_group, 1)
-            score_mask = score_mask.repeat(self.moe_config.expert_num // self.moe_config.n_group, axis=-1)
+            score_mask = score_mask.repeat_interleave(self.moe_config.expert_num // self.moe_config.n_group, dim=-1)
             score_mask = self.reshape(
                 score_mask, (score_mask.shape[0], score_mask.shape[1], -1))  # (dp, N, n_routed_experts)
-            tmp_scores = ops.masked_fill(router_prob, ~score_mask.bool(), 0.0)
-            expert_gate, expert_index = self.topk(tmp_scores, self.num_experts_chosen)
+            tmp_scores = ops.masked_fill(router_prob_with_bias, ~score_mask.bool(), 0.0)
+
+            if self.moe_config.balance_via_topk_bias:
+                _, expert_index = self.afb_topk(router_prob_with_bias, self.num_experts_chosen)
+                expert_gate = self.gate_gather(router_prob, expert_index, 2)
+                self._update_expert_load(expert_index)
+            else:
+                expert_gate, expert_index = self.topk(tmp_scores, self.num_experts_chosen)
         else:
             # in default, normal topk will be used
-            expert_gate, expert_index = self.topk(router_prob, self.num_experts_chosen)
+            if self.moe_config.balance_via_topk_bias:
+                _, expert_index = self.afb_topk(self.afb_add_topk_bias(router_prob, self.topk_bias),
+                                                self.num_experts_chosen)
+                expert_gate = self.gate_gather(router_prob, expert_index, 2)
+                self._update_expert_load(expert_index)
+            else:
+                expert_gate, expert_index = self.topk(router_prob, self.num_experts_chosen)
 
         if self.aux_loss_config.get("expert", 0):
-            expert_load_loss = self._expert_load_balancing(router_prob, expert_index,
-                                                           self.aux_loss_config.get("expert"))
+            expert_load_loss = self._expert_load_balancing(router_prob_for_aux, expert_index,
+                                                           self.aux_loss_config.get("expert"), seq_chunk=seq_chunk)
             extra_loss = self.add_scalar(extra_loss, expert_load_loss)
         if self.aux_loss_config.get("device", 0):
-            device_load_loss = self._device_load_balancing(router_prob, expert_index,
+            device_load_loss = self._device_load_balancing(router_prob_for_aux, expert_index,
                                                            self.aux_loss_config.get("device"))
             extra_loss = self.add_scalar(extra_loss, device_load_loss)
         if self.aux_loss_config.get("comm", 0):
-            comm_load_loss = self._comm_load_balancing(router_prob, expert_index,
+            comm_load_loss = self._comm_load_balancing(router_prob_for_aux, expert_index,
                                                        self.aux_loss_config.get("comm"))
             extra_loss = self.add_scalar(extra_loss, comm_load_loss)
 
@@ -1305,6 +1595,13 @@ class TopkRouterV2(Cell):
                                                                                                      expert_gate)
         return dispatch_idx, combine_idx, router_coeff, extra_loss  # (dp, E, n)int32, (dp, N, k), (dp, N, k)
 
+    def _update_expert_load(self, expert_index):
+        expert_index = self.reshape(expert_index, (expert_index.shape[0], -1))
+        expert_mask = self.onehot_2d(expert_index, self.expert_dim, self.on_value, self.off_value)
+        expert_load_data = self.reduce_mean(expert_mask, 1)
+        expert_load_data = self.afb_reduce_mean(expert_load_data, 0)
+        self.assign_add(self.expert_load, expert_load_data)
+
     def _maskout_overflowed_tokens_sort_kdrop(self, expert_index, expert_gate):
         """
         Keeping only the tokens that fit within expert_capacity.
@@ -1315,7 +1612,8 @@ class TopkRouterV2(Cell):
         kn = k * tokens_per_group  # this n refers to N
         if self.capacity_factor > 0:
             expert_capacity = calculate_expert_capacity_v2(self.num_experts_chosen, tokens_per_group,
-                                                           self.capacity_factor, self.expert_dim, self.mp)
+                                                           self.capacity_factor, self.expert_dim,
+                                                           self.mp * self.comp_comm_parallel_degree)
 
         else:
             expert_capacity = self._calculate_expert_capacity_dynamic(expert_index)
@@ -1383,7 +1681,8 @@ class TopkRouterV2(Cell):
         kn = k * tokens_per_group  # this n refers to N
         if self.capacity_factor > 0:
             expert_capacity = calculate_expert_capacity_v2(self.num_experts_chosen, tokens_per_group,
-                                                           self.capacity_factor, self.expert_dim, self.mp)
+                                                           self.capacity_factor, self.expert_dim,
+                                                           self.mp * self.comp_comm_parallel_degree)
 
         else:
             expert_capacity = self._calculate_expert_capacity_dynamic(expert_index)
@@ -1445,7 +1744,8 @@ class TopkRouterV2(Cell):
         if self.capacity_factor > 0:
             tokens_per_group = self.shape(expert_index)[1]
             expert_capacity = calculate_expert_capacity_v2(self.num_experts_chosen, tokens_per_group,
-                                                           self.capacity_factor, self.expert_dim, self.mp)
+                                                           self.capacity_factor, self.expert_dim,
+                                                           self.mp * self.comp_comm_parallel_degree)
         else:
             expert_capacity = self._calculate_expert_capacity_dynamic(expert_index)
         if self.moe_config.enable_sdrop:
@@ -1480,10 +1780,11 @@ class TopkRouterV2(Cell):
         expert_capacity = expert_mask.max()  # (1, ) <- (dp, E)
         expert_capacity = self.cast(expert_capacity, mstype.int64)
         expert_capacity_scalar = self.tensor2scalar(expert_capacity)
-        expert_capacity_scalar = (expert_capacity_scalar // self.mp + 1) * self.mp
+        mp = self.mp * self.comp_comm_parallel_degree
+        expert_capacity_scalar = (expert_capacity_scalar // mp + 1) * mp
         return expert_capacity_scalar
 
-    def _expert_load_balancing(self, scores, top_indices, alpha):
+    def _expert_load_balancing(self, scores, top_indices, alpha, seq_chunk=None):
         """Expert level load balance loss, which regularizes the load from local batch data on each
         expert to be balanced.
         Please refer to DeepSeek-V2:
@@ -1499,8 +1800,25 @@ class TopkRouterV2(Cell):
                               self.off_value)  # (dp, kN, E)fp32 <-- (dp, kN)int32
         fi = self.reduce_mean(mask, 1)  # (dp, E) <- (dp, kN, E), 1/(kN) * \sum_t^T 1(token t selects expert i)
 
+        if seq_chunk is not None:
+            is_clean = self.cast(P.NotEqual()(seq_chunk, 0), mstype.float32)
+            is_return = self.cast(P.Equal()(seq_chunk, self.seq_split_num - 1), mstype.float32)
+            clean_zeros_pi = self.mul_cache(self.pi_cache, is_clean)
+            clean_zeros_fi = self.mul_cache(self.fi_cache, is_clean)
+            clean_pi_state = self.assign_cache(self.pi_cache, clean_zeros_pi)
+            clean_fi_state = self.assign_cache(self.fi_cache, clean_zeros_fi)
+            pi = self.add_cache(F.depend(pi, clean_pi_state), self.pi_cache)
+            fi = self.add_cache(F.depend(fi, clean_fi_state), self.fi_cache)
+            pi_fi = self.reduce_mean_2d(self.mul_2d(pi, fi))
+            pi_cache_state = self.assign_cache(self.pi_cache, F.depend(pi, pi_fi))
+            fi_cache_state = self.assign_cache(self.fi_cache, F.depend(fi, pi_fi))
+            expert_load_loss = self.mul(pi_fi, alpha * self.expert_dim ** 2)
+            expert_load_loss = F.depend(expert_load_loss, (pi_cache_state, fi_cache_state))
+            return expert_load_loss * is_return / (self.seq_split_num * self.seq_split_num)
         expert_load_loss = self.mul(self.reduce_mean_2d(self.mul_2d(pi, fi)),
                                     alpha * self.expert_dim ** 2)  # alpha*E \sum_i^E (f_i * P_i)
+        if self.moe_config.callback_moe_droprate:
+            self.assign_fi(self.fi_parameter, fi)
         return expert_load_loss
 
     def _device_load_balancing(self, scores, top_indices, alpha):

@@ -6,10 +6,8 @@ mindformers.pipeline
     通过流水线执行套件中已集成任务和模型的推理流程。
 
     参数：
-        - **task** (str) - 支持的任务列表['zero_shot_image_classification', 'image_to_text_generation',
-          'multi_modal_to_text_generation', 'masked_image_modeling', 'image_classification', 'translation',
-          'fill_mask', 'text_classification', 'token_classification', 'question_answering', 'text_generation',
-          'image_to_text_retrieval', 'segment_anything']。默认值： ``None`` 。
+        - **task** (str, 可选) - 支持的任务列表['text_generation', 'image_to_text_generation',
+          'multi_modal_to_text_generation']。默认值： ``None`` 。
         - **model** (Union[str, PreTrainedModel, Model, Tuple[str, str]], 可选) - 执行任务的模型。默认值： ``None`` 。
         - **tokenizer** (PreTrainedTokenizerBase, 可选) - 模型分词器。默认值： ``None`` 。
         - **image_processor** (BaseImageProcessor, 可选) - 图片处理器。默认值： ``None`` 。

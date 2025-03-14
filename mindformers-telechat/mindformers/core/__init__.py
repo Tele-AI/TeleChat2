@@ -25,7 +25,6 @@ from .lr import (
     build_lr
 )
 from .loss import (
-    CompareLoss,
     CrossEntropyLoss,
     L1Loss,
     MSELoss,
@@ -56,6 +55,7 @@ from .callback import (
     ObsMonitor,
     ProfileMonitor,
     SummaryMonitor,
+    TrainingStateMonitor,
     build_callback
 )
 from .context import (

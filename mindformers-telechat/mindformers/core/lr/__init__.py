@@ -16,6 +16,7 @@
 from .build_lr import build_lr
 from .lr_schedule import (
     ConstantWarmUpLR,
+    ConstantWithCoolDownLR,
     CosineAnnealingLR,
     CosineAnnealingWarmRestarts,
     CosineWithRestartsAndWarmUpLR,

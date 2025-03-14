@@ -15,6 +15,7 @@
 """Run MindFormer."""
 import argparse
 import os
+import sys
 
 from mindformers.tools.register import MindFormerConfig, ActionDict
 from mindformers.tools.utils import str2bool, parse_value
@@ -127,7 +128,7 @@ if __name__ == "__main__":
         help='batch size for predict data, set to perform batch predict.'
              'Default: None')
     parser.add_argument(
-        '--adapter_id', default=None, type=str,
+        '--adapter_id', default=None, type=str, nargs='+',
         help='LoRA ID for predict.'
              'Default: None')
     parser.add_argument(
@@ -205,6 +206,9 @@ if __name__ == "__main__":
     parser.add_argument(
         '--register_path', default=None, type=str,
         help='the register path of outer API.')
+    parser.add_argument(
+        '--do_sample', default=None, type=str2bool,
+        help='do_sample.')
 
     args_, rest_args_ = parser.parse_known_args()
     rest_args_ = [i for item in rest_args_ for i in item.split("=")]
@@ -219,7 +223,13 @@ if __name__ == "__main__":
             args_.register_path = os.path.join(work_path, args_.register_path)
         # Setting Environment Variables: REGISTER_PATH For Auto Register to Outer API
         os.environ["REGISTER_PATH"] = args_.register_path
-    config_ = MindFormerConfig(args_.config)
+        if args_.register_path not in sys.path:
+            sys.path.append(args_.register_path)
+
+    if args_.run_mode is not None:
+        config_ = MindFormerConfig(args_.config, run_mode=args_.run_mode)
+    else:
+        config_ = MindFormerConfig(args_.config)
 
     if args_.device_id is not None:
         config_.context.device_id = args_.device_id
@@ -227,8 +237,6 @@ if __name__ == "__main__":
         config_.context.device_target = args_.device_target
     if args_.mode is not None:
         config_.context.mode = args_.mode
-    if args_.run_mode is not None:
-        config_.run_mode = args_.run_mode
     if args_.do_eval is not None:
         config_.do_eval = args_.do_eval
     if args_.seed is not None:
@@ -265,6 +273,8 @@ if __name__ == "__main__":
         config_.train_dataset.data_loader.dataset_dir = args_.train_dataset_dir
     if args_.eval_dataset_dir:
         config_.eval_dataset.data_loader.dataset_dir = args_.eval_dataset_dir
+    if args_.do_sample is not None:
+        config_.model.model_config.do_sample = args_.do_sample
     if config_.run_mode == 'predict':
         if args_.predict_data is None:
             logger.info("dataset by config is used as input_data.")

@@ -15,7 +15,7 @@
 
 """mindformers init"""
 
-__version__ = "r1.3.0"
+__version__ = "1.4.0.beta1"
 
 from mindformers import (
     core,
@@ -80,7 +80,6 @@ from mindformers.core import (
     Came,
     CheckpointMonitor,
     ClipGradNorm,
-    CompareLoss,
     ConstantWarmUpLR,
     CosineAnnealingLR,
     CosineAnnealingWarmRestarts,
@@ -106,6 +105,7 @@ from mindformers.core import (
     SQuADMetric,
     SoftTargetCrossEntropy,
     SummaryMonitor,
+    TrainingStateMonitor,
     build_context,
     build_parallel_config,
     get_context,
@@ -132,6 +132,7 @@ from mindformers.dataset import (
     CodeAlpacaInstructDataHandler,
     CommonDataLoader,
     ContrastiveLanguageImagePretrainDataset,
+    DPODataset,
     Flickr8kDataLoader,
     GeneralDataset,
     ImageCLSDataset,
@@ -154,7 +155,6 @@ from mindformers.dataset import (
     RandomHorizontalFlip,
     RandomResizedCrop,
     Resize,
-    RewardModelDataset,
     SFTDataLoader,
     SQuADDataLoader,
     SimMask,
@@ -215,13 +215,6 @@ from mindformers.models import (
     BertProcessor,
     BertTokenizer,
     BertTokenizerFast,
-    BloomConfig,
-    BloomLMHeadModel,
-    BloomModel,
-    BloomProcessor,
-    BloomRewardModel,
-    BloomTokenizer,
-    BloomTokenizerFast,
     CLIPConfig,
     CLIPImageProcessor,
     CLIPModel,
@@ -270,6 +263,11 @@ from mindformers.models import (
     LlamaProcessor,
     LlamaTokenizer,
     LlamaTokenizerFast,
+    MllamaConfig,
+    MllamaTextModel,
+    MllamaProcessor,
+    MllamaTokenizer,
+    MllamaForConditionalGeneration,
     MT5ForConditionalGeneration,
     MaskData,
     ModalContentTransformTemplate,
@@ -303,7 +301,6 @@ from mindformers.models import (
     T5Tokenizer,
     T5TokenizerFast,
     TOKENIZER_MAPPING,
-    VHead,
     ViTConfig,
     ViTForImageClassification,
     ViTImageProcessor,

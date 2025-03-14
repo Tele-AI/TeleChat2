@@ -26,7 +26,7 @@ from mindformers.core.context import build_context
 from mindformers.core.parallel_config import build_parallel_config
 from mindformers.models.build_processor import build_processor
 from mindformers.trainer.utils import transform_and_load_checkpoint
-from research.llava.llava import LlavaVlm
+from research.llava.llava_model import LlavaVlm
 from research.llava.llava_config import LlavaConfig, LlavaCLIPConfig
 from research.llava.llava_processor import LlavaContentTransformTemplate
 from research.llava.llava_tokenizer import LlavaTokenizer
@@ -47,8 +47,14 @@ def register_modules():
 
 def main(config_path, use_parallel, load_checkpoint, vocab_file):
     # multi batch inputs
-    inputs = [{"image": "https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com/MindFormers/qwenvl/demo.jpeg"},
+    inputs = [{"image": "please set a image path."},
               {"text": "Describe the image in English:"}]
+    for item in inputs:
+        if not os.path.exists(item["image"]):
+            raise ValueError(
+                f"Image is not existed, please set a true path. For example, you can download "
+                f"https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com/MindFormers/qwenvl/demo.jpeg "
+                f"and image path to demo.jpeg path")
     batch_size = len(inputs)
 
     # init config with yaml

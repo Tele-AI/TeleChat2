@@ -45,7 +45,6 @@ PROCESSOR_MAPPING_NAMES = OrderedDict(
     [
         ("bert", "BertProcessor"),
         ("blip2", "Blip2Processor"),
-        ("bloom", "BloomProcessor"),
         ("clip", "CLIPProcessor"),
         ("glm", "GLMProcessor"),
         ("gpt2", "GPT2Processor"),
@@ -111,7 +110,7 @@ class AutoProcessor:
 
     Examples:
         >>> from mindformers import AutoProcessor
-        >>> processor = AutoProcessor.from_pretrained("bert_base_uncased")
+        >>> processor = AutoProcessor.from_pretrained("glm3_6b")
     """
     _support_list = MindFormerBook.get_processor_support_list()
     _model_type = 0
@@ -373,14 +372,12 @@ class AutoProcessor:
                 return AutoImageProcessor.from_pretrained(
                     pretrained_model_name_or_path, trust_remote_code=trust_remote_code, **kwargs
                 )
-            except Exception:  # pylint: disable=W0703
-                pass
-
-        raise ValueError(
-            f"Unrecognized processing class in {pretrained_model_name_or_path}. Can't instantiate a processor, a "
-            "tokenizer, an image processor for this model. Make sure the repository contains "
-            "the files of at least one of those processing classes."
-        )
+            except Exception as e:  # pylint: disable=W0703
+                raise ValueError(
+                    f"Unrecognized processing class in {pretrained_model_name_or_path}. "
+                    f"Can't instantiate a processor, a tokenizer, an image processor for this model. "
+                    f"Make sure the repository contains the files of at least one of those processing classes."
+                ) from e
 
     @staticmethod
     def register(config_class, processor_class, exist_ok=False):
@@ -394,7 +391,7 @@ class AutoProcessor:
             config_class (PretrainedConfig): The model config class.
             processor_class (ProcessorMixin): The processor class.
             exist_ok (bool, optional): If set to True, no error will be raised even if config_class already exists.
-                Default: ``False`` .
+                Default: ``False``.
         """
         PROCESSOR_MAPPING.register(config_class, processor_class, exist_ok=exist_ok)
 

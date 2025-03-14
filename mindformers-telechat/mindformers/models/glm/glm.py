@@ -242,6 +242,7 @@ class GLMHead(nn.Cell):
         self.compute_dtype = compute_dtype
         self.weight = Parameter(initializer("normal", [vocab_size, hidden_size], compute_dtype), name="weight")
         self.transpose = ops.Transpose().shard(((embed_parallel_config.model_parallel, 1),))
+        self.cast = P.Cast()
         self.matmul = ops.MatMul(transpose_b=True).shard(
             ((embed_parallel_config.data_parallel, 1), (embed_parallel_config.model_parallel, 1)))
 

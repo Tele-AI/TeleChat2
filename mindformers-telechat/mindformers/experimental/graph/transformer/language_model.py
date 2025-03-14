@@ -17,7 +17,8 @@ from typing import Union
 
 from mindspore import nn
 from mindspore.ops import operations as P
-
+from mindspore.context import ParallelMode
+from mindspore.parallel._utils import _get_parallel_mode, _is_sharding_propagation
 from mindformers.experimental.graph.transformer.enums import AttnMaskType
 from mindformers.experimental.utils import init_method_normal, scaled_init_method_normal
 from mindformers.experimental.graph.tensor_parallel.layers import ColumnParallelLinear
@@ -107,7 +108,7 @@ class Embedding(nn.Cell):
         self.embedding_init_type = config.embedding_init_type
         self.compute_dtype = config.compute_dtype
         self.num_tokentypes = num_tokentypes
-        self.init_method = config.init_method
+        self.init_method = config.init_method_
 
         # Word embedding
         self.word_embeddings = VocabParallelEmbedding(vocab_size,
@@ -140,7 +141,10 @@ class Embedding(nn.Cell):
         self.add_te = P.Add()
         self.cast = P.Cast()
 
-        self.shard(config)
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.sharding_propagation(config)
+        else:
+            self.shard(config)
 
     def construct(self, input_ids, position_ids, tokentype_ids=None):
         """embedding construct"""
@@ -182,6 +186,9 @@ class Embedding(nn.Cell):
             self.add_te.shard(((1, 1, 1), (1, 1, 1)))
             strategy_dropout = (1, 1, 1)
             self.embedding_dropout.shard(strategy=strategy_dropout)
+
+    def sharding_propagation(self, config: TransformerConfig):
+        pass
 
 
 class TransformerLanguageModel(nn.Cell):
@@ -226,12 +233,11 @@ class TransformerLanguageModel(nn.Cell):
         super(TransformerLanguageModel, self).__init__()
         if add_decoder:
             raise NotImplementedError('add_decoder is not supported for now.')
-        if encoder_attn_mask_type is not None:
-            raise NotImplementedError("encoder_attn_mask_type is not supported for now.")
         if decoder_attn_mask_type is not None:
             raise NotImplementedError("decoder_attn_mask_type is not supported for now.")
 
         self.config = config
+        self.use_ring_attention = self.config.use_ring_attention
         self.pre_process = pre_process
         self.post_process = post_process
         self.num_tokentypes = num_tokentypes
@@ -241,12 +247,14 @@ class TransformerLanguageModel(nn.Cell):
         self.encoder_attn_mask_type = encoder_attn_mask_type
 
         # get value from config
-        self.init_method = config.init_method
+        self.init_method = config.init_method_
+        self.output_layer_init_method = config.output_layer_init_method
         self.compute_dtype = config.compute_dtype
         self.hidden_size = config.hidden_size
         self.vocab_size = config.padded_vocab_size
         self.max_position_embeddings = config.max_position_embeddings
         self.hidden_dropout = config.hidden_dropout
+        self.untie_embeddings_and_output_weights = config.untie_embeddings_and_output_weights
 
         # Embeddings
         if self.pre_process:
@@ -278,6 +286,13 @@ class TransformerLanguageModel(nn.Cell):
             if self.add_pooler:
                 self.pooler = Pooler(self.hidden_size, self.init_method, config)
 
+            if self.untie_embeddings_and_output_weights:
+                self.output_layer = ColumnParallelLinear(input_size=self.hidden_size,
+                                                         output_size=self.vocab_size,
+                                                         config=config,
+                                                         init_method=self.output_layer_init_method,
+                                                         bias=False)
+
         # causel mask
         self.causal_mask = CausalMaskGenerate(seq_length=config.seq_length,
                                               compute_type=config.compute_dtype,
@@ -294,7 +309,10 @@ class TransformerLanguageModel(nn.Cell):
         self.zeros = P.Zeros()
         self.shape = P.Shape()
 
-        self.shard(config)
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.sharding_propagation(config)
+        else:
+            self.shard(config)
 
     def construct(self, enc_input_ids, enc_position_ids, enc_attn_mask,
                   dec_input_ids=None, dec_position_ids=None, dec_attn_mask=None,
@@ -321,7 +339,7 @@ class TransformerLanguageModel(nn.Cell):
         if self.use_rotary_position_embeddings:
             rotary_pos_emb = self.rotary_pos_emb(self.seq_length)
 
-        if enc_attn_mask is None:
+        if not self.use_ring_attention and enc_attn_mask is None:
             enc_attn_mask = self.causal_mask(enc_input_ids)
 
         if prefix_keys_values is not None:
@@ -381,6 +399,9 @@ class TransformerLanguageModel(nn.Cell):
 
         self.concat_prefix.shard(((dp, 1, cp, 1), (dp, 1, cp, 1)))
 
+    def sharding_propagation(self, config: TransformerConfig):
+        pass
+
 
 def get_language_model(config: TransformerConfig,
                        num_tokentypes: int,
@@ -409,8 +430,8 @@ def get_language_model(config: TransformerConfig,
         language_model (TransformerLanguageModel): Language model.
         language_model_key (str): Key used for checkpoints.
     """
-    if config.init_method is None:
-        config.init_method = init_method_normal(config.init_method_std, config.params_dtype)
+    if config.init_method_ is None:
+        config.init_method_ = init_method_normal(config.init_method_std, config.params_dtype)
 
     if config.output_layer_init_method is None:
         config.output_layer_init_method = scaled_init_method_normal(config.init_method_std,

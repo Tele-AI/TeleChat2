@@ -23,6 +23,7 @@ from mindspore.ops import functional as F
 from mindspore.common.initializer import initializer
 from mindspore.common.tensor import Tensor
 from mindspore.common.parameter import Parameter, ParameterTuple
+from mindspore.nn.optim.optimizer import Optimizer
 
 # MindSpore 2.0 has changed the APIs of _checkparam, the following try except is for compatibility
 try:
@@ -31,9 +32,10 @@ try:
 except ImportError:
     import mindspore._checkparam as validator
     import mindspore._checkparam as Rel
-from mindspore.nn.optim.optimizer import Optimizer
+
 from mindformers.version_control import fix_optim_global_step_sig
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.utils import deprecated
 
 __all__ = ['FusedAdamWeightDecay', 'FP32StateAdamWeightDecay', 'FusedCastAdamWeightDecay']
 
@@ -147,6 +149,7 @@ def _check_param_value(beta1, beta2, eps, prim_name):
     validator.check_positive_float(eps, "eps", prim_name)
 
 
+@deprecated(reason="This API is rotten, use 'AdamW' instead.", version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.OPTIMIZER)
 class FusedAdamWeightDecay(Optimizer):
     """Implements the Adam algorithm to fix the weight decay. It is a complete operator, not a combination of other ops.
@@ -227,7 +230,7 @@ class FusedAdamWeightDecay(Optimizer):
 
     def __init__(self, params, learning_rate=1e-3, beta1=0.9, beta2=0.999, eps=1e-6, weight_decay=0.0,
                  offload=False):
-        super(FusedAdamWeightDecay, self).__init__(learning_rate, params, weight_decay)
+        super().__init__(learning_rate, params, weight_decay)
         _check_param_value(beta1, beta2, eps, self.cls_name)
         self.beta1 = Tensor(np.array([beta1]).astype(np.float32))
         self.beta2 = Tensor(np.array([beta2]).astype(np.float32))
@@ -326,6 +329,7 @@ def clone_state(parameters, prefix, init):
     return ParameterTuple(new)
 
 
+@deprecated(reason="This API is rotten, use 'AdamW' instead.", version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.OPTIMIZER)
 class FP32StateAdamWeightDecay(nn.AdamWeightDecay):
     """This class is almost same with the mindspore's AdamWeightDecay implements, the
@@ -459,6 +463,7 @@ def _update_run_kernel(opt, clip_value, beta1, beta2, eps, lr, weight_decay,
     return success
 
 
+@deprecated(reason="This API is rotten, use 'AdamW' instead.", version="1.5.0")
 class FusedCastAdamWeightDecay(Optimizer):
     """Implements the Adam algorithm to fix the weight decay. It is a complete operator, not a combination of other ops.
 
@@ -533,7 +538,7 @@ class FusedCastAdamWeightDecay(Optimizer):
 
     def __init__(self, params, learning_rate=1e-3, beta1=0.9, beta2=0.999, eps=1e-6, weight_decay=0.0,
                  clip_norm=1.0):
-        super(FusedCastAdamWeightDecay, self).__init__(learning_rate, params, weight_decay)
+        super().__init__(learning_rate, params, weight_decay)
         _check_param_value(beta1, beta2, eps, self.cls_name)
         self.beta1 = Tensor(np.array([beta1]).astype(np.float32))
         self.beta2 = Tensor(np.array([beta2]).astype(np.float32))

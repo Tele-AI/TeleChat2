@@ -19,11 +19,11 @@ import mindspore.nn as nn
 import mindspore.ops as ops
 import mindspore.common.dtype as mstype
 import mindspore._checkparam as validator
+import mindspore.communication.comm_func as comm_func
 from mindspore import mint
 from mindspore.ops import functional as F
 from mindspore.ops import composite as C
 from mindspore.communication import get_group_size, GlobalComm
-import mindspore.communication.comm_func as comm_func
 
 from mindformers.experimental.parallel_core.pynative.parallel_state import (
     get_model_parallel_group,
@@ -180,6 +180,7 @@ class ClipGlobalNorm(nn.Cell):
         if clip_coeff < 1.0:
             self.clip_func(grads, clip_coeff)
         return total_norm
+
 
 def get_grad_process_func(training_config, share_embeddings_and_output_weights=True, return_instance=True, **kwargs):
     """

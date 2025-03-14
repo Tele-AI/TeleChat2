@@ -42,6 +42,7 @@ class PatchEmbed(nn.Cell):
                  compute_dtype=mstype.float32):
         super(PatchEmbed, self).__init__()
         self.dtype = compute_dtype
+        self.cast = P.Cast()
 
         # build modules
         self.image_size = (image_size, image_size)

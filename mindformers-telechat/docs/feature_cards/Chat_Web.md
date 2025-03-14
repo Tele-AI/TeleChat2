@@ -1,5 +1,13 @@
 # Chat Web
 
+> ## 🚨 弃用说明
+>
+> 本文档已过时，不再进行维护，并将在 *1.5.0* 版本下架，其中可能包含过时的信息或已被更新的功能替代。建议参考最新的 **[官方文档](https://www.mindspore.cn/mindformers/docs/zh-CN/dev/index.html)** ，以获取准确的信息。
+>
+> 如果您仍需使用本文档中的内容，请仔细核对其适用性，并结合最新版本的相关资源进行验证。
+>
+> 如有任何问题或建议，请通过 **[社区Issue](https://gitee.com/mindspore/mindformers/issues/new)** 提交反馈。感谢您的理解与支持！
+
 ## 基本介绍
 
 Chat Web提供了一套对话推理服务(chat server)和网页应用（web demo），让用户可以通过类似线上聊天的方式使用MindFormers大语言模型（LLM）推理能力。
@@ -122,7 +130,7 @@ cd chat_web
 
 ```yaml
 web_demo:
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 7860
 ```
 
@@ -140,7 +148,7 @@ python run_chat_web_demo.py &> web.log &
 
 > 如果应用启动在本地，即配置了`web_demo - host`为`127.0.0.1`，则访问`http://127.0.0.1:7860`或`http://localhost:7860`
 >
-> 如果应用启动在远程，即配置了`web_demo - host`为`0.0.0.0`，假设服务器IP地址为`12.23.34.45`，则访问`http://12.23.34.45:7860`
+> 如果应用启动在远程，假设服务器IP地址为`12.23.34.45`，则访问`http://12.23.34.45:7860`
 
 在输入框中输入文字，点击***提交***按钮，稍等片刻后屏幕上将会显示LLM的回答。点击***清除***按钮可以清空聊天记录。
 
@@ -292,7 +300,6 @@ def get_tokenizer(config):
 context:
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "30GB" # 59GB for Atlas 800T A2
   save_graphs: False
@@ -393,13 +400,13 @@ micro_batch_interleave_num: 1
 
 ```yaml
 server:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 11111  # the port that server is listening
   uvicorn_level: 'info'
   access_log: True  # whether open server logging
 
 web_demo:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 7860
 
 model:
@@ -569,7 +576,6 @@ callbacks:
 context:
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "31GB"
   save_graphs: False
@@ -661,13 +667,13 @@ remote_save_url: "Please input obs url on AICC platform."
 
 ```yaml
 server:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 11111  # the port that server is listening
   uvicorn_level: 'info'
   access_log: True  # whether open server logging
 
 web_demo:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 7860
 
 model:
@@ -835,7 +841,6 @@ recompute_config:
 context:
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "30GB"
   save_graphs: False
@@ -901,13 +906,13 @@ do_eval: False
 
 ```yaml
 server:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 11111  # the port that server is listening
   uvicorn_level: 'info'
   access_log: True  # whether open server logging
 
 web_demo:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 7860
 
 model:
