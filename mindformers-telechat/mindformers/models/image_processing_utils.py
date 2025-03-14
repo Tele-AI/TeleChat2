@@ -17,17 +17,14 @@
 import copy
 import json
 import os
-from io import BytesIO
-from typing import Any, Dict, Iterable, Optional, Tuple, Union, List
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
-import requests
 import numpy as np
 import mindspore as ms
-from PIL import Image
 
 from mindformers.tools.logger import logger
 from mindformers.tools.generic import add_model_info_to_auto_map
-from mindformers.tools import PushToHubMixin, cached_file, download_url, is_offline_mode, is_remote_url, custom_object_save
+from mindformers.tools import PushToHubMixin, cached_file, is_offline_mode, custom_object_save
 from mindformers.utils.image_transforms import center_crop, normalize, rescale
 from mindformers.utils.image_utils import ChannelDimension
 from mindformers.models.utils import IMAGE_PROCESSOR_NAME, is_json_serializable
@@ -255,9 +252,6 @@ class ImageProcessingMixin(PushToHubMixin):
         if os.path.isfile(pretrained_model_name_or_path):
             resolved_image_processor_file = pretrained_model_name_or_path
             is_local = True
-        elif is_remote_url(pretrained_model_name_or_path):
-            image_processor_file = pretrained_model_name_or_path
-            resolved_image_processor_file = download_url(pretrained_model_name_or_path)
         else:
             image_processor_file = IMAGE_PROCESSOR_NAME
             try:
@@ -452,28 +446,6 @@ class ImageProcessingMixin(PushToHubMixin):
             raise ValueError(f"{auto_class} is not a valid auto class.")
 
         cls._auto_class = auto_class
-
-    def fetch_images(self, image_url_or_urls: Union[str, List[str]]):
-        """
-        Convert a single or a list of urls into the corresponding `PIL.Image` objects.
-
-        If a single url is passed, the return value will be a single object. If a list is passed a list of objects is
-        returned.
-        """
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) \
-                 Chrome/114.0.0.0"
-                " Safari/537.36"
-            )
-        }
-        if isinstance(image_url_or_urls, list):
-            return [self.fetch_images(x) for x in image_url_or_urls]
-        if isinstance(image_url_or_urls, str):
-            response = requests.get(image_url_or_urls, stream=True, headers=headers)
-            response.raise_for_status()
-            return Image.open(BytesIO(response.content))
-        raise ValueError(f"only a single or a list of entries is supported but got type={type(image_url_or_urls)}")
 
 
 class BaseImageProcessor(ImageProcessingMixin):

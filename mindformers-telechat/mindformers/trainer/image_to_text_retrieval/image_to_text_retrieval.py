@@ -15,8 +15,8 @@
 """Image-to-text Retrieval Trainer."""
 from typing import List, Optional, Union
 from pprint import pprint
-
 import numpy as np
+
 from mindspore import dtype as mstype
 from mindspore.train import Callback
 
@@ -27,12 +27,14 @@ from mindformers.tools.logger import logger
 from mindformers.tools.utils import count_params, get_real_rank
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
 from mindformers.tools.check_rules import check_rules
+from mindformers.utils import deprecated
 from .eval_utils import compute_itm_scores, extract_image_text_mapping, \
     prepare_inputs_for_itm_eval, report_metrics
 from ..config_args import ConfigArguments
 from ..base_trainer import BaseTrainer
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER, alias="image_to_text_retrieval")
 class ImageToTextRetrievalTrainer(BaseTrainer):
     """
@@ -42,7 +44,7 @@ class ImageToTextRetrievalTrainer(BaseTrainer):
         model_name (str): The model name of Task-Trainer. Default: None
     """
     def __init__(self, model_name: str = None):
-        super(ImageToTextRetrievalTrainer, self).__init__("image_to_text_retrieval", model_name)
+        super().__init__("image_to_text_retrieval", model_name)
         self.model_name = model_name
         self.kwargs = None
 

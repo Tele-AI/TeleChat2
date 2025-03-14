@@ -131,8 +131,11 @@ class CogVLM2ForCausalLM(BaseXModalToTextModel):
         self.image_patch_size = self.vision_config.patch_size
         self.image_grid_size = int(self.image_size / self.image_patch_size)
 
-        self.vision_encoder = build_network(config.vision_model)
-        self.llm_model = build_network(config.llm_model)
+        default_args = {
+            "disable_lazy_inline": True
+        }
+        self.vision_encoder = build_network(config=config.vision_model, default_args=default_args)
+        self.llm_model = build_network(config=config.llm_model, default_args=default_args)
         self.mlp_adapter = VisionMLPAdapter(
             self.image_grid_size, vision_hidden_size=self.vision_config.hidden_size,
             text_hidden_size=self.llm_config.hidden_size,
@@ -140,6 +143,13 @@ class CogVLM2ForCausalLM(BaseXModalToTextModel):
             compute_dtype=convert_mstype(self.vision_config.compute_dtype),
             param_init_type=convert_mstype(self.vision_config.param_init_type)
         )
+
+        if config.parallel_config.pipeline_stage > 1:
+            if self.vision_config.stage_num == 0:
+                self.mlp_adapter.pipeline_stage = config.parallel_config.pipeline_stage - 1
+            else:
+                self.mlp_adapter.pipeline_stage = self.vision_config.start_stage + self.vision_config.stage_num - 1
+            logger.info(f"mlp_adapter.pipeline_stage is {self.mlp_adapter.pipeline_stage}")
 
         self.image_start_id = self.config.image_start_id
         self.image_pad_id = self.config.image_pad_id
@@ -149,8 +159,8 @@ class CogVLM2ForCausalLM(BaseXModalToTextModel):
         self.is_first_iteration = True
         self.pad_token_id = config.pad_token_id
         self.eos_token_id = config.eos_token_id
-        self.ignore_token_id = ms.Tensor(config.ignore_token_id, mstype.int64)
-        self.context_token_id = ms.Tensor(128004, mstype.int64)
+        self.ignore_token_id = ms.Tensor(config.ignore_token_id, mstype.int32)
+        self.context_token_id = ms.Tensor(128004, mstype.int32)
 
         self.shape = P.Shape()
         self.reshape = P.Reshape()
@@ -165,7 +175,6 @@ class CogVLM2ForCausalLM(BaseXModalToTextModel):
         self.gather = P.Gather().shard(((1, 1, 1), ()))
         self.equal = P.Equal().shard(((parallel_config.data_parallel, 1), ()))
 
-        self.iter_num = 0
         self.freeze_component()
 
     def freeze_component(self):
@@ -183,29 +192,91 @@ class CogVLM2ForCausalLM(BaseXModalToTextModel):
             for param in self.llm_model.trainable_params():
                 param.requires_grad = False
 
+    def _flatten_inputs(self, input_ids, video_context_pos, batch_valid_length, slot_mapping):
+        """Flatten input_ids and video_context_pos for prefill."""
+        batch_size = batch_valid_length.shape[0]
+        input_ids_list = []
+        video_pos_list = []
+        pos_start = 0
+        for batch_idx in range(batch_size):
+            context_len = batch_valid_length[batch_idx]
+            cur_input_ids = input_ids[batch_idx][:context_len]
+            sub_video_pos = video_context_pos[video_context_pos[:, :, 0] == batch_idx]
+            sub_video_pos[:, 0] = 0
+            sub_video_pos[:, 1] += pos_start
+            pos_start += len(cur_input_ids)
+            video_pos_list.append(sub_video_pos)
+            input_ids_list.append(cur_input_ids)
+        video_pos_list = np.concatenate(video_pos_list, 0)
+        video_context_pos = np.reshape(video_pos_list, (-1, self.num_queries, 2))
+        input_ids = np.concatenate(input_ids_list, 0)
+        input_ids = input_ids.reshape((1, -1))
+        slot_mapping = np.delete(slot_mapping, np.where(slot_mapping == -1))
+        return input_ids, video_context_pos, slot_mapping
+
     def prepare_inputs_for_generation(self, input_ids, **kwargs):
         """Prepare inputs for generation in inference."""
-        images = kwargs.pop("images")
-        video_context_pos = kwargs.pop("video_context_pos")
-        position_ids = kwargs.pop("position_ids")
-        valid_position = kwargs.pop("valid_position")
+        if "mindie_warm_up" in kwargs:
+            return self.prepare_inputs_for_mindie_generation(input_ids, **kwargs)
 
+        images = kwargs.get("images")
+        video_context_pos = kwargs.get("video_context_pos")
+        position_ids = kwargs.get("position_ids")
+        slot_mapping = kwargs.get("slot_mapping")
+        batch_valid_length = np.array(kwargs.get("valid_length_each_example"))
+        batch_size = batch_valid_length.shape[0]  # [bs,]
         prefill = kwargs.get('prefill')
         is_first_iteration = True if prefill is None else prefill
-        if not is_first_iteration:
-            if isinstance(position_ids, Tensor):
-                position_ids = position_ids.numpy()
-            cur_valid_pos = valid_position + self.iter_num
-            position_ids = np.take_along_axis(position_ids, cur_valid_pos, axis=1)
-            position_ids = Tensor(position_ids, ms.int32)
-            self.iter_num += 1
+        if is_first_iteration:
+            video_context_pos = video_context_pos.numpy()
+            input_ids, video_context_pos, slot_mapping = self._flatten_inputs(input_ids, video_context_pos,
+                                                                              batch_valid_length, slot_mapping)
         else:
-            self.iter_num = 0
+            valid_position = np.expand_dims(batch_valid_length, 0) - 1
+            position_ids = position_ids[np.arange(batch_size), valid_position[0]]
+            position_ids = np.expand_dims(position_ids, 0)
         return {
             "input_ids": Tensor(input_ids, mstype.int32),
             "images": images,
-            "video_context_pos": video_context_pos,
-            "position_ids": position_ids
+            "video_context_pos": Tensor(video_context_pos, mstype.int32),
+            "position_ids": Tensor(position_ids, mstype.int32),
+            "slot_mapping": Tensor.from_numpy(slot_mapping)
+        }
+
+    def prepare_inputs_for_mindie_generation(self, input_ids, **kwargs):
+        """Prepare inputs for generation in inference for mindie."""
+        if kwargs.get("mindie_warm_up", False):
+            images = np.zeros((1, 3, 224, 224))
+            video_context_pos = np.array([[0, i] for i in range(66)])
+            video_context_pos = np.expand_dims(video_context_pos, axis=0)
+            bs = len(input_ids)
+            position_ids = np.tile(np.arange(2048), bs).reshape((bs, 2048))
+            return {
+                "input_ids": Tensor(input_ids, mstype.int32),
+                "images": Tensor(images, dtype=ms.float32),
+                "video_context_pos": Tensor(video_context_pos, dtype=ms.int32),
+                "position_ids": Tensor(position_ids, dtype=ms.int32)
+            }
+        position_ids = kwargs.get("position_ids")
+        slot_mapping = kwargs.get("slot_mapping")
+        batch_valid_length = np.array(kwargs.get("valid_length_each_example"))
+        prefill = kwargs.get('prefill')
+        is_first_iteration = True if prefill is None else prefill
+        if is_first_iteration:
+            images = kwargs.get("images")
+            video_context_pos = kwargs.get("video_context_pos")
+            input_ids, video_context_pos, slot_mapping = self._flatten_inputs(input_ids, video_context_pos,
+                                                                              batch_valid_length, slot_mapping)
+        else:
+            images = np.zeros((1, 3, 224, 224))
+            video_context_pos = np.array([[0, i] for i in range(66)])
+            video_context_pos = np.expand_dims(video_context_pos, axis=0)
+        return {
+            "input_ids": Tensor(input_ids, mstype.int32),
+            "images": Tensor(images, dtype=mstype.float32),
+            "video_context_pos": Tensor(video_context_pos, dtype=mstype.int32),
+            "position_ids": Tensor(position_ids, mstype.int32),
+            "slot_mapping": Tensor.from_numpy(slot_mapping)
         }
 
     def prepare_inputs_for_predict_layout(self, input_ids, **kwargs):
@@ -268,7 +339,6 @@ class CogVLM2ForCausalLM(BaseXModalToTextModel):
                 labels = self.masked_fill(labels, pad_content_pos, self.ignore_token_id)
         else:
             tokens = input_ids
-            position_ids = self.stride_slice(position_ids, (0, 0), (bs, seq_len), (1, 1))
 
         input_embeds = self.llm_model.to_embeddings(tokens)
         if attention_mask is None:

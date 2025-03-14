@@ -1,0 +1,168 @@
+seed: 0
+run_mode: 'train'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ""
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+
+
+# context
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  max_call_depth: 10000
+  max_device_memory: "57GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+
+# runner
+runner_config:
+  epochs: 2
+  batch_size: 2
+  sink_mode: True
+  sink_size: 2
+
+runner_wrapper:
+  type: MFTrainOneStepCell
+  enable_global_norm: True
+  scale_sense:
+    type: DynamicLossScaleUpdateCell
+    loss_scale_value: 4294967296
+    scale_factor: 2
+    scale_window: 1000
+
+
+# parallel
+use_parallel: True
+parallel:
+  parallel_mode: 1 # 0-dataset, 1-semi, 2-auto, 3-hybrid
+  gradients_mean: False
+  loss_repeated_mean: True
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+parallel_config:
+  data_parallel: 8
+  model_parallel: 1
+  pipeline_stage: 1
+  micro_batch_num: 1
+  vocab_emb_dp: False
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# moe
+moe_config:
+  expert_num: 1
+  capacity_factor: 1.05
+  aux_loss_factor: 0.05
+  num_experts_chosen: 1
+
+# recompute
+recompute_config:
+  recompute: True
+  parallel_optimizer_comm_recompute: True
+  mp_comm_recompute: False
+  recompute_slice_activation: True
+
+
+# Trainer
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'codegeex_13b'
+# if True, do evaluate during the training process. if false, do nothing.
+# note that the task trainer should support _evaluate_in_training function.
+do_eval: False
+eval_step_interval: -1        # num of step intervals between each eval, -1 means no step end eval.
+eval_epoch_interval: 40        # num of epoch intervals between each eval, 1 means eval on every epoch end.
+
+# train dataset
+train_dataset: &train_dataset
+  data_loader:
+    type: MindDataset
+    dataset_dir: ""
+    shuffle: True
+  input_columns: ["input_ids"]
+  output_columns: ["input_ids", "position_id", "attention_mask"]
+  eod_reset: True
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: True
+  batch_size: 16
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 1
+train_dataset_task:
+  type: CausalLanguageModelDataset
+  dataset_config: *train_dataset
+
+# model
+model:
+  model_config:
+    type: PanguAlphaConfig
+    batch_size: 16
+    seq_length: 2048
+    vocab_size: 52224
+    hidden_size: 5120
+    ffn_hidden_size: 20480
+    num_layers: 40
+    num_heads: 40
+    pad_token_id: 50256
+    eod_token_id: 50256
+    eos_token_id: 50256
+    post_layernorm_residual: False
+    dropout_rate: 0.1
+    embedding_dropout_prob: 0.1
+    hidden_dropout_rate: 0.1
+    attention_dropout_rate: 0.1
+    param_init_type: 'float16'
+    compute_dtype: 'float16'
+    softmax_compute_type: 'float16'
+    hidden_act: 'fast_gelu'
+    use_past: False
+    use_moe: False
+    expert_num: 1
+    per_token_num_experts_chosen: 1
+    checkpoint_name_or_path: "codegeex_13b"
+    single_checkpoint_name_or_path: ""
+    repetition_penalty: 1
+    max_decode_length: 1024
+    top_k: 100
+    top_p: 0.95
+    temperature: 0.8
+    do_sample: True
+    eod_mask_loss: False
+  arch:
+    type: CodeGeexHeadModel
+
+# lr schedule
+lr_schedule:
+  type: polynomial
+  learning_rate: 0.00005
+  lr_end: 0.000001
+  warmup_steps: 2000
+  total_steps: -1 # -1 means it will load the total steps of the dataset
+layer_scale: False
+layer_decay: 0.65
+lr_scale: False
+lr_scale_factor: 256
+
+# optimizer
+optimizer:
+  type: FP32StateAdamWeightDecay
+  beta1: 0.9
+  beta2: 0.95
+  eps: 0.00000001 # 1e-8
+  weight_decay: 0.1
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "Codegeex-13b"
+    save_checkpoint_steps: 500
+    integrated_save: False
+    async_save: False
+  - type: ObsMonitor

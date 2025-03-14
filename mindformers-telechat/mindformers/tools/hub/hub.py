@@ -15,16 +15,12 @@
 """
 Hub utilities: utilities related to download and cache models
 """
-# import json
 import os
 import sys
 from pathlib import Path
 import re
-import tempfile
 from typing import Dict, Optional, Union
-from urllib.parse import urlparse
 from uuid import uuid4
-import warnings
 
 import requests
 
@@ -51,11 +47,6 @@ class HubConstants:
         OM_HUB_CACHE = ""
     OM_MODULES_CACHE = os.getenv("OM_MODULES_CACHE", os.path.join(OM_HOME, "modules"))
     OPENMIND_CACHE = os.getenv("OPENMIND_CACHE", OM_HUB_CACHE)
-
-
-def is_remote_url(url_or_filename):
-    parsed = urlparse(url_or_filename)
-    return parsed.scheme in ("http", "https")
 
 
 def is_offline_mode():
@@ -405,36 +396,6 @@ def cached_file(
         ) from e
 
     return resolved_file
-
-
-def download_url(url, proxies=None):
-    """
-    Downloads a given url in a temporary file. This function is not safe to use in multiple processes.
-    Its only use is for deprecated behavior allowing to download config/models with a single url instead
-    of using the Hub.
-
-    Args:
-        url (`str`): The url of the file to download.
-        proxies (`Dict[str, str]`, *optional*):
-            A dictionary of proxy servers to use by protocol or endpoint, e.g., `{'http': 'foo.bar:3128',
-            'http://hostname': 'foo.bar:4012'}.` The proxies are used on each request.
-
-    Returns:
-        `str`: The location of the temporary file where the url was downloaded.
-    """
-    from openmind_hub import http_get
-
-    warnings.warn(
-        f"Using `from_pretrained` with the url of a file (here {url}) is deprecated. You should host your file "
-        f"on the Hub instead and use the repository ID. Note"
-        " that this is not compatible with the caching system (your file will be downloaded at each execution) or"
-        " multiple processes (each process will download the file in a different temporary file).",
-        FutureWarning,
-    )
-    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        http_get(url, tmp_file, proxies=proxies)
-        tmp_file_path = tmp_file.name
-    return tmp_file_path
 
 
 def extract_commit_hash(resolved_file: Optional[str], commit_hash: Optional[str]) -> Optional[str]:

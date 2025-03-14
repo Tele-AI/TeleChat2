@@ -16,8 +16,6 @@ mindformers.models.LlamaTokenizer
         - **add_bos_token** (bool, 可选) - 是否在序列开始处添加 `bos_token` 。默认值： ``True`` 。
         - **add_eos_token** (bool, 可选) - 是否在序列末尾添加 `eos_token` 。默认值： ``False`` 。
         - **clean_up_tokenization_spaces** (bool, 可选) - 解码后是否清理空格。清理包括去除如额外空格等潜在的符号。默认值： ``False`` 。
-        - **use_default_system_prompt** (bool, 可选) - 是否使用Llama的默认系统提示。默认值： ``False`` 。
-        - **spaces_between_special_tokens** (bool, 可选) - 是否在特殊词元之间添加空格。默认值： ``False`` 。
         - **legacy** (bool, 可选) - 是否使用分词器的 `legacy` 行为。默认值： ``True`` 。
 
     返回：

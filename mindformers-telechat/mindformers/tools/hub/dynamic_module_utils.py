@@ -15,14 +15,18 @@
 # limitations under the License.
 """Utilities to dynamically load objects from the Hub."""
 import filecmp
+import hashlib
 import importlib
+import importlib.util
 import os
 import re
 import shutil
 import signal
 import sys
 import warnings
+import threading
 from pathlib import Path
+from types import ModuleType
 import typing
 from typing import Any, Dict, List, Optional, Union
 
@@ -34,13 +38,14 @@ from mindformers.tools.hub.hub import (
     HubConstants,
 )
 from mindformers.tools.logger import logger
+_MF_REMOTE_CODE_LOCK = threading.Lock()
 
 
 def init_mf_modules():
     """
     Creates the cache directory for modules with an init, and adds it to the Python path.
     """
-    # This function has already been executed if HF_MODULES_CACHE already is in the Python path.
+    # This function has already been executed if OM_MODULES_CACHE already is in the Python path.
     if HubConstants.OM_MODULES_CACHE in sys.path:
         return
 
@@ -181,22 +186,49 @@ def check_imports(filename: Union[str, os.PathLike]) -> List[str]:
     return get_relative_imports(filename)
 
 
-def get_class_in_module(class_name: str, module_path: Union[str, os.PathLike]) -> typing.Type:
+def get_class_in_module(class_name: str, module_path: Union[str, os.PathLike],
+                        force_reload: bool = False) -> typing.Type:
     """
     Import a module on the cache directory for modules and extract a class from it.
 
     Args:
         class_name (`str`): The name of the class to import.
         module_path (`str` or `os.PathLike`): The path to the module to import.
+        force_reload (`bool`, *optional*, defaults to `False`):
+            Whether to reload the dynamic module from file if it already exists in `sys.modules`.
+            Otherwise, the module is only reloaded if the file has changed.
 
     Returns:
         `typing.Type`: The class looked for.
     """
-    if module_path.find(".") != -1:
-        raise ValueError("Path should not contains '.'")
-    module_path = module_path.replace(os.path.sep, ".")
-    module = importlib.import_module(module_path)
-    return getattr(module, class_name)
+    file_path = os.path.normpath(module_path)
+    if file_path.endswith(".py"):
+        file_path = os.path.splitext(file_path)[0]
+    file_path = file_path.replace(os.path.sep, ".")
+    module_file: Path = Path(HubConstants.OM_MODULES_CACHE) / module_path
+    with _MF_REMOTE_CODE_LOCK:
+        if force_reload:
+            sys.modules.pop(file_path, None)
+            importlib.invalidate_caches()
+        cached_module: Optional[ModuleType] = sys.modules.get(file_path)
+        module_spec = importlib.util.spec_from_file_location(file_path, location=module_file)
+
+        # Hash the module file and all its relative imports to check if we need to reload it
+        module_files: List[Path] = [module_file] + sorted(map(Path, get_relative_import_files(module_file)))
+        module_hash: str = hashlib.sha256(b"".join(bytes(f) + f.read_bytes() for f in module_files)).hexdigest()
+
+        module: ModuleType
+        if cached_module is None:
+            module = importlib.util.module_from_spec(module_spec)
+            # insert it into sys.modules before any loading begins
+            sys.modules[file_path] = module
+        else:
+            module = cached_module
+        # reload in both cases, unless the module is already imported and the hash hits
+        if getattr(module, "__transformers_module_hash__", "") != module_hash:
+            module_spec.loader.exec_module(module)
+            module.__transformers_module_hash__ = module_hash
+        return getattr(module, class_name)
 
 
 # pylint: disable=C0103
@@ -499,7 +531,7 @@ def get_class_from_dynamic_module(
         local_files_only=local_files_only,
         repo_type=repo_type,
     )
-    return get_class_in_module(class_name, final_module.replace(".py", ""))
+    return get_class_in_module(class_name, final_module, force_reload=force_download)
 
 
 # pylint: disable=R1710

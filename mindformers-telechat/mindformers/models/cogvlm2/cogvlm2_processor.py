@@ -170,8 +170,8 @@ class CogVLM2VideoContentBuilder(ModalContentBuilder):
     def __init__(
             self,
             context_pad_token,
-            context_length,
-            use_custom_token: bool = True,
+            context_length: int = 66,
+            use_custom_token: bool = False,
             start_token: str = None,
             end_token: str = None,
             tokenizer: Any = None,
@@ -179,7 +179,8 @@ class CogVLM2VideoContentBuilder(ModalContentBuilder):
             pad_frames: bool = False,
             image_size: int = 224,
             frames_interval: Union[int, str] = 1,
-            is_train: bool = False
+            is_train: bool = False,
+            pos_pad_length: int = 2048,
     ):
         super(CogVLM2VideoContentBuilder, self).__init__(
             type_="video",
@@ -190,6 +191,7 @@ class CogVLM2VideoContentBuilder(ModalContentBuilder):
             end_token=end_token,
             tokenizer=tokenizer
         )
+        self.pos_pad_length = pos_pad_length
         self.vision_token_type = 1
         self.language_token_type = 0
         self.is_train = is_train
@@ -269,12 +271,11 @@ class CogVLM2VideoContentBuilder(ModalContentBuilder):
         input_ids = np.delete(input_ids, np.where(input_ids == self.end_token_id))
 
         position_ids = np.array(position_ids)
-        padding_length = len(input_ids) - len(position_ids)
+        padding_length = self.pos_pad_length - len(position_ids)
         position_ids = np.pad(position_ids, (0, padding_length), 'linear_ramp',
                               end_values=(0, cur_position + padding_length - 1))
 
         result_recorder.put("position_ids", position_ids)
-        result_recorder.put("valid_position", np.array([position_ids.size]))
         return input_ids
 
 
@@ -300,9 +301,12 @@ class CogVLM2ContentTransformTemplate(ModalContentTransformTemplate):
 
         self.modal_builders = {
             "video": CogVLM2VideoContentBuilder(
-                self.video_pad_token, 66, use_custom_token=False,
-                start_token=self.video_start_token, end_token=self.video_end_token,
-                frames_interval=frames_interval, is_train=is_train),
+                context_pad_token=self.video_pad_token,
+                start_token=self.video_start_token,
+                end_token=self.video_end_token,
+                frames_interval=frames_interval,
+                is_train=is_train,
+                pos_pad_length=kwargs.get('pos_pad_length')),
             "text": BaseTextContentBuilder(),
         }
 
@@ -357,36 +361,12 @@ class CogVLM2ContentTransformTemplate(ModalContentTransformTemplate):
             position_ids = np.arange(len(result.get("input_ids")), dtype=np.int32)
             update_items["position_ids"] = ms.Tensor(position_ids)
         if self.mode == 'train':
-            position_ids = result.get("position_ids")
-            padding_start = position_ids[-1]
-            padding_length = self.max_length - len(position_ids) + 1
-            position_ids = np.pad(position_ids, (0, padding_length), 'linear_ramp',
-                                  end_values=(0, padding_start + padding_length))
-            update_items["position_ids"] = position_ids
+            update_items["position_ids"] = result.get("position_ids").astype(np.int32)
             images = result.get("images")
             if isinstance(images, ms.Tensor):
                 images = images.numpy()
             update_items["images"] = images
         return update_items
-
-    def batch(self, data_list, token_padding_length, **kwargs):
-        """Get batched input data."""
-        batched_data = super().batch(data_list, token_padding_length, **kwargs)
-
-        position_ids_list = batched_data.get("position_ids")
-        padded_position_ids_list = []
-        for position_ids in position_ids_list:
-            padding_length = token_padding_length - len(position_ids)
-            if padding_length > 0:
-                padding_start = position_ids[-1]
-                position_ids = np.pad(position_ids, (0, padding_length), 'linear_ramp',
-                                      end_values=(0, padding_start + padding_length))
-            else:
-                position_ids = position_ids[:token_padding_length]
-
-            padded_position_ids_list.append(position_ids)
-        batched_data["position_ids"] = ms.Tensor(np.stack(padded_position_ids_list, axis=0), ms.int32)
-        return batched_data
 
     # pylint: disable=W0613
     def post_process(self, output_ids, **kwargs):

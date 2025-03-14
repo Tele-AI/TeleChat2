@@ -1,51 +1,27 @@
 seed: 0
-output_dir: './output' # path to save checkpoint/strategy
-load_checkpoint: ""
-src_strategy_path_or_dir: ''
-auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
-only_save_strategy: False
-resume_training: False
+output_dir: "./output"
+run_mode: "predict"
 use_parallel: False
-run_mode: 'predict'
 
-# trainer config
+load_checkpoint: ""
+load_ckpt_format: "ckpt"
+auto_trans_ckpt: False
+
+context:
+  mode: 0 # 0--Graph Mode; 1--Pynative Mode
+  device_id: 0
+  max_device_memory: "58GB"
+  ascend_config:
+    precision_mode: "must_keep_origin_dtype"
+
 trainer:
   type: MultiModalToTextGenerationTrainer
   model_name: 'cogvlm2-video-llama3-chat'
 
-runner_config:
-  sink_mode: True
-
-# callbacks
-callbacks:
-  - type: MFLossMonitor
-  - type: CheckpointMonitor
-    prefix: "cogvlm2-video-llama3-chat"
-    save_checkpoint_steps: 10000
-    keep_checkpoint_max: 3
-    integrated_save: False
-    async_save: False
-  - type: ObsMonitor
-
-# default parallel of device num = 8 for Atlas 800T A2
 parallel_config:
-  data_parallel: 1
   model_parallel: 2
-  pipeline_stage: 1
-  micro_batch_num: 1
-  vocab_emb_dp: False
-  gradient_aggregation_group: 4
-# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
-micro_batch_interleave_num: 1
 
-# recompute config
-recompute_config:
-  recompute: False
-  select_recompute: False
-  parallel_optimizer_comm_recompute: True
-  mp_comm_recompute: False
-  recompute_slice_activation: True
-
+# model config
 model:
   model_config:
     type: CogVLM2Config
@@ -125,55 +101,16 @@ model:
 # processor
 processor:
   type: BaseXModalToTextProcessor
-  max_length: 2048
-
   model_transform_template:
     type: CogVLM2ContentTransformTemplate
-    output_columns: [ "input_ids", "position_ids", "images", "video_context_pos", "valid_position" ]
+    output_columns: [ "input_ids", "position_ids", "images", "video_context_pos" ]
     vstack_columns: [ "images", "video_context_pos" ]
     signal_type: "chat"
-
+    pos_pad_length: 2048
   tokenizer:
     add_bos_token: False
     add_eos_token: False
     max_length: 2048
     pad_token: "<|reserved_special_token_0|>"
-    vocab_file: "/{path}/tokenizer.model"
+    vocab_file: "/path/tokenizer.model"
     type: CogVLM2Tokenizer
-
-# mindspore context init config
-context:
-  mode: 0 # 0--Graph Mode; 1--Pynative Mode
-  device_target: "Ascend"
-  enable_graph_kernel: False
-  ascend_config:
-    precision_mode: "must_keep_origin_dtype"
-  max_call_depth: 10000
-  max_device_memory: "58GB"
-  save_graphs: False
-  save_graphs_path: "./graph"
-  device_id: 0
-  jit_level: 'O0'
-  infer_boost: 'on'
-
-# parallel context config
-parallel:
-  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
-  gradients_mean: False
-  enable_alltoall: False
-  full_batch: True
-  search_mode: "sharding_propagation"
-  enable_parallel_optimizer: False
-  strategy_ckpt_config:
-    save_file: "./ckpt_strategy.ckpt"
-    only_trainable_params: False
-  parallel_optimizer_config:
-    gradient_accumulation_shard: False
-    parallel_optimizer_threshold: 64
-
-profile: False
-profile_start_step: 5
-profile_stop_step: 10
-init_start_profile: False
-profile_communication: False
-profile_memory: True

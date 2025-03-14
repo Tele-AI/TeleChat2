@@ -14,9 +14,9 @@
 # ============================================================================
 """Masked Image Modeling Trainer."""
 from typing import Optional, List, Union
-
 import numpy as np
 from PIL.Image import Image
+
 from mindspore import Tensor
 from mindspore.train import Callback
 from mindspore.nn import TrainOneStepCell, Optimizer, Cell
@@ -32,8 +32,10 @@ from mindformers.trainer.base_trainer import BaseTrainer
 from mindformers.models.image_processing_utils import BaseImageProcessor
 from mindformers.tools.logger import logger
 from mindformers.tools.image_tools import load_image
+from mindformers.utils import deprecated
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER)
 class MaskedImageModelingTrainer(BaseTrainer):
     """
@@ -52,7 +54,7 @@ class MaskedImageModelingTrainer(BaseTrainer):
         <class 'mindformers.trainer.masked_image_modeling.masked_image_modeling_pretrain.MaskedImageModelingTrainer'>
     """
     def __init__(self, model_name: str = None):
-        super(MaskedImageModelingTrainer, self).__init__("masked_image_modeling", model_name)
+        super().__init__("masked_image_modeling", model_name)
 
     def train(self,
               config: Optional[Union[dict, MindFormerConfig, ConfigArguments, TrainingArguments]] = None,

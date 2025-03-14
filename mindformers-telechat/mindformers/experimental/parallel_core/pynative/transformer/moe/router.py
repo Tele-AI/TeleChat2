@@ -115,7 +115,7 @@ class TopKRouter(nn.Cell):
             logits (Tensor): the logits tensor after gating, shape: [num_tokens, num_experts].
 
         Returns:
-            Tuple of Tensor
+            Tuple of Tensors.
 
             - **probs** (Tensor) - The probabilities tensor after load balancing.
             - **indices** (Tensor) - The indices tensor after top-k selection.
@@ -141,7 +141,7 @@ class TopKRouter(nn.Cell):
             num_local_tokens_per_expert (Tensor): The number of tokens per expert, shape: [num_experts].
             activation (Tensor): The activation tensor to attach the gradient function to.
 
-        Returns:
+        Outputs:
             Tensor, the activation tensor with the attached gradient function.
         """
         moe_aux_loss_coeff = self.moe_config.moe_aux_loss_coeff
@@ -168,7 +168,7 @@ class TopKRouter(nn.Cell):
         Args:
             logits (Tensor): The logits of the router.
 
-        Returns:
+        Outputs:
             Tensor, the logits after applying the z-loss.
         """
         if self.moe_config.moe_z_loss_coeff is not None and self.training:

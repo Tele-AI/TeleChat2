@@ -30,28 +30,72 @@ from ..pet_config import LoraConfig
 from ..utils import re_match_list
 
 
+def get_dtype(cell, config):
+    """get param_init_type and compute_dtype from cell and lora config."""
+    if config.param_init_type:
+        param_init_type = config.param_init_type
+    elif isinstance(cell, nn.Dense):
+        param_init_type = cell.weight.dtype
+    elif isinstance(cell, Linear):
+        param_init_type = cell.param_init_type
+
+    if config.compute_dtype:
+        compute_dtype = config.compute_dtype
+    elif isinstance(cell, nn.Dense):
+        compute_dtype = cell.weight.dtype
+    elif isinstance(cell, Linear):
+        compute_dtype = cell.dtype
+
+    return param_init_type, compute_dtype
+
+
 def recursive_replace_dense_cell(net, config):
     """default replace all dense."""
     # pylint: disable=W0212
+    from mindformers.experimental.graph.tensor_parallel import (ColumnParallelLinear, RowParallelLinear,
+                                                                LoRAColumnParallelLinear, LoRARowParallelLinear)
     for name, cell in net._cells.items():
         if cell:
             # add white list spaces.
             if re_match_list(name, config.exclude_layers):
                 continue
             if re.match(config.target_modules, name):
-                if not isinstance(cell, nn.Dense) and not isinstance(cell, Linear):
+                if not isinstance(cell, (nn.Dense, Linear, ColumnParallelLinear, RowParallelLinear)):
                     continue
-                in_channels = cell.in_channels
-                out_channels = cell.out_channels
-                dest_cell = LoRADense(in_channels=in_channels,
-                                      out_channels=out_channels,
-                                      lora_rank=config.lora_rank,
-                                      lora_alpha=config.lora_alpha,
-                                      lora_dropout=config.lora_dropout,
-                                      param_init_type=config.param_init_type,
-                                      compute_dtype=config.compute_dtype,
-                                      has_bias=cell.has_bias,
-                                      activation=cell.activation)
+                if isinstance(cell, ColumnParallelLinear):
+                    dest_cell = LoRAColumnParallelLinear(input_size=cell.input_size, output_size=cell.output_size,
+                                                         config=cell.config, init_method=cell.init_method,
+                                                         bias=cell.has_bias,
+                                                         skip_bias_add=cell.skip_bias_add,
+                                                         skip_weight_param_allocation=cell.skip_weight_param_allocation,
+                                                         transpose_b=cell.transpose_b,
+                                                         compute_dtype=cell.compute_dtype,
+                                                         lora_rank=config.lora_rank,
+                                                         lora_alpha=config.lora_alpha,
+                                                         lora_dropout=config.lora_dropout)
+                elif isinstance(cell, RowParallelLinear):
+                    dest_cell = LoRARowParallelLinear(input_size=cell.input_size, output_size=cell.output_size,
+                                                      config=cell.config, init_method=cell.init_method,
+                                                      bias=cell.has_bias,
+                                                      skip_bias_add=cell.skip_bias_add,
+                                                      transpose_b=cell.transpose_b,
+                                                      compute_dtype=cell.compute_dtype,
+                                                      lora_rank=config.lora_rank,
+                                                      lora_alpha=config.lora_alpha,
+                                                      lora_dropout=config.lora_dropout)
+                else:
+                    in_channels = cell.in_channels
+                    out_channels = cell.out_channels
+                    param_init_type, compute_dtype = get_dtype(cell, config)
+                    dest_cell = LoRADense(in_channels=in_channels,
+                                          out_channels=out_channels,
+                                          lora_rank=config.lora_rank,
+                                          lora_alpha=config.lora_alpha,
+                                          lora_dropout=config.lora_dropout,
+                                          param_init_type=param_init_type,
+                                          compute_dtype=compute_dtype,
+                                          has_bias=cell.has_bias,
+                                          activation=cell.activation)
 
                 # load weight of original layers.
                 dest_cell.matmul = cell.matmul
@@ -61,7 +105,7 @@ def recursive_replace_dense_cell(net, config):
                     dest_cell.bias_add = cell.bias_add
 
                 # Shard strategies now only support loaded by linear layers.
-                if isinstance(cell, Linear):
+                if isinstance(cell, (Linear, ColumnParallelLinear, RowParallelLinear)):
                     strategy_matmul = cell.matmul.in_strategy
 
                     dest_cell.lora_dropout.dropout.shard((strategy_matmul[0],))

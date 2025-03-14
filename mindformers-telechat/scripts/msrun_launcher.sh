@@ -41,7 +41,10 @@ fi
 WORKSPACE_PATH=$(pwd)
 
 # Add the suffix to the MF_LOG
-export LOG_MF_PATH=$WORKSPACE_PATH/output/log$MF_LOG_SUFFIX
+if [ -z "${LOG_MF_PATH+x}" ] || [ "$LOG_MF_PATH" == "" ]
+then
+  export LOG_MF_PATH=$WORKSPACE_PATH/output/log$MF_LOG_SUFFIX
+fi
 
 # Set the PLOG path
 if [ -z "${PLOG_REDIRECT_TO_OUTPUT+x}" ] || [ $PLOG_REDIRECT_TO_OUTPUT == False ]

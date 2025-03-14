@@ -26,9 +26,9 @@ mindformers.core.LinearWithWarmUpLR
     参数：
         - **learning_rate** (float) - 学习率的初始值。
         - **total_steps** (int) - 总步数。
-        - **warmup_steps** (int) - 预热步骤数。默认值： ``None`` 。
-        - **warmup_lr_init** (float) - 预热阶段的初始学习率。默认值： ``0.`` 。
-        - **warmup_ratio** (float) - 用于预热的总训练步数比例。默认值： ``None`` 。
+        - **warmup_steps** (int, 可选) - 预热步骤数。默认值： ``None`` 。
+        - **warmup_lr_init** (float, 可选) - 预热阶段的初始学习率。默认值： ``0.`` 。
+        - **warmup_ratio** (float, 可选) - 用于预热的总训练步数比例。默认值： ``None`` 。
 
     输入：
         - **global_step** (int) - 全局步数。

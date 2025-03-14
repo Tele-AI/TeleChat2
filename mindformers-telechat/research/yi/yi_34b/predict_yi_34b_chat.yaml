@@ -1,0 +1,124 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: '' # 必填
+src_strategy_path_or_dir: ''
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+run_mode: 'predict'
+use_parallel: True
+
+# trainer config
+trainer:
+  type: CausalLanguageModelingTrainer
+  model_name: 'yi_34b'
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 32
+  sink_mode: True
+  sink_size: 1
+
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  strategy_ckpt_save_file: "./ckpt_strategy.ckpt"
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+# default parallel of device num = 8 for Atlas 800
+parallel_config:
+  data_parallel: 1
+  model_parallel: 4
+  pipeline_stage: 1
+  use_seq_parallel: False
+  micro_batch_num: 4
+  vocab_emb_dp: True
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# recompute config
+recompute_config:
+  recompute: False
+  select_recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  max_call_depth: 10000
+  max_device_memory: "58GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+
+# model config
+model:
+  model_config:
+    type: LlamaConfig
+    batch_size: 32 # add for increase predict
+    seq_length: 16384
+    hidden_size: 7168
+    num_layers: 60
+    num_heads: 56
+    max_position_embedding: 4096
+    vocab_size: 64000
+    intermediate_size: 20480
+    multiple_of: 256
+    n_kv_heads: 8
+    rms_norm_eps: 1.0e-5
+    bos_token_id: 6
+    eos_token_id: 7
+    pad_token_id: 0
+    ignore_token_id: -100
+    theta: 5000000.0
+    compute_dtype: "bfloat16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "bfloat16"
+    param_init_type: "bfloat16"
+    use_past: True
+    pretrain_seqlen: 4096 # seqlen of the pretrain checkpoint: 2048 for llama and 4096 for llama2
+    extend_method: "None" # support "None", "PI", "NTK"
+    compute_in_2d: False
+    use_flash_attention: True # FA can accelerate training or finetune
+    block_size: 128
+    num_blocks: 2048
+    offset: 0
+    use_past_shard: False
+    checkpoint_name_or_path: ""
+    repetition_penalty: 1.0
+    max_decode_length: 4074
+    top_k: 40
+    top_p: 0.8
+    temperature: 0.6
+    do_sample: False
+    is_dynamic: True
+  arch:
+    type: LlamaForCausalLM
+
+processor:
+  return_tensors: ms
+  tokenizer:
+    additional_special_tokens: ['<|im_start|>','<|im_end|>','<|im_sep|>']
+    unk_token: '<unk>'
+    bos_token: '<|startoftext|>'
+    eos_token: '<|endoftext|>'
+    pad_token: '<unk>'
+    type: LlamaTokenizer
+    vocab_file: "" # 必填
+    add_bos_token: False
+    add_eos_token: False
+    chat_template: "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+  type: LlamaProcessor
+

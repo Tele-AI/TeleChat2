@@ -151,8 +151,7 @@ class TelechatAttentionInterleave(nn.Cell):
                  rotary_dtype=mstype.float32,
                  param_init_type=mstype.float32,
                  qkv_has_bias=False,
-                 wo_has_bias=True,
-                 is_dynamic=False,
+                 out_proj_has_bias=True,
                  use_rope_slice=False,
                  use_flash_attention=False,
                  parallel_config=TransformerOpParallelConfig()):
@@ -167,7 +166,7 @@ class TelechatAttentionInterleave(nn.Cell):
         self.n_rep = self.n_head // self.n_kv_head
         self.kv_dim = self.n_kv_head * self.head_dim
         self.qkv_has_bias = qkv_has_bias
-        self.wo_has_bias = wo_has_bias
+        self.out_proj_has_bias = out_proj_has_bias
         self.dtype = compute_dtype
         self.softmax_dtype = softmax_compute_dtype
         self.is_first_iteration = True
@@ -208,24 +207,21 @@ class TelechatAttentionInterleave(nn.Cell):
                                  sigma=sigma,
                                  mean=mean,
                                  compute_dtype=compute_dtype,
-                                 param_init_type=param_init_type,
-                                 skip_redistribution=is_dynamic)
+                                 param_init_type=param_init_type)
         self.wk_v = TelechatLinear(self.hidden_size,
                                    self.n_kv_head * self.head_dim * 2,
                                    has_bias=qkv_has_bias,
                                    sigma=sigma,
                                    mean=mean,
                                    compute_dtype=compute_dtype,
-                                   param_init_type=param_init_type,
-                                   skip_redistribution=is_dynamic)
+                                   param_init_type=param_init_type)
         self.wo = TelechatLinear(in_channels=self.hidden_size,
                                  out_channels=self.hidden_size,
-                                 has_bias=wo_has_bias,
+                                 has_bias=out_proj_has_bias,
                                  sigma=sigma,
                                  mean=mean,
                                  compute_dtype=compute_dtype,
                                  param_init_type=param_init_type,
-                                 skip_redistribution=is_dynamic,
                                  keep_prob=1 - self.hidden_dropout_prob)
 
         dp = parallel_config.data_parallel
@@ -249,12 +245,12 @@ class TelechatAttentionInterleave(nn.Cell):
             else:
                 self.wq.shard(((dp, 1), (mp, 1)))
                 self.wk_v.shard(((dp, 1), (mp, 1)))
-            if self.wo_has_bias:
+            if self.out_proj_has_bias:
                 self.wo.shard(((dp, mp), (1, mp)), ((dp, 1), (1,)))
             else:
                 self.wo.shard(((dp, mp), (1, mp)))
             if parallel_config.use_seq_parallel and self.is_first_iteration:
-                if self.wo_has_bias:
+                if self.out_proj_has_bias:
                     self.wo.shard(((dp, mp), (1, mp)), ((dp * mp, 1), (1,)), out_strategy_matmul=((dp * mp, 1),))
                 else:
                     self.wo.shard(((dp, mp), (1, mp)), out_strategy_matmul=((dp * mp, 1),))
@@ -461,8 +457,7 @@ class TelechatDecodeLayerInterleave(nn.Cell):
                  param_init_type=mstype.float32,
                  res_dtype=mstype.float32,
                  qkv_has_bias=False,
-                 wo_has_bias=True,
-                 is_dynamic=False,
+                 out_proj_has_bias=True,
                  use_rope_slice=False,
                  use_flash_attention=False,
                  fine_grain_interleave=2,
@@ -502,8 +497,7 @@ class TelechatDecodeLayerInterleave(nn.Cell):
                                                      rotary_dtype=rotary_dtype,
                                                      param_init_type=param_init_type,
                                                      qkv_has_bias=qkv_has_bias,
-                                                     wo_has_bias=wo_has_bias,
-                                                     is_dynamic=is_dynamic,
+                                                     out_proj_has_bias=out_proj_has_bias,
                                                      use_rope_slice=use_rope_slice,
                                                      use_flash_attention=use_flash_attention,
                                                      parallel_config=parallel_config)
@@ -515,8 +509,7 @@ class TelechatDecodeLayerInterleave(nn.Cell):
                                                 hidden_dropout_prob=hidden_dropout_prob,
                                                 ffn_dim_multiplier=ffn_dim_multiplier,
                                                 compute_dtype=compute_dtype,
-                                                param_init_type=param_init_type,
-                                                is_dynamic=is_dynamic)
+                                                param_init_type=param_init_type)
 
         dp = parallel_config.data_parallel
         mp = parallel_config.model_parallel

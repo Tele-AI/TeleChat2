@@ -27,7 +27,7 @@ class TestRouter:
         os.environ['ASCEND_HOME_PATH'] = "/usr/local/Ascend/latest"
         os.environ['MS_MEMORY_POOL_RECYCLE'] = '1'
 
-    @pytest.mark.level0
+    @pytest.mark.level1
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.env_onecard
     def test_graph_router(self):
@@ -40,7 +40,7 @@ class TestRouter:
                         f'--log_dir=log_router --join=True {cur_dir}/run_router.py --graph')
         assert ret == 0
 
-    @pytest.mark.level1
+    @pytest.mark.level0
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.env_onecard
     def test_pynative_router(self):

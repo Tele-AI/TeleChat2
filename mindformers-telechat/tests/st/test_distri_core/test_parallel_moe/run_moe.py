@@ -16,6 +16,7 @@
 
 import argparse
 import os
+import json
 
 import mindspore as ms
 import mindspore.common.dtype as mstype
@@ -32,7 +33,8 @@ from mindformers.experimental.parallel_core.pynative.config import (
     LoraConfig,
     ModelParallelConfig,
     MoEConfig,
-    TransformerConfig
+    TransformerConfig,
+    TrainingConfig
 )
 from mindformers.experimental.parallel_core.pynative.parallel_state import (
     get_expert_model_parallel_group,
@@ -92,7 +94,6 @@ class GoldenMoENet(nn.Cell):
                                ffn_dim_multiplier=ffn_dim_multiplier,
                                compute_dtype=compute_dtype,
                                param_init_type=param_init_type,
-                               is_dynamic=False,
                                parallel_config=parallel_config)
         self.feed_forward = MoEV2(ffn=ffn,
                                   dim=hidden_size,
@@ -152,18 +153,26 @@ def generate_golden(model_config, args):
     moe_config = model_config.moe_config
 
     dp = parallel_config.data_parallel
-
+    mp = parallel_config.model_parallel
     ms.set_context(device_target="Ascend", mode=ms.GRAPH_MODE, deterministic='ON', pynative_synchronize=True)
     init()
     rank_id = get_rank()
     ms.reset_auto_parallel_context()
     ms.set_auto_parallel_context(parallel_mode=ms.ParallelMode.STAND_ALONE)
-
+    if args.comp_comm_parallel:
+        config = {"enable_interleave_split_concat_branch": True}
+        with open("./parallel_speed_up_test.json", "w") as file:
+            json.dump(config, file, indent=4, separators=(',', ': '))
+        ms.set_context(
+            ascend_config={"parallel_speed_up_json_path": "./parallel_speed_up_test.json"},
+            jit_config={"jit_level": "O2"}
+        )
     ms.set_seed(1921)
     hidden_states = np.random.normal(size=(args.dataset_size, model_config.seq_length, model_config.hidden_size))
     hidden_states = hidden_states.astype(np.float32)
     dataset = TestData(data_size=args.dataset_size, input_data=hidden_states, label_data=hidden_states)
-    dataset = ds.GeneratorDataset(dataset, column_names=['hidden_states', 'label'], num_shards=dp, shard_id=rank_id)
+    dataset = ds.GeneratorDataset(dataset, column_names=['hidden_states', 'label'], num_shards=dp,
+                                  shard_id=rank_id // mp)
     dataset = dataset.batch(args.batch_size)
 
     network = GoldenMoENet(hidden_size=model_config.hidden_size,
@@ -243,11 +252,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--generate_golden', action='store_true', help="Generate golden data for test.")
     parser.add_argument('--dp', type=int, default=2, help="data_parallel")
+    parser.add_argument('--mp', type=int, default=1, help="model_parallel")
     parser.add_argument('--ep', type=int, default=2, help="expert_model_parallel_size")
     parser.add_argument('--batch_size', type=int, default=1, help="batch_size")
+    parser.add_argument('--hidden_act', type=str, default='swiglu', help="activation")
     parser.add_argument('--dataset_size', type=int, default=20, help="dataset_size")
     parser.add_argument('--aux_loss', action='store_true', help="use aux_loss load balancing type.")
+    parser.add_argument('--aux_loss_free', action='store_true', help="use aux_loss_free load balancing type.")
     parser.add_argument('--z_loss_coeff', type=float, default=None, help="use aux_loss load balancing type.")
+    parser.add_argument('--use_seq_parallel', default=False, help="use short sequence parallel.", action='store_true')
+    parser.add_argument('--comp_comm_parallel', default=False, help="use comp comm parallel.", action='store_true')
+    parser.add_argument('--comp_comm_parallel_degree', type=int, default=2, help="comp comm parallel degree.")
+    parser.add_argument('--use_allgather_dispatcher', type=bool, default=False, help="use allgather dispatcher")
+
 
     cli_args, rest_args = parser.parse_known_args()
     balancing_type = 'none'
@@ -261,6 +278,12 @@ if __name__ == '__main__':
         expert_model_parallel_size=cli_args.ep,
         use_seq_parallel=False
     )
+    if cli_args.use_seq_parallel or cli_args.comp_comm_parallel:
+        parallel_cfg.model_parallel = cli_args.mp
+        parallel_cfg.expert_parallel = cli_args.ep
+    if cli_args.use_seq_parallel:
+        parallel_cfg.use_seq_parallel = True
+
     moe_cfg = MoEConfig(
         num_experts=4,
         moe_router_topk=1,
@@ -284,6 +307,7 @@ if __name__ == '__main__':
         enable_sdrop=False,
         router_dense_type='float32'
     )
+    training_cfg = TrainingConfig(parallel_config=parallel_cfg)
     model_cfg = TransformerConfig(
         vocab_size=1,
         num_layers=1,
@@ -292,7 +316,7 @@ if __name__ == '__main__':
         hidden_size=16,
         ffn_hidden_size=64,
         gated_linear_unit=True,
-        hidden_act="swiglu",
+        hidden_act=cli_args.hidden_act,
         qkv_has_bias=True,
         mlp_has_bias=False,
         params_dtype='float32',
@@ -301,10 +325,25 @@ if __name__ == '__main__':
         fp32_residual_connection=False,
         parallel_config=parallel_cfg,
         moe_config=moe_cfg,
-        lora_config=LoraConfig(use_lora=False)
+        lora_config=LoraConfig(use_lora=False),
+        training_config=training_cfg
     )
 
     if cli_args.generate_golden:
+        if cli_args.aux_loss_free:
+            moe_cfg_golden.balance_via_topk_bias = True
+            moe_cfg_golden.topk_bias_update_rate = 0.001
+            model_cfg.parallel_config.expert_parallel = model_cfg.parallel_config.expert_model_parallel_size
+        if cli_args.comp_comm_parallel or cli_args.use_seq_parallel:
+            moe_cfg_golden.capacity_factor = 1.1
+        if cli_args.comp_comm_parallel:
+            moe_cfg_golden.comp_comm_parallel = cli_args.comp_comm_parallel
+            moe_cfg_golden.comp_comm_parallel_degree = cli_args.comp_comm_parallel_degree
+        if cli_args.use_allgather_dispatcher:
+            moe_cfg_golden.use_allgather_dispatcher = True
+            model_cfg.parallel_config.expert_parallel = model_cfg.parallel_config.expert_model_parallel_size
+
+
         model_cfg.moe_config = moe_cfg_golden
         generate_golden(model_cfg, cli_args)
     else:

@@ -16,6 +16,7 @@
 from .dataloader import (
     ADGenDataLoader,
     BaseMultiModalDataLoader,
+    BlendedMegatronDatasetDataLoader,
     CLUENERDataLoader,
     Cifar100DataLoader,
     CommonDataLoader,
@@ -70,12 +71,12 @@ from .transforms.build_transforms import build_transforms
 from .base_dataset import BaseDataset
 from .causal_language_model_dataset import CausalLanguageModelDataset
 from .contrastive_language_image_pretrain_dataset import ContrastiveLanguageImagePretrainDataset
+from .dpo_dataset import DPODataset
 from .img_cls_dataset import ImageCLSDataset
 from .keyword_gen_dataset import KeyWordGenDataset
 from .mask_language_model_dataset import MaskLanguageModelDataset
 from .mim_dataset import MIMDataset
 from .question_answering_dataset import QuestionAnsweringDataset
-from .reward_model_dataset import RewardModelDataset
 from .text_classification_dataset import TextClassificationDataset
 from .token_classification_dataset import TokenClassificationDataset
 from .translation_dataset import TranslationDataset
@@ -89,5 +90,6 @@ from .utils import (
 from .modal_to_text_sft_dataset import ModalToTextSFTDataset
 
 __all__ = [
-    'CausalLanguageModelDataset', 'ContrastiveLanguageImagePretrainDataset', 'KeyWordGenDataset', 'MultiTurnDataset',
+    'CausalLanguageModelDataset', 'KeyWordGenDataset', 'MultiTurnDataset',
 ]
+__all__.extend(dataloader.__all__)

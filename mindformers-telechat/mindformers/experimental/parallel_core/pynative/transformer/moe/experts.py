@@ -49,7 +49,7 @@ class SequentialMLP(Module):
         - **token_per_expert** (Tensor) - The number of tokens per expert.
 
     Outputs:
-        Tuple of 2 Tensors.
+        Tuple of 2 Tensor.
 
         - **output_local** (Tensor) - The output of the local experts.
         - **output_bias_local** (Tensor) - The output of the local experts with bias, default is None.

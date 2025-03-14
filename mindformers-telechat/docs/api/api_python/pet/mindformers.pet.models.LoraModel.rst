@@ -9,5 +9,8 @@ mindformers.pet.models.LoraModel
         - **config** (LoraConfig) - 低参微调（Pet）算法的配置基类。
         - **base_model** (PreTrainedModel) - 用于调优的预训练模型。
 
-    返回：
-        LoraModel实例。
+    输入：
+        - **\*inputs** (Tensor) - 原始基本模型的输入参数。
+
+    输出：
+        原始基本模型的输出。

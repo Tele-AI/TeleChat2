@@ -1,0 +1,189 @@
+seed: 0
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ""
+auto_trans_ckpt: False  # If true, auto transform load_checkpoint to load in distributed model
+only_save_strategy: False
+resume_training: False
+use_parallel: False
+run_mode: &run_mode 'predict'
+# trainer config
+trainer:
+  type: MultiModalToTextGenerationTrainer
+  model_name: 'llava'
+
+# runner config
+runner_config:
+  epochs: 2
+  batch_size: 1
+  sink_mode: True
+  sink_size: 1
+
+# optimizer
+optimizer:
+  type: AdamW
+  betas: [0.9,0.999]
+  eps: 1.e-8
+  weight_decay: 0
+
+# lr sechdule
+lr_schedule:
+  type: CosineWithWarmUpLR
+  learning_rate: 1.e-3
+  lr_end: 0.0
+  warmup_steps: 130
+  total_steps: -1 # -1 means it will load the total steps of the datase
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: ObsMonitor
+
+# default parallel of device num = 8 for Atlas 800T A2
+parallel_config:
+  data_parallel: 8
+  model_parallel: 1
+  pipeline_stage: 1
+  use_seq_parallel: False
+  micro_batch_num: 1
+  vocab_emb_dp: True
+  gradient_aggregation_group: 4
+# when model parallel is greater than 1, we can set micro_batch_interleave_num=2, that may accelerate the train process.
+micro_batch_interleave_num: 1
+
+# recompute config
+recompute_config:
+  recompute: False
+  select_recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: True
+
+model:
+  model_config:
+    type: LlavaConfig
+    auto_register: llava_config.LlavaConfig
+    freeze_vision: True
+    freeze_llm: True
+    batch_size: 1
+    seq_length: &seq_length 2048
+    compute_dtype: "float16"
+    layernorm_compute_type: "float32"
+    softmax_compute_type: "float32"
+    rotary_dtype: "float16"
+    param_init_type: "float16"
+    scaling_factor: 1.0 # The scale factor of seq length
+    ignore_token_id: -100
+    repetition_penalty: 1
+    use_past: True
+    block_size: 16
+    num_blocks: 512
+    is_dynamic: True
+    top_k: 0
+    top_p: 0.8
+    max_decode_length: 1024
+    do_sample: False
+
+    vision_config:
+      type: LlavaCLIPConfig
+      auto_register: llava_config.LlavaCLIPConfig
+      arch:
+        type: LlavaVisionEncoder
+        auto_register: llava_model.LlavaVisionEncoder
+      model_config:
+        type: LlavaCLIPConfig
+        auto_register: llava_config.LlavaCLIPConfig
+        hidden_size: 1024
+        intermediate_size: 4096
+        num_hidden_layers: 24
+        num_attention_heads: 16
+        use_flash_attention: False
+        image_size: &image_size 336
+        patch_size: 14
+        num_queries: &num_queries 576
+        hidden_act: "quick_gelu"
+        dropout: 0.0
+        attention_dropout: 0.0
+        initializer_range: 0.02
+        initializer_factor: 1.0
+        checkpoint_name_or_path: ""
+        vision_feature_layer: -2
+        vision_feature_select_strategy: "default"
+
+    text_config:
+      type: LlamaConfig
+      arch:
+        type: LlamaForCausalLM
+      model_config:
+        type: LlamaConfig
+        hidden_size: 4096
+        num_layers: 32
+        num_heads: 32
+        vocab_size: 32064
+        intermediate_size: 11008
+        rms_norm_eps: 1.0e-5
+        emb_dropout_prob: 0.0
+        bos_token_id: 1
+        eos_token_id: 2
+        pad_token_id: 32001
+        use_flash_attention: True
+        use_past_shard: False
+        offset: 0
+        checkpoint_name_or_path: ""
+  arch:
+    type: LlavaVlm
+    auto_register: llava_model.LlavaVlm
+
+# processor
+processor:
+  type: BaseXModalToTextProcessor
+  max_length: *seq_length
+  add_special_tokens: True
+  model_transform_template:
+    type: LlavaContentTransformTemplate
+    auto_register: llava_processor.LlavaContentTransformTemplate
+    context_length: *num_queries
+    image_size: *image_size
+    text_instruct_mode: True
+    output_columns: [ "input_ids", "images", "image_context_pos", "no_image_tag"]
+    vstack_columns: [ "images", "image_context_pos"]
+  tokenizer:
+    add_bos_token: True
+    add_eos_token: False
+    vocab_file: ""
+    type: LlavaTokenizer
+    auto_register: llava_tokenizer.LlavaTokenizer
+
+# mindspore context init config
+context:
+  mode: 0 #0--Graph Mode; 1--Pynative Mode
+  device_target: "Ascend"
+  ascend_config:
+    precision_mode:
+      "must_keep_origin_dtype"
+  max_call_depth: 10000
+  max_device_memory: "58GB"
+  save_graphs: False
+  save_graphs_path: "./graph"
+  device_id: 0
+
+# parallel context config
+parallel:
+  parallel_mode: 1 # 0-data parallel, 1-semi-auto parallel, 2-auto parallel, 3-hybrid parallel
+  gradients_mean: False
+  enable_alltoall: False
+  full_batch: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: True
+  strategy_ckpt_config:
+    save_file: "./ckpt_strategy.ckpt"
+    only_trainable_params: False
+  parallel_optimizer_config:
+    gradient_accumulation_shard: False
+    parallel_optimizer_threshold: 64
+
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True

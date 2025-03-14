@@ -79,7 +79,7 @@ def make_test_tool_alpaca_dataset(dataset_dir="./checkpoint_download", valid_num
     return file_name
 
 
-@pytest.mark.level0
+@pytest.mark.level1
 @pytest.mark.platform_x86_cpu
 @pytest.mark.env_onecard
 def test_tool_alpaca_dataset_correct():

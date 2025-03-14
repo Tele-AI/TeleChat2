@@ -95,7 +95,6 @@ MindFormers提供`cogvlm2-llama3-chat-19B`的推理示例，支持单卡推理�
 2. 启动推理脚本
 
    ```shell
-   export USE_ROPE_SELF_DEFINE=True
    python run_mindformer.py \
     --config configs/cogvlm2/predict_cogvlm2_image_llama3_chat_19b.yaml \
     --run_mode predict \
@@ -133,7 +132,6 @@ MindFormers提供`cogvlm2-llama3-chat-19B`的推理示例，支持单卡推理�
 2. 启动推理脚本
 
    ```shell
-   export USE_ROPE_SELF_DEFINE=True
    bash scripts/msrun_launcher.sh "run_mindformer.py \
     --config configs/cogvlm2/predict_cogvlm2_image_llama3_chat_19b.yaml \
     --run_mode predict \

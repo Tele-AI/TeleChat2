@@ -14,8 +14,10 @@
 # ============================================================================
 """TranslationPipeline"""
 import numpy as np
+
 import mindspore
 from mindspore import ops, Tensor
+from mindformers.utils import deprecated
 from .base_pipeline import Pipeline
 from ..mindformer_book import MindFormerBook
 from ..tools.register import MindFormerRegister, MindFormerModuleType
@@ -23,7 +25,7 @@ from ..tools.register import MindFormerRegister, MindFormerModuleType
 __all__ = ['FillMaskPipeline']
 
 
-# pylint: disable=C0326
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="fill_mask")
 class FillMaskPipeline(Pipeline):
     """
@@ -126,11 +128,11 @@ class FillMaskPipeline(Pipeline):
         tokens_dict = []
         max_tokens = np.argmax(outputs, axis=1)
         for ind, tokenid in enumerate(max_tokens):
-            token = self.tokenizer.decode([int(tokenid), ], skip_special_tokens=True)
+            token = self.tokenizer.decode([int(tokenid)], skip_special_tokens=True)
             token = token.replace(' ', '')
             tokens_dict.append({'score': outputs[ind, tokenid],
                                 'token': tokenid,
                                 'token_str': token})
             self.input_text = self.input_text.replace('[MASK]', token, 1)
         tokens_dict.append({'sequence': self.input_text})
-        return [tokens_dict, ]
+        return [tokens_dict]

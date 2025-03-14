@@ -49,8 +49,9 @@ class BaseInstructDataHandler:
     ignore_token_id = -100
     template = None
 
-    def __init__(self, config):
+    def __init__(self, config, **kwargs):
         self.seq_length = config.seq_length
+        self.packing = kwargs.get('packing', None)
 
         self.tokenizer = self.get_tokenizer(config)
         self.config = config
@@ -92,11 +93,16 @@ class BaseInstructDataHandler:
         dataset = dataset.map(self._preprocess)
 
         if self.output_columns:
-            remove_col_names = list(set(dataset.column_names) - set(self.output_columns))
-            dataset = dataset.remove_columns(remove_col_names)
+            dataset = self._post_process(dataset)
         return dataset
 
-    def get_tokenizer(self, config):
+    def _post_process(self, dataset):
+        remove_col_names = list(set(dataset.column_names) - set(self.output_columns))
+        dataset = dataset.remove_columns(remove_col_names)
+        return dataset
+
+    @staticmethod
+    def get_tokenizer(config):
         """get tokenizer"""
         tokenizer_name = config.tokenizer_name
         if tokenizer_name is not None and tokenizer_name.strip() != "":

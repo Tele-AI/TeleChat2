@@ -37,8 +37,9 @@ __all__ = ["LogitsProcessor", "LogitsProcessorList", "RepetitionPenaltyLogitsPro
 def run_using_numpy():
     """Set run postprocess using Numpy operators or MindSpore operators."""
     context_module = import_module("mindformers.core.context.build_context")
-    context_instance = context_module.CONTEXT_INSTANCE
-    return context_module.get_context("postprocess_use_numpy") if context_instance is not None else False
+    if context_module.Context.is_exists():
+        return context_module.get_context("postprocess_use_numpy")
+    return False
 
 
 @dataclass

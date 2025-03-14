@@ -18,6 +18,8 @@ import mindspore.ops.operations as P
 from mindspore import Parameter, nn
 from mindspore.common.initializer import initializer
 
+from mindformers.experimental.graph.transformer.transformer_config import TransformerConfig
+from mindformers.models import PretrainedConfig
 from mindformers.version_control import check_rmsnorm_big_kernel_valid
 
 __all__ = ["get_norm"]
@@ -117,6 +119,14 @@ class RMSNorm(nn.Cell):
         """Forward of RMSNorm."""
         return self.rms_norm(x)
 
+    def sharded_state_dict(self):
+        """provide the sharded state dict based on the config"""
+        w_shard = (1,)
+        state_dict = {}
+        state_dict[self.weight.name] = {'shape': self.weight.shape,
+                                        'shard': w_shard}
+        return state_dict
+
 
 def get_norm(config):
     r"""
@@ -128,14 +138,20 @@ def get_norm(config):
     Returns:
         callable, the normalization layer.
     """
+    if isinstance(config, TransformerConfig):
+        compute_type = config.layernorm_compute_type
+    elif isinstance(config, PretrainedConfig):
+        compute_type = config.layernorm_compute_dtype
+    else:
+        raise TypeError("The type of config should be TransformerConfig or PretrainedConfig.")
     if config.normalization == "LayerNorm":
         return LayerNorm(
             config.hidden_size,
             eps=config.layernorm_epsilon,
-            compute_type=config.layernorm_compute_dtype)
+            compute_type=compute_type)
     if config.normalization == "RMSNorm":
         return RMSNorm(dim=config.hidden_size,
                        eps=config.layernorm_epsilon,
-                       compute_type=config.layernorm_compute_dtype)
+                       compute_type=compute_type)
 
     raise Exception(f"unsupported norm type '{config.normalization}'.")

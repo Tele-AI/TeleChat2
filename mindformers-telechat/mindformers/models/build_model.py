@@ -1,4 +1,4 @@
-# Copyright 2022 Huawei Technologies Co., Ltd
+# Copyright 2024 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -75,6 +75,9 @@ def build_network(
     ckpt_cfg = config.model_config.checkpoint_name_or_path
     pet_config = config.model_config.pet_config
     quant_config = config.model_config.quantization_config
+    rl_config = config.model_config.rl_config
+    if rl_config:
+        default_args.update({'disable_lazy_inline': True})
     network = build_model(config, default_args=default_args)
     if quant_config:
         from mindformers.modules.quantizers import AutoQuantizer
@@ -86,6 +89,10 @@ def build_network(
             config.model_config.checkpoint_name_or_path = None
         network.checkpoint_name_or_path = ckpt_cfg
         network = get_pet_model(network, pet_config)
+    if rl_config:
+        from mindformers.reinforcement_learning import get_rl_model
+        ref_network = build_model(config, default_args=default_args)
+        network = get_rl_model(network, ref_network, rl_config)
     return network
 
 

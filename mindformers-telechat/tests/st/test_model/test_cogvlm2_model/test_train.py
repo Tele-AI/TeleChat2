@@ -17,7 +17,6 @@ Test cogvlm2-video train.
 How to run this:
     pytest tests/st/test_model/test_cogvlm2_model/test_train.py
 """
-import os
 from functools import partial
 import pytest
 import numpy as np
@@ -48,12 +47,12 @@ def generate_data(seq_len, vocab_size, step_num=20):
         yield input_ids, images, video_context_pos, position_ids
 
 
-def get_dataset(seq_len, vocab_size):
+def get_dataset(seq_len, vocab_size, batch_size=1):
     """build dataset for model training."""
     prepare_data = partial(generate_data, seq_len=seq_len, vocab_size=vocab_size)
     dataset = GeneratorDataset(
         prepare_data, column_names=["input_ids", "images", "video_context_pos", "position_ids"])
-    dataset = dataset.batch(batch_size=1)
+    dataset = dataset.batch(batch_size=batch_size)
     return dataset
 
 
@@ -69,7 +68,6 @@ class TestCogVLM2VideoTrain:
         Description: Test base model training precision.
         Expectation: AssertionError
         """
-        os.environ['USE_ROPE_SELF_DEFINE'] = 'True'
         runner = ModelTester(run_mode='train', batch_size=1, experiment_mode=True)
 
         model_config = get_config()

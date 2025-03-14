@@ -15,7 +15,6 @@
 """Masked Image Modeling Pipeline API."""
 import os
 from typing import Optional, Union
-
 import numpy as np
 from PIL import Image
 
@@ -25,6 +24,7 @@ from mindformers.mindformer_book import MindFormerBook
 from mindformers.models import PreTrainedModel, BaseImageProcessor
 from mindformers.tools.image_tools import load_image
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.utils import deprecated
 from .base_pipeline import Pipeline
 
 __all__ = ['MaskedImageModelingPipeline']
@@ -32,6 +32,7 @@ __all__ = ['MaskedImageModelingPipeline']
 from ..tools.utils import LOCAL_DEFAULT_PATH
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.PIPELINE, alias="masked_image_modeling")
 class MaskedImageModelingPipeline(Pipeline):
     r"""Pipeline for masked image modeling

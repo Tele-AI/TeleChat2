@@ -58,27 +58,27 @@ class LlamaTokenizerFast(PreTrainedTokenizerFast):
     Args:
         vocab_file (str, optional): `SentencePiece <https://github.com/google/sentencepiece>`_
             file (generally has a .model extension) that
-            contains the vocabulary necessary to instantiate a tokenizer. Default: ``None`` .
+            contains the vocabulary necessary to instantiate a tokenizer. Default: ``None``.
         tokenizer_file (str, optional):
             Tokenizers file (generally has a .json extension) that contains everything needed to load the tokenizer.
-            Default: ``None`` .
+            Default: ``None``.
         clean_up_tokenization_spaces (bool, optional):
             Whether to clean-up spaces after decoding, cleanup consists in removing potential artifacts like
-            extra spaces. Default: ``False`` .
+            extra spaces. Default: ``False``.
         unk_token (Union[str, tokenizers.AddedToken], optional):
             The unknown token. A token that is not in the vocabulary cannot be converted to an ID and is set to be this
-            token instead. Default: ``"<unk>"`` .
+            token instead. Default: ``"<unk>"``.
         bos_token (Union[str, tokenizers.AddedToken], optional):
             The beginning of sequence token that was used during pretraining. Can be used a sequence classifier token.
-            Default: ``"<s>"`` .
+            Default: ``"<s>"``.
         eos_token (Union[str, tokenizers.AddedToken], optional):
-            The end of sequence token. Default: ``"</s>"`` .
+            The end of sequence token. Default: ``"</s>"``.
         add_bos_token (bool, optional):
-            Whether to add an `bos_token` at the start of sequences. Default: ``True`` .
+            Whether to add an `bos_token` at the start of sequences. Default: ``True``.
         add_eos_token (bool, optional):
-            Whether to add an `eos_token` at the end of sequences. Default: ``False`` .
+            Whether to add an `eos_token` at the end of sequences. Default: ``False``.
         use_default_system_prompt (bool, optional):
-            Whether the default system prompt for Llama should be used. Default: ``False`` .
+            Whether the default system prompt for Llama should be used. Default: ``False``.
 
     Returns:
         LlamaTokenizer, a LlamaTokenizer instance.
@@ -190,7 +190,7 @@ class LlamaTokenizerFast(PreTrainedTokenizerFast):
 
         Args:
             save_directory (str): The directory where the vocabulary will be saved.
-            filename_prefix (str, optional): The prefix for the saved files. Default: ``None`` .
+            filename_prefix (str, optional): The prefix for the saved files. Default: ``None``.
 
         Returns:
             A tuple containing the paths of the saved vocabulary files.

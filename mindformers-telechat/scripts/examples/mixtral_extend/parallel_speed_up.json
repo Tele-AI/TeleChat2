@@ -1,0 +1,8 @@
+{
+    "recompute_comm_overlap": false,
+    "matmul_grad_comm_overlap": true,
+    "enable_task_opt": false,
+    "enable_flash_attention_load_balance": true,
+    "enable_allreduce_slice_to_reducescatter": true,
+    "enable_grad_comm_opt": false
+}

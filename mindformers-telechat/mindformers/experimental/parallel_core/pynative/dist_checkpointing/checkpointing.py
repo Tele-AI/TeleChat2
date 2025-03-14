@@ -26,6 +26,7 @@ __all__ = [
 ]
 
 import os
+import stat
 import glob
 import json
 import numpy as np
@@ -39,7 +40,8 @@ try:
 except ImportError:
     from mindspore.nn.generator import default_generator, set_rng_state
 from mindspore.communication import get_rank
-from mindformers.tools.logger import logger
+from mindspore.train.serialization import _update_param
+from mindformers.tools import logger
 from mindformers.experimental.parallel_core.pynative.utils import generate_state_dict, save_strategy_file
 from mindformers.experimental.parallel_core.pynative.parallel_state import (
     get_data_parallel_group,
@@ -67,11 +69,11 @@ def get_checkpoint_name(ckpt_path, format=_FORMAT, get_name_from_file=False,
     The layout of the ckpt_path will be like:
     ckpt_path/
     ├── rank_0
-    │   ├── network_rank_0-0_0.ckpt
-    │   └── network_rank_0-0_1.ckpt
+    │   ├── network_rank_0-0_1.ckpt
+    │   └── network_rank_0-0_2.ckpt
     └── rank_1
-        ├── network_rank_1-0_0.ckpt
-        └── network_rank_1-0_1.ckpt
+        ├── network_rank_1-0_1.ckpt
+        └── network_rank_1-0_2.ckpt
     The strategy file will be saved in a standalone dir for the possible subsequent merging.
     The checkpoint file will be separated in different dir for the possible subsequent transformation.
     """
@@ -136,8 +138,13 @@ def _get_params_dict(model, optimizer):
         params_dict = model.parameters_dict()
     elif isinstance(optimizer, MixedPrecisionOptimizer):
         params_dict = optimizer.state_dict()
+        for _, param in model.parameters_and_names():
+            if not param.requires_grad:
+                params_dict[param.name] = param
     else:
         params_dict = optimizer.parameters_dict()
+        for _, param in model.parameters_and_names():
+            params_dict[param.name] = param
     if not params_dict:
         raise ValueError("None of params dict has been extract from model and optimizer.")
     return params_dict
@@ -256,8 +263,8 @@ def save_checkpoint(config, model, optimizer=None, opt_param_scheduler=None, ckp
     rank_path = os.path.join(ckpt_path, f"rank_{get_rank()}")
     ckpt_file, strategy_file = get_checkpoint_name(ckpt_path, format=format, prefix=prefix, epoch_num=epoch_num,
                                                    step_num=step_num)
-    for key, _ in kwargs.items():
-        logger.warning(f"The parameter {key} is not used in save_checkpoint.")
+    for key in kwargs:
+        logger.warning(f"The parameter '{key}' is not used in save_checkpoint.")
     logger.info(f"Saving model to {ckpt_file}")
 
     # generate sharded info
@@ -281,6 +288,7 @@ def save_checkpoint(config, model, optimizer=None, opt_param_scheduler=None, ckp
                                  meta_json=os.path.join(rank_path, 'meta.json'))
     logger.info("ckpt saved")
 
+
 def ensure_total_ckpt_is_less_than_limit(ckpt_path: str, limit: int = 5, format: str = _FORMAT):
     """
     make sure the provided path contain less than limited number of checkpoint file
@@ -298,9 +306,11 @@ def ensure_total_ckpt_is_less_than_limit(ckpt_path: str, limit: int = 5, format:
     ckpt_num = len(ckpt_list)
     if ckpt_num > limit:
         for rm_ckpt_name in ckpt_list[: (ckpt_num - limit)]:
-            logger.debug(f"Current checkpoint file exceed keep_checkpoint_max, removing {rm_ckpt_name}")
+            logger.warning(f"Current checkpoint file exceed keep_checkpoint_max, "
+                           f"removing {rm_ckpt_name}")
             rm_ckpt_path = os.path.join(ckpt_path, rm_ckpt_name)
             os.remove(rm_ckpt_path)
+
 
 # pylint: disable=W0622
 def load_checkpoint(config, model, optimizer=None, opt_param_scheduler=None, ckpt_path="./", format=_FORMAT,
@@ -322,17 +332,16 @@ def load_checkpoint(config, model, optimizer=None, opt_param_scheduler=None, ckp
         raise ValueError("crc_check does not support format 'safetensors' for now.")
     validator.check_value_type("model", model, [nn.Cell], "load_checkpoint")
     validator.check_value_type("optimizer", optimizer, [nn.Cell, type(None)], "load_checkpoint")
-    logger.info("ckpt loading")
     if os.path.isdir(ckpt_path):
         src_ckpt_file = get_last_checkpoint(os.path.join(ckpt_path, f"rank_{get_rank()}"), format=format)
     elif os.path.isfile(ckpt_path):
         src_ckpt_file = ckpt_path
     else:
         raise ValueError(f"There is no *.{format} in {ckpt_path}, load failed.")
-    logger.info(f"using latest checkpoint: {src_ckpt_file}")
-    for key, _ in kwargs.items():
-        logger.warning(f"The parameter {key} is not used in load_checkpoint.")
+    for key in kwargs:
+        logger.warning(f"The parameter '{key}' is not used in load_checkpoint.")
 
+    logger.info(f"Loading latest checkpoint: {src_ckpt_file}, this may take a while.")
     param_dict = ms.load_checkpoint(src_ckpt_file, format=format, crc_check=crc_check)
     resume_dict = {
         "epoch_num": int(param_dict.pop("epoch_num", 0)),
@@ -347,18 +356,30 @@ def load_checkpoint(config, model, optimizer=None, opt_param_scheduler=None, ckp
         optimizer.load_state_dict(param_dict)
         # synchronize parameters in optimizer to model
         optimizer.reload_main_params()
+        for _, param in model.parameters_and_names():
+            if not param.requires_grad:
+                new_param = param_dict[param.name]
+                _update_param(param, new_param, False)
     else:
         # restore native optimizer/model
         param_dict = load_post_process(config, param_dict, optimizer)
-        target = optimizer if optimizer is not None else model
-        param_not_load, ckpt_not_load = ms.load_param_into_net(target, param_dict)
+
+        param_not_load, ckpt_not_load = ms.load_param_into_net(model, param_dict)
         if param_not_load:
-            logger.warning(f"param_not_load:{param_not_load}")
+            logger.warning(f"When loading ckpt into the model, param_not_load:{param_not_load}")
         if ckpt_not_load:
-            logger.warning(f"ckpt_not_load:{ckpt_not_load}")
-    logger.info("ckpt loaded")
+            logger.warning(f"When loading ckpt into the model, ckpt_not_load:{ckpt_not_load}")
+        if optimizer is not None:
+            param_not_load, ckpt_not_load = ms.load_param_into_net(optimizer, param_dict)
+            if param_not_load:
+                logger.warning(f"When loading ckpt into the optimizer, param_not_load:{param_not_load}")
+            if ckpt_not_load:
+                logger.warning(f"When loading ckpt into the optimizer, ckpt_not_load:{ckpt_not_load}")
+
+    logger.info(f"Checkpoint: {src_ckpt_file} is loaded successfully!")
 
     return resume_dict
+
 
 def get_last_checkpoint(ckpt_path: str, format: str = _FORMAT):
     """Get last timestamp checkpoint under ckpt_path."""
@@ -371,6 +392,7 @@ def get_last_checkpoint(ckpt_path: str, format: str = _FORMAT):
     ckpt_list = sorted(ckpt_list, key=lambda x: os.path.getmtime(os.path.join(ckpt_path, x)))
     return os.path.join(ckpt_path, ckpt_list[-1])
 
+
 def record_last_ckpt_to_json(epoch: int, step: int, ckpt_file: str, meta_json: str):
     """record last ckpt info to json"""
     meta_data = {
@@ -378,5 +400,7 @@ def record_last_ckpt_to_json(epoch: int, step: int, ckpt_file: str, meta_json: s
         "last_step": step,
         "last_ckpt_file": ckpt_file
     }
-    with open(meta_json, 'w', encoding="utf-8") as fp:
+    flags = os.O_WRONLY | os.O_CREAT
+    mode = stat.S_IWUSR | stat.S_IRUSR
+    with os.fdopen(os.open(meta_json, flags, mode), 'w', encoding="utf-8") as fp:
         json.dump(meta_data, fp)

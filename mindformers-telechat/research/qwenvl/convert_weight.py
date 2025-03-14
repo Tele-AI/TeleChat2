@@ -19,11 +19,12 @@ Support huggingface format.
 
 import argparse
 import os
+import torch
+import numpy as np
+from transformers import AutoModelForCausalLM
 
 import mindspore as ms
-import numpy as np
-import torch
-from transformers import AutoModelForCausalLM
+
 from mindformers.tools import str2bool
 
 QWEN_ATTENTION_WEIGHT_NAME = "attn.c_attn.weight"
@@ -177,7 +178,7 @@ def convert_pt_to_ms(input_path, output_path, torch_dtype=torch.float16, dtype=m
     emb_strategy = kwargs.get("emb_strategy", None)
     use_qkv_concat = kwargs.get("use_qkv_concat", False)
 
-    model = AutoModelForCausalLM.from_pretrained(input_path, device_map="cpu", trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(input_path, device_map="cpu")
 
     ckpt_weights = []
     for name, param in model.named_parameters():

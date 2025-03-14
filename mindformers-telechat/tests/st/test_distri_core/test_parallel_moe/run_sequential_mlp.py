@@ -94,7 +94,6 @@ class SequentialMLPGolden(nn.Cell):
                                       ffn_dim_multiplier=None,
                                       compute_dtype=model_config.compute_dtype,
                                       param_init_type=model_config.param_init_type,
-                                      is_dynamic=False,
                                       parallel_config=model_config.parallel_config)
             self.local_experts.append(expert)
         self.cast = ops.Cast()

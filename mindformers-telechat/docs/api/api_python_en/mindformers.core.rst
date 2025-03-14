@@ -35,7 +35,6 @@ Optimizer
     :template: classtemplate.rst
 
     mindformers.core.AdamW
-    mindformers.core.Came
 
 Learning Rate
 --------------
@@ -67,6 +66,7 @@ Callback
     mindformers.core.MFLossMonitor
     mindformers.core.ProfileMonitor
     mindformers.core.SummaryMonitor
+    mindformers.core.TrainingStateMonitor
 
 Evaluation Metric
 -------------------

@@ -17,31 +17,30 @@
 For text generation
 """
 import os
-import shutil
 import json
 from typing import Optional, List, Union, Dict
-from multiprocessing import Process
 import numpy as np
-from safetensors.numpy import save_file, load_file
 
 import mindspore as ms
 from mindspore import Tensor
 from mindspore.communication.management import init
-from mindspore.communication.comm_func import barrier
 from mindspore.common.initializer import Zero
 from mindspore._c_expression import swap_cache
+from mindspore.communication.comm_func import barrier
 
 from mindformers import models, MindFormerRegister, MindFormerModuleType
 from mindformers import build_context, build_parallel_config, GenerationConfig
 from mindformers import AutoModel, AutoConfig, AutoTokenizer
 from mindformers.models.utils import convert_mstype, str_to_ms_type
+from mindformers.utils import contains_safetensors_files, is_hf_safetensors_dir, process_hf_checkpoint
+
 from mindformers.tools.logger import logger
-from mindformers.tools.utils import is_main_rank
 from mindformers.tools.register.config import MindFormerConfig
 from mindformers.trainer.utils import transform_and_load_checkpoint
 from mindformers.tools.hub.dynamic_module_utils import get_class_from_dynamic_module
 from mindformers.generation.parallel_decoding import parallel_decoding_control
-from mindformers.version_control import get_ascend_soc_version
+from mindformers.version_control import check_delay_init_valid, need_nz
+from mindformers.models import build_processor, PretrainedConfig
 
 __all__ = ["ModelRunner"]
 
@@ -51,13 +50,13 @@ def register_auto_class(config, pretrained_model_name_or_path, class_type, use_f
     if config.model.model_config.auto_map:
         class_auto = config["model"]["model_config"]["auto_map"]
         if class_type == "AutoConfig" and \
-            config.model.model_config.type not in MindFormerRegister.registry[MindFormerModuleType.CONFIG]:
+                config.model.model_config.type not in MindFormerRegister.registry[MindFormerModuleType.CONFIG]:
             class_ref = class_auto[class_type]
             config_class = get_class_from_dynamic_module(class_ref, pretrained_model_name_or_path)
             MindFormerRegister.register_cls(config_class, module_type=MindFormerModuleType.CONFIG)
 
         if class_type == "AutoTokenizer" and \
-            config.processor.tokenizer.type not in MindFormerRegister.registry[MindFormerModuleType.TOKENIZER]:
+                config.processor.tokenizer.type not in MindFormerRegister.registry[MindFormerModuleType.TOKENIZER]:
             if use_fast and class_auto[class_type][1] is not None:
                 class_ref = class_auto[class_type][1]
             else:
@@ -66,21 +65,33 @@ def register_auto_class(config, pretrained_model_name_or_path, class_type, use_f
             MindFormerRegister.register_cls(tokenizer_class, module_type=MindFormerModuleType.TOKENIZER)
 
         if class_type == "AutoModel" and \
-            config.model.arch.type not in MindFormerRegister.registry[MindFormerModuleType.MODELS]:
+                config.model.arch.type not in MindFormerRegister.registry[MindFormerModuleType.MODELS]:
             class_ref = class_auto[class_type]
             model_class = get_class_from_dynamic_module(class_ref, pretrained_model_name_or_path)
             MindFormerRegister.register_cls(model_class, module_type=MindFormerModuleType.MODELS)
 
         if class_type == "AutoProcessor" and \
-            config.model.arch.type not in MindFormerRegister.registry[MindFormerModuleType.PROCESSOR]:
+                config.model.arch.type not in MindFormerRegister.registry[MindFormerModuleType.PROCESSOR]:
             class_ref = class_auto[class_type]
             processor_class = get_class_from_dynamic_module(class_ref, pretrained_model_name_or_path)
             MindFormerRegister.register_cls(processor_class, module_type=MindFormerModuleType.PROCESSOR)
 
 
+def is_multi_modal_model(config):
+    def count_type_num(model_config):
+        num = 0
+        for k, v in model_config.items():
+            if k == "type":
+                num += 1
+            if isinstance(v, dict):
+                num += count_type_num(v)
+        return num
+    return count_type_num(config.model.model_config) > 1
+
+
 def get_model(model_name_or_path: str,
               revision: Optional[str] = None,
-              trust_remote_code: Optional[bool] = True,
+              trust_remote_code: Optional[bool] = False,
               **kwargs):
     """
     get_model API, supports MF to be a backend of MindIEServer.
@@ -100,20 +111,24 @@ def get_model(model_name_or_path: str,
     Returns:
         A Tokenizer object and others.
     """
-    if os.path.exists(model_name_or_path) and os.path.isdir(model_name_or_path):
-        logger.debug(f"model_name_or_path is {model_name_or_path}")
-        config_path = _get_model_config(model_name_or_path)
-        config = MindFormerConfig(config_path)
-        model_type = config.model.arch.type
-        logger.info(f"The model type is: {model_type}")
-        register_auto_class(config, model_name_or_path, class_type="AutoTokenizer")
-
-        use_fast = kwargs.get("use_fast", True)
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision,
-                                                  trust_remote_code=trust_remote_code,
-                                                  use_fast=use_fast)
-    else:
+    if not os.path.exists(model_name_or_path) or not os.path.isdir(model_name_or_path):
         raise ValueError(f"{model_name_or_path} does not exist or is not a directory.")
+
+    logger.debug(f"model_name_or_path is {model_name_or_path}")
+    config_path = _get_model_config(model_name_or_path)
+    config = MindFormerConfig(config_path)
+    model_type = config.model.arch.type
+    logger.info(f"The model type is: {model_type}")
+    register_auto_class(config, model_name_or_path, class_type="AutoTokenizer")
+
+    if is_multi_modal_model(config):
+        processor = build_processor(config.processor)
+        return processor, processor
+
+    use_fast = kwargs.get("use_fast", True)
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision,
+                                              trust_remote_code=trust_remote_code,
+                                              use_fast=use_fast)
 
     input_builder = InputBuilder(tokenizer)
     return tokenizer, input_builder
@@ -209,7 +224,10 @@ class MindIEModelRunner:
 
     def __init__(self, model_path, config_path, npu_mem_size, cpu_mem_size, block_size, rank_id=0,
                  world_size=1, npu_device_ids=None, plugin_params=None):
+        self.dynamic_kv_cache_whitelist = ["ParallelLlamaForCausalLM"]
         self.config = MindFormerConfig(config_path)
+        self.warmup_step = 2
+        self.is_multi_modal_model = is_multi_modal_model(self.config)
         # register to Auto Class
         register_auto_class(self.config, model_path, class_type="AutoConfig")
         register_auto_class(self.config, model_path, class_type="AutoTokenizer")
@@ -220,50 +238,36 @@ class MindIEModelRunner:
             self.config.use_parallel = True
             os.environ['MS_WORKER_NUM'] = str(world_size)
             os.environ['MS_ROLE'] = 'MS_WORKER'
+            os.environ['MS_NODE_ID'] = str(rank_id)
+            ms.set_device("Ascend", npu_device_ids[0])
             if rank_id == 0 and os.fork() == 0:
                 os.environ['MS_ROLE'] = 'MS_SCHED'
                 init()
-        self.model_config = AutoConfig.from_pretrained(config_path)
-
-        self.model_config.parallel_decoding_params = None
-        if plugin_params:
-            plugin_params = json.loads(plugin_params)
-            plugin_params['parallel_decoding'] = plugin_params['plugin_type']
-            self.model_config.parallel_decoding_params = plugin_params
-        self.model_config.checkpoint_path = self.config.load_checkpoint
-        self.num_layers = self.model_config.num_layers
-        self.num_kv_heads = self.model_config.num_heads if self.model_config.n_kv_heads is None \
-            else self.model_config.n_kv_heads
-        self.num_kv_heads = self.num_kv_heads // world_size  # check the divisibility in model initialization.
-        self.head_size = self.model_config.hidden_size // self.model_config.num_heads
-
-        kvcache_dtype = self.model_config.compute_dtype
-        if hasattr(self.model_config, "quantization_config") and \
-                self.model_config.quantization_config.kvcache_dtype in str_to_ms_type:
-            kvcache_dtype = self.model_config.quantization_config.kvcache_dtype
-        self.dtype = convert_mstype(kvcache_dtype)
-        kvcache_bytes = ms.Tensor(0, dtype=self.dtype).itemsize
-        total_head_size = self.num_kv_heads * self.head_size
-
-        if get_ascend_soc_version() in ['310p', 'ascend310p']:
-            total_head_size = -(total_head_size // -16) * 16
-
-        self.npu_num_blocks = (npu_mem_size * 1024 * 1024 * 1024) // \
-                              (block_size * total_head_size * kvcache_bytes * 2 * self.num_layers)
-        self.cpu_num_blocks = (cpu_mem_size * 1024 * 1024 * 1024) // \
-                              (block_size * total_head_size * kvcache_bytes * 2 * self.num_layers)
-
-        self.model_config.block_size = block_size
-        self.model_config.num_blocks = self.npu_num_blocks
-        self.model_config.checkpoint_name_or_path = None
-        if not hasattr(self.model_config, "max_position_embedding") or not self.model_config.max_position_embedding:
-            self.model_config.max_position_embedding = self.model_config.seq_length
-
-        self.generation_config = GenerationConfig.from_model_config(self.model_config)
-
         if self.config.use_parallel:
             build_parallel_config(self.config)
-            self.model_config.parallel_config = self.config.parallel_config
+            self.model_config = AutoConfig.from_pretrained(config_path, parallel_config=self.config.parallel_config)
+        else:
+            self.model_config = AutoConfig.from_pretrained(config_path)
+        setattr(self.model_config, 'npu_mem_size', npu_mem_size)
+        self.use_legacy = getattr(self.model_config, "use_legacy", True)
+        if self.config.moe_config:
+            self.model_config.moe_config = self.config.moe_config
+
+        self.update_model_config(plugin_params)
+
+        if self.is_multi_modal_model:
+            if isinstance(self.model_config.llm_model, PretrainedConfig):
+                llm_config = self.model_config.llm_model
+            else:
+                llm_config = self.model_config.llm_model.model_config
+            self.update_llm_config(llm_config, world_size, npu_mem_size, cpu_mem_size, block_size)
+            self.processor = build_processor(self.config.processor)
+            # adapt to mindie-llm
+            self.model_config.max_position_embedding = llm_config.max_position_embedding
+        else:
+            self.update_llm_config(self.model_config, world_size, npu_mem_size, cpu_mem_size, block_size)
+
+        self.generation_config = GenerationConfig.from_model_config(self.model_config)
 
         if not self.config.use_parallel and npu_device_ids:
             if len(npu_device_ids) != 1:
@@ -273,23 +277,28 @@ class MindIEModelRunner:
         build_context(self.config)
         logger.info(f"Build context finished.")
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=True)
+        # build tokenizer
+        if self.is_multi_modal_model:
+            self.tokenizer = self.processor.tokenizer
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=False, use_fast=True)
         logger.info(f"Build tokenizer finished.")
-        self.model = AutoModel.from_config(self.model_config)
+
+        # build model
+        network_delay_inited = False
+        if check_delay_init_valid():
+            from mindspore.nn.utils import no_init_parameters
+            with no_init_parameters():
+                self.model = AutoModel.from_config(self.model_config)
+            network_delay_inited = True
+            logger.info("Parameters are not initialized during model initialization.")
+        else:
+            self.model = AutoModel.from_config(self.model_config)
+        if npu_mem_size == -1 and str(type(self.model).__name__) not in self.dynamic_kv_cache_whitelist:
+            raise ValueError("npu_mem_size=-1 only support in parallel mode")
         logger.info(f"Build model finished.")
 
-        ms_model = ms.Model(self.model)
-        batch_size = self.model_config.batch_size
-        seq_length = self.model_config.seq_length
-        input_ids = np.ones(shape=tuple([batch_size, seq_length]))
-        inputs = self.model.prepare_inputs_for_predict_layout(input_ids)
-        if self.config.checkpoint_format == 'safetensors':
-            _transform_and_load_safetensors(ms_model, self.model, inputs, self.config.load_checkpoint,
-                                            self.config.load_safetensors, self.config.output_dir,
-                                            self.config.use_parallel)
-        else:
-            transform_and_load_checkpoint(self.config, ms_model, self.model, inputs, do_predict=True)
-        logger.info(f"Load checkpoints finished.")
+        self.load_checkpoint(network_delay_inited)
 
         if self.model_config.is_dynamic:
             self.model.set_dynamic_inputs()
@@ -300,6 +309,69 @@ class MindIEModelRunner:
         self.value_host = [ms.Parameter(ms.Tensor(shape=cpu_kv_shape, dtype=self.dtype, init=Zero()),
                                         name=f"value_host_{i}", requires_grad=False) for i in range(self.num_layers)]
 
+    def load_checkpoint(self, network_delay_inited):
+        """load checkpoint into model"""
+        ms_model = ms.Model(self.model)
+        batch_size = self.model_config.batch_size
+        seq_length = self.model_config.seq_length
+        input_ids = np.ones(shape=tuple([batch_size, seq_length]))
+        if self.use_legacy:
+            inputs = self.model.prepare_inputs_for_predict_layout(input_ids)
+        else:
+            inputs = None
+        load_checkpoint = self.config.load_checkpoint
+        if (self.config.get('load_ckpt_format', 'ckpt') == 'safetensors'
+                and is_hf_safetensors_dir(load_checkpoint, self.model)):
+            self.config.load_checkpoint = process_hf_checkpoint(self.model, self.config.output_dir, load_checkpoint)
+            if self.config.use_parallel:
+                barrier()
+        transform_and_load_checkpoint(self.config, ms_model, self.model, inputs, do_predict=True)
+        if network_delay_inited:
+            self.model.init_parameters_data()
+        logger.info(f"Load checkpoints finished.")
+
+    def update_model_config(self, plugin_params):
+        """update model config"""
+        self.model_config.parallel_decoding_params = None
+        default_plugin_configs = {'plugin_type': None}
+        if plugin_params == default_plugin_configs:
+            plugin_params = None
+        if plugin_params:
+            if not isinstance(plugin_params, dict):
+                plugin_params = json.loads(plugin_params)
+            plugin_params['parallel_decoding'] = plugin_params['plugin_type']
+            self.model_config.parallel_decoding_params = plugin_params
+        self.model_config.checkpoint_name_or_path = None
+        self.model_config.checkpoint_path = self.config.load_checkpoint
+
+    def update_llm_config(self, config, world_size, npu_mem_size, cpu_mem_size, block_size):
+        """update llm model config"""
+        self.num_layers = config.num_layers
+        self.num_kv_heads = config.num_heads if config.n_kv_heads is None \
+            else config.n_kv_heads
+        self.num_kv_heads = self.num_kv_heads // world_size  # check the divisibility in model initialization.
+        self.head_size = config.hidden_size // config.num_heads
+
+        kvcache_dtype = config.compute_dtype
+        if hasattr(self.model_config, "quantization_config") and \
+                self.model_config.quantization_config.kvcache_dtype in str_to_ms_type:
+            kvcache_dtype = self.model_config.quantization_config.kvcache_dtype
+        self.dtype = convert_mstype(kvcache_dtype)
+        kvcache_bytes = ms.Tensor(0, dtype=self.dtype).itemsize
+
+        total_head_size = self.num_kv_heads * self.head_size
+        if need_nz():
+            total_head_size = -(total_head_size // -16) * 16
+        self.npu_num_blocks = (npu_mem_size * 1024 * 1024 * 1024) // \
+                              (block_size * total_head_size * kvcache_bytes * 2 * self.num_layers)
+        self.cpu_num_blocks = (cpu_mem_size * 1024 * 1024 * 1024) // \
+                              (block_size * total_head_size * kvcache_bytes * 2 * self.num_layers)
+        config.block_size = block_size
+        config.num_blocks = self.npu_num_blocks
+
+        if not hasattr(config, "max_position_embedding") or not config.max_position_embedding:
+            config.max_position_embedding = config.seq_length
+
     def forward(self, input_ids: [Union[List[int], List[List[int]]]],
                 valid_length_each_example: List[int],
                 block_tables: Optional[Tensor] = None,
@@ -308,7 +380,10 @@ class MindIEModelRunner:
                 position_ids: Optional[Tensor] = None,
                 spec_mask: Optional[Tensor] = None,
                 q_seq_lens: Optional[Tensor] = None,
-                adapter_ids: Optional[List[str]] = None):
+                adapter_ids: Optional[List[str]] = None,
+                prefill_head_indices: Optional[Tensor] = None,
+                key_cache: Optional[List[Tensor]] = None,
+                value_cache: Optional[List[Tensor]] = None):
         """
         Call self.model.infer() or self.model.forward() to do infer and return logits on next position, \
         can choose do prefill or decode predict.
@@ -332,27 +407,63 @@ class MindIEModelRunner:
                 Params for page attention
             adapter_ids (List(str)):
                 Params for SLora request
+            prefill_head_indices (Tensor):
+                Params for pre gather
+            key_cache (List(Tensor), optional):
+                Params for key_cache, a group of tensors used for kvcache. Default: None.
+            value_cache (List(Tensor), optional):
+                Params for value_cache, a group of tensors used for kvcache. Default: None.
 
         Returns:
             logits (Tensor)
         """
+        is_warm_up = self.warmup_step > 0
         valid_length_each_example = np.array(valid_length_each_example)
-        res, current_idx = self.model.forward(input_ids=input_ids,
-                                              valid_length_each_example=valid_length_each_example,
-                                              block_tables=block_tables,
-                                              slot_mapping=slot_mapping,
-                                              prefill=prefill,
-                                              use_past=True,
-                                              position_ids=position_ids,
-                                              spec_mask=spec_mask,
-                                              q_seq_lens=q_seq_lens,
-                                              adapter_ids=adapter_ids)
+        model_args = {"mindie_warm_up": is_warm_up}
+
+        if self.is_multi_modal_model and not is_warm_up:
+            if prefill:
+                input_ids, decode_args = self.processor.decode_input_ids(input_ids, valid_length_each_example)
+                decode_args.pop("position_ids", None)
+                model_args.update(decode_args)
+
+        if self.use_legacy:
+            res, current_idx = self.model.forward(input_ids=input_ids,
+                                                  valid_length_each_example=valid_length_each_example,
+                                                  block_tables=block_tables,
+                                                  slot_mapping=slot_mapping,
+                                                  prefill=prefill,
+                                                  use_past=True,
+                                                  position_ids=position_ids,
+                                                  spec_mask=spec_mask,
+                                                  q_seq_lens=q_seq_lens,
+                                                  adapter_ids=adapter_ids,
+                                                  prefill_head_indices=prefill_head_indices,
+                                                  key_cache=key_cache,
+                                                  value_cache=value_cache,
+                                                  **model_args)
+        else:
+            res, current_idx = self.model.forward_mcore(input_ids=input_ids,
+                                                        valid_length_each_example=valid_length_each_example,
+                                                        block_tables=block_tables,
+                                                        slot_mapping=slot_mapping,
+                                                        prefill=prefill,
+                                                        position_ids=position_ids,
+                                                        spec_mask=spec_mask,
+                                                        q_seq_lens=q_seq_lens,
+                                                        adapter_ids=adapter_ids,
+                                                        prefill_head_indices=prefill_head_indices,
+                                                        key_cache=key_cache,
+                                                        value_cache=value_cache,
+                                                        **model_args)
         logits = res[0] if isinstance(res, tuple) else res
         if hasattr(self, 'model_config') and parallel_decoding_control(self.model_config):
             return logits
-        if prefill and logits.shape[0] > len(current_idx):
+        if self.use_legacy and prefill and logits.shape[0] > len(current_idx):
             logits = logits[Tensor(current_idx)]
 
+        if self.warmup_step > 0:
+            self.warmup_step -= 1
         return logits
 
     def swap(self, block_tables, swap_type):
@@ -369,6 +480,11 @@ class MindIEModelRunner:
             key_cache, value_cache = self.model.kvcache(i)
             swap_cache(self.key_host[i], key_cache, ms.Tensor(block_tables), swap_type)
             swap_cache(self.value_host[i], value_cache, ms.Tensor(block_tables), swap_type)
+
+    def generate_position_ids(self, input_ids):
+        if not self.is_multi_modal_model or self.warmup_step > 0:
+            return range(len(input_ids))
+        return self.processor.decode_position_ids_from_input_ids(input_ids)
 
 
 def _get_model_config(model_path):
@@ -466,44 +582,11 @@ class InputBuilder:
         return input_ids
 
 
-def _convert_process(source_path, target_path, convert_weight_dict):
-    """A single process to convert the safetensors"""
-    source_dict = load_file(source_path)
-    target_dict = convert_weight_dict(source_dict)
-    save_file(tensor_dict=target_dict, filename=target_path)
-    logger.info(f"Converted file {os.path.basename(target_path)}.")
-
-
-def _convert_safetensors(load_checkpoint, converted_dir, convert_weight_dict):
-    """Create multiprocess to convert the safetensors"""
-    sf_list = [sf for sf in os.listdir(load_checkpoint) if sf.endswith('.safetensors')]
-    processes = []
-    for sf in sf_list:
-        p = Process(target=_convert_process, args=[os.path.join(load_checkpoint, sf),
-                                                   os.path.join(converted_dir, sf),
-                                                   convert_weight_dict])
-        p.start()
-        processes.append(p)
-    return processes
-
-
-def _convert_index_json(load_checkpoint, converted_dir, convert_map_dict):
-    index_path = os.path.join(load_checkpoint, 'model.safetensors.index.json')
-    with open(index_path, 'r') as f:
-        data = json.load(f)
-    weight_map = data.get("weight_map")
-    new_weight_map = convert_map_dict(weight_map)
-    flags_ = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    with os.fdopen(os.open(os.path.join(converted_dir, 'param_name_map.json'), flags_, 0o750), 'w') as f:
-        json.dump(new_weight_map, f)
-        logger.info(f"Converted file param_name_map.json")
-
-
-def _load_distributed_safetensors(model, output_dir, load_safetensors):
+def _load_distributed_safetensors(model, strategy_path, load_safetensors):
     """Load distributed safetensors"""
     ms.load_distributed_checkpoint(
         network=model,
-        predict_strategy=os.path.join(output_dir, './strategy/ckpt_strategy_rank_0.ckpt'),
+        predict_strategy=strategy_path,
         unified_safetensors_dir=load_safetensors,
         format='safetensors'
     )
@@ -522,52 +605,12 @@ def _load_safetensors(model, load_safetensors):
         )
 
 
-def _transform_and_load_safetensors(ms_model, model, inputs, load_checkpoint=None,
-                                    load_safetensors=None, output_dir=None, use_parallel=False):
-    """Load safetensors into model"""
-    if not load_checkpoint and not load_safetensors:
-        raise ValueError(f"load_checkpoint and load_safetensors must be set, "
-                         f"when checkpoint_format is safetensors.")
-    is_built = False
-
-    if load_checkpoint:
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-        else:
-            output_dir = './output'
-            logger.warning(f'Output directory is set to ./output, '
-                           f'due to the output_dir {output_dir} does not exist.')
-        converted_dir = os.path.join(output_dir, './ms_safetensors')
-        if is_main_rank():
-            if os.path.exists(converted_dir):
-                shutil.rmtree(converted_dir)
-            os.makedirs(converted_dir, exist_ok=True)
-            logger.info("Folder %s is remade.", converted_dir)
-            logger.info(".........Starting to Convert Safetensors.........")
-            # convert safetensors
-            processes = _convert_safetensors(load_checkpoint, converted_dir, model.convert_weight_dict)
-            # convert json
-            _convert_index_json(load_checkpoint, converted_dir, model.convert_map_dict)
-
-            if use_parallel:
-                logger.info(".........Building Distribute model.........")
-                ms_model.infer_predict_layout(*inputs)
-                is_built = True
-
-            for p in processes:
-                p.join()
-            logger.info(".........Safetensors Convert Complete.........")
-
-        load_safetensors = converted_dir
-
-    if use_parallel:
-        if not is_built:
-            logger.info(".........Building Distribute model.........")
-            ms_model.infer_predict_layout(*inputs)
-        # Wait the main rank finish convert
-        barrier()
-        logger.info(".........Load Distribute Checkpoint.........")
-        _load_distributed_safetensors(model, output_dir, load_safetensors)
-    else:
-        logger.info(".........Load Checkpoint.........")
-        _load_safetensors(model, load_safetensors)
+def _check_valid_safetensors_path(path):
+    """Check whether the safetensors path is valid"""
+    if not isinstance(path, str) or isinstance(path, os.PathLike):
+        raise ValueError(f"path must be a str, but got {path} as type {type(path)}.")
+    if not os.path.exists(path):
+        raise ValueError(f"path does not exist.")
+    if contains_safetensors_files(path):
+        return
+    raise ValueError(f"load_checkpoint is not a valid path for safetensors.")

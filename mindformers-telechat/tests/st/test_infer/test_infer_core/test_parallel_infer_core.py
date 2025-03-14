@@ -39,7 +39,7 @@ def check_results(commands, results):
 @pytest.mark.level0
 @pytest.mark.platform_arm_ascend910b_training
 @pytest.mark.env_single
-def test_parallel_infer_core():
+def test_parallel_infer_core_graph():
     """
     Feature: Core of Parallel for prediction.
     Description: Test parallel core for prediction.
@@ -49,18 +49,54 @@ def test_parallel_infer_core():
     os.environ['MS_ENABLE_LCCL'] = "off"
     commands = [
         (f"export ASCEND_RT_VISIBLE_DEVICES=0,1 && "
-         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8110 --log_dir=test_log_mlp --join=True "
-         f"{cur_dir}/run_parallel_infer_core.py --module mlp", 'test_log_mlp/worker_0.log'),
+         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8110 --log_dir=test_log_mlp_graph --join=True "
+         f"{cur_dir}/run_parallel_infer_core.py --module mlp --mode 1", 'test_log_mlp_graph/worker_0.log'),
         (f"export ASCEND_RT_VISIBLE_DEVICES=2,3 && "
-         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8111 --log_dir=test_log_attention --join=True "
-         f"{cur_dir}/run_parallel_infer_core.py --module attention", 'test_log_attention/worker_0.log'),
+         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8111 --log_dir=test_log_attention_graph "
+         f"--join=True {cur_dir}/run_parallel_infer_core.py --module attention --mode 1",
+         'test_log_attention_graph/worker_0.log'),
         (f"export ASCEND_RT_VISIBLE_DEVICES=4,5 && "
-         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8123 --log_dir=test_log_transformerlayer "
-         f"--join=True {cur_dir}/run_parallel_infer_core.py --module transformerlayer",
-         'test_log_transformerlayer/worker_0.log'),
+         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8123 --log_dir=test_log_transformerlayer_graph "
+         f"--join=True {cur_dir}/run_parallel_infer_core.py --module transformerlayer --mode 1",
+         'test_log_transformerlayer_graph/worker_0.log'),
         (f"export ASCEND_RT_VISIBLE_DEVICES=6,7 && "
-         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8124 --log_dir=test_log_transformer --join=True "
-         f"{cur_dir}/run_parallel_infer_core.py --module transformer", 'test_log_transformer/worker_0.log')
+         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8124 --log_dir=test_log_transformer_graph "
+         f"--join=True {cur_dir}/run_parallel_infer_core.py --module transformer --mode 1",
+         'test_log_transformer_graph/worker_0.log')
+    ]
+
+    with Pool(len(commands)) as pool:
+        results = list(pool.imap(run_command, commands))
+    check_results(commands, results)
+
+
+@pytest.mark.level0
+@pytest.mark.platform_arm_ascend910b_training
+@pytest.mark.env_single
+def test_parallel_infer_core_pynative():
+    """
+    Feature: Core of Parallel for prediction.
+    Description: Test parallel core for prediction.
+    Expectation: AssertionError.
+    """
+    os.environ['ASCEND_HOME_PATH'] = "/usr/local/Ascend/latest"
+    os.environ['MS_ENABLE_LCCL'] = "off"
+    commands = [
+        (f"export ASCEND_RT_VISIBLE_DEVICES=0,1 && "
+         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8110 --log_dir=test_log_mlp_pynative --join=True "
+         f"{cur_dir}/run_parallel_infer_core.py --module mlp --mode 1", 'test_log_mlp_pynative/worker_0.log'),
+        (f"export ASCEND_RT_VISIBLE_DEVICES=2,3 && "
+         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8111 --log_dir=test_log_attention_pynative "
+         f"--join=True {cur_dir}/run_parallel_infer_core.py --module attention --mode 1",
+         'test_log_attention_pynative/worker_0.log'),
+        (f"export ASCEND_RT_VISIBLE_DEVICES=4,5 && "
+         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8123 --log_dir=test_log_transformerlayer_pynative "
+         f"--join=True {cur_dir}/run_parallel_infer_core.py --module transformerlayer --mode 1",
+         'test_log_transformerlayer_pynative/worker_0.log'),
+        (f"export ASCEND_RT_VISIBLE_DEVICES=6,7 && "
+         f"msrun --worker_num=2 --local_worker_num=2 --master_port=8124 --log_dir=test_log_transformer_pynative "
+         f"--join=True {cur_dir}/run_parallel_infer_core.py --module transformer --mode 1",
+         'test_log_transformer_pynative/worker_0.log')
     ]
 
     with Pool(len(commands)) as pool:

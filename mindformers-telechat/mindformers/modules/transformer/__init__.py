@@ -33,6 +33,7 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerOpParallelConfig,
     TransformerRecomputeConfig,
+    TransformerSwapConfig,
     VocabEmbedding
 )
 from .moe import MoEConfig

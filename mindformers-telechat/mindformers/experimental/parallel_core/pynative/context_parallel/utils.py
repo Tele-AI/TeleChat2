@@ -126,6 +126,7 @@ def get_sp_chuncks(batch, input_layout, enable_dp_shard=True,
 
     return batch
 
+
 def get_sp_chuncks_general(batch, input_layout, enable_dp_shard=True,
                            enable_flash_sp=False):
     """
@@ -203,6 +204,7 @@ def get_sp_chuncks_general(batch, input_layout, enable_dp_shard=True,
     val = ops.chunk(batch, sp, axis=seq_dim)[sp_rank]
 
     return val
+
 
 def get_sp_chuncks_attn_mask_general(attn_mask):
     """

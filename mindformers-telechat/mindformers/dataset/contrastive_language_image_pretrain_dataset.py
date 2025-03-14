@@ -14,7 +14,9 @@
 # ============================================================================
 """Contrastive Language Image Pretrain Dataset."""
 from typing import Optional, Union, Callable
+
 from mindformers.version_control import get_dataset_map
+from mindformers.utils import deprecated
 from .dataloader import build_dataset_loader
 from .transforms import build_transforms
 from .sampler import build_sampler
@@ -24,6 +26,7 @@ from ..models.build_tokenizer import build_tokenizer
 from ..tools.register import MindFormerRegister, MindFormerModuleType
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.DATASET)
 class ContrastiveLanguageImagePretrainDataset(BaseDataset):
     """

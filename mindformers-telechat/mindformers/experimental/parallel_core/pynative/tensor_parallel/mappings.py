@@ -15,9 +15,9 @@
 """mapping"""
 
 import mindspore as ms
+import mindspore.communication.comm_func as comm_func
 from mindspore import nn, ops
 from mindspore.communication import get_group_size
-import mindspore.communication.comm_func as comm_func
 
 from mindformers.experimental.parallel_core.pynative.utils import divide
 from mindformers.experimental.parallel_core.pynative.parallel_state import (
@@ -578,7 +578,7 @@ def all_to_all_self_defined(output_shape, input_, output_split_sizes=None, input
     num_group_max_token = max(group_inputs_sizes)
     if input_.shape:
         num_local_token = input_.shape[-2]
-        pad_len = num_group_max_token-num_local_token
+        pad_len = num_group_max_token - num_local_token
         # if current token is shorter than max length, pad it to longest length
         padded_local_token = ops.pad(input_, [0, 0, 0, pad_len], value=-100)
     else:

@@ -1,0 +1,54 @@
+training_config:
+  epochs: 1
+  training_iters: 20
+  log_interval: 1
+  loss_scale: 1.0
+  loss_reduction: "mean"
+  wrap_with_ddp: True
+  overlap_grad_reduce: True
+  bucket_size: 1
+  average_in_collective: True
+  use_distributed_optimizer: True
+  bf16: True
+
+parallel_config:
+  tensor_model_parallel_size: 1
+  pipeline_model_parallel_size: 1
+  context_parallel_size: 1
+  expert_model_parallel_size: 1
+  virtual_pipeline_model_parallel_size: null
+  sequence_parallel: False
+  recv_dtype: "float32"
+  model_customize_staged: False
+  overlap_grad_reduce: False
+  zero_level: z3
+
+model_config:
+  seq_length: 1024
+  vocab_size: 1
+  num_layers: 1
+  hidden_size: 8192
+  pad_token_id: -100
+  compute_dtype: "float32"
+  mlp_has_bias: True
+  flatten_labels_and_input_mask: True
+  untie_embeddings_and_output_weights: True
+  num_attention_heads: 1
+  ffn_hidden_size: 4096
+  hidden_act: 'fast_gelu'
+  params_dtype: 'float32'
+  normalization: 'FusedRMSNorm'
+  layernorm_epsilon: 1.e-5
+
+dataset_config:
+  batch_size: 1
+  micro_batch_num: 1
+
+optimizer_config:
+  optimizer_type: "mint.AdamW"
+  betas: 
+    - 0.9
+    - 0.999
+  eps: 1.e-8
+  learning_rate: 1.e-1
+  weight_decay: 1.e-1

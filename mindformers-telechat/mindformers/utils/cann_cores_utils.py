@@ -21,6 +21,7 @@ import os
 import psutil
 
 from mindformers.utils.bit_array import BitArray
+from mindformers.tools.logger import logger
 
 
 def get_cann_workqueue_cores(device_id: int) -> list:
@@ -73,24 +74,6 @@ def mask_to_str(mask: BitArray) -> str:
     return mask_str
 
 
-def execute_cmd(cmd: str, fake: bool = True):
-    """
-    execute shell command
-
-    Args:
-        cmd (`str`):
-            The command need to execute.
-        fake (`bool`, *optional*, defaults to `False`):
-            If fake execute is True, then print command instead to execute.
-
-    Returns:
-        NA.
-    """
-    if fake:
-        print(cmd)
-        return
-
-
 def binding_cann_workqueue(device_num: int, core_num_per_workqueue: int, separate_device_cores: bool):
     """
     binding cann workqueue cores
@@ -126,7 +109,7 @@ def binding_cann_workqueue(device_num: int, core_num_per_workqueue: int, separat
         if separate_device_cores:
             mask_str = mask_to_str(mask)
             bind_cann_core_cmd = f"echo \"{mask_str}\" > {cann_workqueue_config_path}"
-            execute_cmd(bind_cann_core_cmd)
+            logger.info(bind_cann_core_cmd)
 
     if not separate_device_cores:
         device_core_mask_str = mask_to_str(device_core_mask)
@@ -134,4 +117,4 @@ def binding_cann_workqueue(device_num: int, core_num_per_workqueue: int, separat
         for i in range(device_num):
             cann_workqueue_config_path = f"/sys/devices/virtual/workqueue/dev{i}_sq_send_wq/cpumask"
             bind_cann_core_cmd = f"echo \"{device_core_mask_str}\" > {cann_workqueue_config_path}"
-            execute_cmd(bind_cann_core_cmd)
+            logger.info(bind_cann_core_cmd)

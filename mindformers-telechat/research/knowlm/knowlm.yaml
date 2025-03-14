@@ -1,0 +1,8 @@
+model_config:
+  seq_length: 2048
+  vocab_size: 32000
+  pad_token_id: 0
+  hidden_size: 5120
+  num_layers: 40
+  num_heads: 40
+  rms_norm_eps: 1.e-6

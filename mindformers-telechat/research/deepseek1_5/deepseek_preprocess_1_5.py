@@ -23,8 +23,8 @@ import numpy as np
 
 from mindspore.mindrecord import FileWriter
 
+from mindformers.tools import logger
 from mindformers.models import build_tokenizer
-
 
 IGNORE_TOKEN_ID = -100
 
@@ -84,7 +84,7 @@ def clean_wikitext(string):
     return string
 
 
-def preprocess(sources, tokenizer, seq_length, pad_token_id):
+def preprocess(sources, tokenizer, seq_length):
     """conversation preprocess."""
 
     # Apply prompt templates
@@ -108,7 +108,7 @@ def preprocess(sources, tokenizer, seq_length, pad_token_id):
         l_target = len(target)
         if l_target < seq_length:
             d['input_ids'] = np.pad(d['input_ids'], ((0), (seq_length - len_inputid)),
-                                    mode='constant', constant_values=pad_token_id)
+                                    mode='constant', constant_values=32014)
             target = np.pad(target, ((0), (seq_length - l_target)),
                             mode='constant', constant_values=IGNORE_TOKEN_ID)
 
@@ -128,11 +128,11 @@ def preprocess(sources, tokenizer, seq_length, pad_token_id):
 class SupervisedDataset:
     """Dataset for supervised fine-tuning."""
 
-    def __init__(self, raw_data, tokenizer, seq_length, pad_token_id):
+    def __init__(self, raw_data, tokenizer, seq_length):
         super(SupervisedDataset, self).__init__()
 
         sources = [example["conversations"] for example in raw_data]
-        data_dict = preprocess(sources, tokenizer, seq_length, pad_token_id)
+        data_dict = preprocess(sources, tokenizer, seq_length)
 
         self.input_ids = data_dict.get("input_ids")
         self.labels = data_dict.get("labels")
@@ -165,12 +165,26 @@ def tokenize_wiki(tokenizer, file_path, seq_length, repeat):
             yield sample
 
 
-def tokenize_qa(tokenizer, file_path, seq_length, pad_token_id):
+# pylint: disable=C0111
+# pylint: disable=W0703
+def tokenize_qa(tokenizer, file_path, seq_length):
+    file = None
     raw_data = None
-    flags_ = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    with os.fdopen(os.open(file_path, flags_, 0o750), 'r', encoding='utf-8') as f:
-        raw_data = json.load(f)
-    dataset_cls = SupervisedDataset(raw_data, tokenizer, seq_length, pad_token_id)
+    try:
+        file = open(file_path, "r", encoding='utf-8')
+        raw_data = json.load(file)
+    except FileNotFoundError as file_not_found_error:
+        logger.error(file_not_found_error)
+    except UnicodeDecodeError as decode_error:
+        logger.error(decode_error)
+    except IOError as io_error:
+        logger.error(io_error)
+    except Exception as exception:
+        logger.error(exception)
+    finally:
+        if file is not None:
+            file.close()
+    dataset_cls = SupervisedDataset(raw_data, tokenizer, seq_length)
     for i, _ in enumerate(dataset_cls):
         yield dataset_cls[i]
 
@@ -189,7 +203,6 @@ if __name__ == '__main__':
     parser.add_argument('--file_partition', type=int, default=1)
     parser.add_argument('--repeat', type=int, default=1)
     parser.add_argument('--seq_length', type=int, default=2048)
-    parser.add_argument('--pad_token_id', type=int, default=32014)
     args = parser.parse_args()
     # pylint: disable=C0326
     out_dir, out_file = os.path.split(os.path.abspath(args.output_file))
@@ -223,7 +236,7 @@ if __name__ == '__main__':
             writer.write_raw_data([x])
         print("Transformed {} records.".format(transforms_count))
     elif args.dataset_type == 'qa':
-        for x in tokenize_qa(word_tokenizer, args.input_glob, args.seq_length + 1, args.pad_token_id):
+        for x in tokenize_qa(word_tokenizer, args.input_glob, args.seq_length + 1):
             transforms_count += 1
             writer.write_raw_data([x])
         print("Transformed {} records.".format(transforms_count))

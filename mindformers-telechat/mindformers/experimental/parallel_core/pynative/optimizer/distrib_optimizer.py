@@ -16,16 +16,18 @@
 
 from collections import OrderedDict
 import json
+import os
+import stat
 import numpy as np
 
 import mindspore as ms
 import mindspore.ops as ops
-import mindspore.communication.comm_func as comm_func
 from mindspore import _no_grad
 from mindspore.common import dtype as mstype
 from mindspore.communication.management import get_group_size, get_rank
+import mindspore.communication.comm_func as comm_func
 
-from mindformers.tools.logger import logger
+from mindformers.tools import logger
 from mindformers.experimental.parallel_core.pynative.distributed import ParamAndGradBuffer
 
 from .optimizer import MixedPrecisionOptimizer
@@ -248,6 +250,14 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
                     sharded_group['params'].append(param)
                     local_param_group_map[param] = (group_idx, len(sharded_group['params']) - 1)
 
+        # add zero3 params which are not in the param_ranges_map
+        for group_index, group in enumerate(param_groups):
+            for param in group["params"]:
+                if hasattr(param, 'use_zero3') and param.use_zero3:
+                    sharded_group = sharded_param_groups[group_index]
+                    sharded_group["params"].append(param)
+                    local_param_group_map[param] = (group_index, len(sharded_group["params"]) - 1)
+
         return local_param_group_map, sharded_param_groups
 
     @classmethod
@@ -278,40 +288,58 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
 
             # the param is the integrated parameter object
             for param in sharded_group['params']:
-                buffer_idx, bucket_idx = param_to_bucket_map[param]
-                param_range = param_ranges_map[buffer_idx][bucket_idx][param]
-                param_start_in_buffer, param_end_in_buffer = param_range['range_in_buffer']
-                # for float16 and bfloat16 parameters, clone an float32 copy
-                if param.dtype in [mstype.float16, mstype.bfloat16]:
-                    sharded_param_fp16 = buffers[buffer_idx].param_data[param_start_in_buffer:param_end_in_buffer]
-                    sharded_param_fp32_from_fp16 = ops.cast(sharded_param_fp16, mstype.float32)
-                    sharded_param_fp16.name = param.name
-                    sharded_param_fp32_from_fp16.name = param.name
-                    param.main_param = sharded_param_fp32_from_fp16
-                    sharded_grad_fp32_from_fp16 = ops.cast(buffers[buffer_idx].grad_data[param_start_in_buffer: \
-                                                           param_end_in_buffer],
-                                                           mstype.float32)
-                    param.grad = sharded_grad_fp32_from_fp16
-                    sharded_param_fp32_from_fp16.grad = sharded_grad_fp32_from_fp16
-
-                    param_fp16_this_group.append(param)
-                    sharded_param_fp16_this_group.append(sharded_param_fp16)
-                    sharded_param_fp32_from_fp16_this_group.append(sharded_param_fp32_from_fp16)
-
-                elif param.dtype == mstype.float32:
-                    sharded_param_fp32 = buffers[buffer_idx].param_data[param_start_in_buffer:param_end_in_buffer]
-                    sharded_param_fp32.name = param.name
-                    param.main_param = sharded_param_fp32
-                    sharded_grad_fp32 = buffers[buffer_idx].grad_data[param_start_in_buffer: param_end_in_buffer]
-                    param.grad = sharded_grad_fp32
-                    sharded_param_fp32.grad = sharded_grad_fp32
-                    param_fp32_this_group.append(param)
-                    sharded_param_fp32_this_group.append(sharded_param_fp32)
+                if hasattr(param, 'use_zero3') and param.use_zero3:
+                    if param.dtype in [mstype.float16, mstype.bfloat16]:
+                        zero3_main_param = ops.cast(param.view(-1), mstype.float32)
+                        param_fp16_this_group.append(param)
+                        zero3_main_param.name = param.name
+                        sharded_param_fp16_this_group.append(param)
+                        sharded_param_fp32_from_fp16_this_group.append(zero3_main_param)
+                    elif param.dtype == mstype.float32:
+                        param_fp32_this_group.append(param)
+                        zero3_fp32_main_param = param.view(-1)
+                        zero3_fp32_main_param.name = param.name
+                        sharded_param_fp32_this_group.append(zero3_fp32_main_param)
+                    else:
+                        raise TypeError("Invalid parameter dtype. Supported parameter dtypes are"
+                                        "`mindspore.float16`, `mindspore.bfloat16` and `mindspore.float32`,"
+                                        " but got {}.".format(param.dtype))
 
                 else:
-                    raise TypeError("Invalid parameter dtype. Supported parameter dtypes are"
-                                    "`mindspore.float16`, `mindspore.bfloat16` and `mindspore.float32`,"
-                                    " but got {}.".format(param.dtype))
+                    buffer_idx, bucket_idx = param_to_bucket_map[param]
+                    param_range = param_ranges_map[buffer_idx][bucket_idx][param]
+                    param_start_in_buffer, param_end_in_buffer = param_range['range_in_buffer']
+                    # for float16 and bfloat16 parameters, clone an float32 copy
+                    if param.dtype in [mstype.float16, mstype.bfloat16]:
+                        sharded_param_fp16 = buffers[buffer_idx].param_data[param_start_in_buffer:param_end_in_buffer]
+                        sharded_param_fp32_from_fp16 = ops.cast(sharded_param_fp16, mstype.float32)
+                        sharded_param_fp16.name = param.name
+                        sharded_param_fp32_from_fp16.name = param.name
+                        param.main_param = sharded_param_fp32_from_fp16
+                        sharded_grad_fp32_from_fp16 = ops.cast(buffers[buffer_idx].grad_data[param_start_in_buffer: \
+                                                               param_end_in_buffer],
+                                                               mstype.float32)
+                        param.grad = sharded_grad_fp32_from_fp16
+                        sharded_param_fp32_from_fp16.grad = sharded_grad_fp32_from_fp16
+
+                        param_fp16_this_group.append(param)
+                        sharded_param_fp16_this_group.append(sharded_param_fp16)
+                        sharded_param_fp32_from_fp16_this_group.append(sharded_param_fp32_from_fp16)
+
+                    elif param.dtype == mstype.float32:
+                        sharded_param_fp32 = buffers[buffer_idx].param_data[param_start_in_buffer:param_end_in_buffer]
+                        sharded_param_fp32.name = param.name
+                        param.main_param = sharded_param_fp32
+                        sharded_grad_fp32 = buffers[buffer_idx].grad_data[param_start_in_buffer: param_end_in_buffer]
+                        param.grad = sharded_grad_fp32
+                        sharded_param_fp32.grad = sharded_grad_fp32
+                        param_fp32_this_group.append(param)
+                        sharded_param_fp32_this_group.append(sharded_param_fp32)
+
+                    else:
+                        raise TypeError("Invalid parameter dtype. Supported parameter dtypes are"
+                                        "`mindspore.float16`, `mindspore.bfloat16` and `mindspore.float32`,"
+                                        " but got {}.".format(param.dtype))
             param_fp16_groups.append(param_fp16_this_group)
             param_fp32_groups.append(param_fp32_this_group)
             sharded_param_fp16_groups.append(sharded_param_fp16_this_group)
@@ -464,13 +492,10 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
             )
 
         # Build a mapping from sharded param to sharded state
+        param_to_state = zip(self.optimizer.parameters, self.optimizer.exp_avg, self.optimizer.exp_avg_sq)
         shard_param_to_state_map = {
             param.name: (exp_avg, exp_avg_sq)
-            for param, exp_avg, exp_avg_sq in zip(
-                self.optimizer.parameters,
-                self.optimizer.exp_avg,
-                self.optimizer.exp_avg_sq
-            )
+            for param, exp_avg, exp_avg_sq in param_to_state
         }
 
         # Load optimizer state from the state dict
@@ -491,7 +516,7 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
             for ele in [shard_param, shard_exp_avg, shard_exp_avg_sq]:
                 weight = state_dict.get(ele.name)
                 if weight is None:
-                    logger.warning(f"Fail to get weight of '{ele.name}' from state dict.")
+                    logger.warning(f"Fail to get the weight of '{ele.name}' from state dict.")
                     continue
                 ele.copy_(
                     ms.Tensor(
@@ -606,11 +631,14 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
         def copy_group_grads(model_groups, main_groups):
             for model_group, main_group in zip(model_groups, main_groups):
                 for model_param, main_param in zip(model_group, main_group):
-                    buffer_idx, bucket_idx = self.param_to_bucket_map.get(model_param)
-                    range_map = self.param_ranges_map[buffer_idx][bucket_idx][model_param]
-                    param_start, param_end = range_map['range_in_param']
-                    main_param.grad.copy_(ops.cast(model_param.main_grad.view(-1)[param_start: param_end],
-                                                   mstype.float32))
+                    if hasattr(model_param, 'use_zero3') and model_param.use_zero3:
+                        main_param.grad = ops.cast(model_param.grad.view(-1), mstype.float32)
+                    else:
+                        buffer_idx, bucket_idx = self.param_to_bucket_map.get(model_param)
+                        range_map = self.param_ranges_map[buffer_idx][bucket_idx][model_param]
+                        param_start, param_end = range_map['range_in_param']
+                        main_param.grad.copy_(ops.cast(model_param.main_grad.view(-1)[param_start: param_end],
+                                                       mstype.float32))
 
         copy_group_grads(self.param_fp32_groups, self.sharded_param_fp32_groups)
         copy_group_grads(self.param_fp16_groups, self.sharded_param_fp32_from_fp16_groups)
@@ -624,10 +652,13 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
         def copy_group_params(model_groups, main_groups):
             for model_group, main_group in zip(model_groups, main_groups):
                 for model_param, main_param in zip(model_group, main_group):
-                    buffer_idx, bucket_idx = self.param_to_bucket_map.get(model_param)
-                    range_map = self.param_ranges_map[buffer_idx][bucket_idx][model_param]
-                    param_start, param_end = range_map['range_in_param']
-                    main_param.copy_(ops.cast(model_param.view(-1)[param_start:param_end], mstype.float32))
+                    if hasattr(model_param, 'use_zero3') and model_param.use_zero3:
+                        main_param.copy_(ops.cast(model_param.view(-1), mstype.float32))
+                    else:
+                        buffer_idx, bucket_idx = self.param_to_bucket_map.get(model_param)
+                        range_map = self.param_ranges_map[buffer_idx][bucket_idx][model_param]
+                        param_start, param_end = range_map['range_in_param']
+                        main_param.copy_(ops.cast(model_param.view(-1)[param_start:param_end], mstype.float32))
 
         copy_group_params(self.param_fp32_groups, self.sharded_param_fp32_groups)
         copy_group_params(self.param_fp16_groups, self.sharded_param_fp32_from_fp16_groups)
@@ -641,10 +672,13 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
         def copy_group_params(main_groups, model_groups):
             for main_group, model_group in zip(main_groups, model_groups):
                 for main_param, model_param in zip(main_group, model_group):
-                    buffer_idx, bucket_idx = self.param_to_bucket_map.get(model_param)
-                    range_map = self.param_ranges_map[buffer_idx][bucket_idx][model_param]
-                    param_start, param_end = range_map['range_in_param']
-                    model_param.view(-1)[param_start:param_end].copy_(ops.cast(main_param, model_param.dtype))
+                    if hasattr(model_param, 'use_zero3') and model_param.use_zero3:
+                        model_param.view(-1).copy_(ops.cast(main_param, model_param.dtype))
+                    else:
+                        buffer_idx, bucket_idx = self.param_to_bucket_map.get(model_param)
+                        range_map = self.param_ranges_map[buffer_idx][bucket_idx][model_param]
+                        param_start, param_end = range_map['range_in_param']
+                        model_param.view(-1)[param_start:param_end].copy_(ops.cast(main_param, model_param.dtype))
 
         copy_group_params(self.sharded_param_fp32_groups, self.param_fp32_groups)
         copy_group_params(self.sharded_param_fp32_from_fp16_groups, self.param_fp16_groups)
@@ -772,7 +806,9 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
             strategy['buffer_info'][buffer_idx]['buffer_numel_unpadded'] = buffer.numel_unpadded
             strategy['buffer_info'][buffer_idx]['bucket_num'] = len(buffer.buckets)
         # save as json file
-        with open(file, 'w') as f:
+        flags = os.O_WRONLY | os.O_CREAT
+        mode = stat.S_IWUSR | stat.S_IRUSR
+        with os.fdopen(os.open(file, flags, mode), 'w') as f:
             json.dump(strategy, f, indent=4)
 
     def state_dict(self):
@@ -788,7 +824,7 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
             # copy param data into dummy tensor
             for param, range_map in param_range_map_this_bucket.items():
                 start_idx, end_idx = range_map['range_in_shard']
-                param_id_in_opt = self.param_idx_in_opt[param.name]
+                param_id_in_opt = self.param_idx_in_opt.get(param.name)
                 param_shard[start_idx:end_idx] = self.optimizer.parameters[param_id_in_opt].contiguous().asnumpy()
                 exp_avg_shard[start_idx:end_idx] = self.optimizer.exp_avg[param_id_in_opt].contiguous().asnumpy()
                 exp_avg_sq_shard[start_idx:end_idx] = self.optimizer.exp_avg_sq[param_id_in_opt].contiguous().asnumpy()
@@ -798,14 +834,14 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
                 name=shard_name,
                 requires_grad=False
             )
-            param_dict['exp_avg.'+shard_name] = ms.Parameter(
+            param_dict['exp_avg.' + shard_name] = ms.Parameter(
                 ms.Tensor(exp_avg_shard),
-                name='exp_avg.'+shard_name,
+                name='exp_avg.' + shard_name,
                 requires_grad=False
             )
-            param_dict['exp_avg_sq.'+shard_name] = ms.Parameter(
+            param_dict['exp_avg_sq.' + shard_name] = ms.Parameter(
                 ms.Tensor(exp_avg_sq_shard),
-                name='exp_avg_sq.'+shard_name,
+                name='exp_avg_sq.' + shard_name,
                 requires_grad=False
             )
 

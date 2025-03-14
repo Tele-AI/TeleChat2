@@ -89,7 +89,7 @@ class Embedding(Module):
         - **embeddings** (Tensor)- The embedding output, shape :math:`(B, S, H)`.
 
     Raises:
-        NotImplementedError: If `config.fp32_residual_connection` or `config.clone_scatter_output_in_embedding` is True.
+        NotImplementedError: If `config.clone_scatter_output_in_embedding` is True.
         RuntimeError: If `tokentype_ids` is not None and `tokentype_embeddings` is None.
             If `tokentype_ids` is None and `tokentype_embeddings` is not None.
 
@@ -203,8 +203,6 @@ class Embedding(Module):
         )
 
         self.fp32_residual_connection = config.fp32_residual_connection
-        if self.fp32_residual_connection:
-            raise NotImplementedError("fp32_residual_connection is not supported for now.")
         self.clone_scatter_output_in_embedding = config.clone_scatter_output_in_embedding
         if self.clone_scatter_output_in_embedding:
             raise NotImplementedError("clone_scatter_output_in_embedding is not supported for now.")
@@ -248,7 +246,7 @@ class Embedding(Module):
             embeddings = embeddings.swapaxes(0, 1)
 
         if self.fp32_residual_connection:
-            raise NotImplementedError("`fp32_residual_connection` is not supported for now.")
+            embeddings = embeddings.astype(ms.float32)
 
         # dropout
         if self.sequence_parallel:
@@ -261,7 +259,8 @@ class Embedding(Module):
             embeddings = self.dropout(embeddings)
 
         # convert dtype to compute dtype
-        embeddings = embeddings.astype(self.compute_dtype)
+        if not self.fp32_residual_connection:
+            embeddings = embeddings.astype(self.compute_dtype)
         return embeddings
 
 
@@ -512,7 +511,7 @@ class TransformerLanguageModel(Module):
                   retriever_input_ids=None, retriever_position_ids=None, retriever_attn_mask=None,
                   enc_dec_attn_mask=None, tokentype_ids=None, inference_params=None,
                   pooling_sequence_index=0, enc_hidden_states=None, output_enc_hidden=False,
-                  input_image=None, delimiter_position=None, image_embedding=None):
+                  input_image=None, delimiter_position=None, image_embedding=None, prefix_keys_values=None):
         """ language model forward """
         if dec_input_ids is not None:
             raise NotImplementedError("dec_input_ids is not supported for now.")
@@ -604,18 +603,56 @@ def get_language_model(config, num_tokentypes, add_pooler,
                        decoder_attn_mask_type=None,
                        pre_process=True, post_process=True):
     """
-    get language model
+    Get language model.
 
     Args:
-        - **config** : model config
-        - **num_tokentypes** : if > 0, using tokentypes embedding
-        - **add_pooler** : if True, use pooler
-        - **encoder_attn_mask_type** : encoder attention mask type
-        - **add_encoder** : if True, use encoder
-        - **add_decoder** : if True, use decoder
-        - **decoder_attn_mask_type** : decoder attention mask type
-        - **pre_process** : when using pipeline parallel, indicate whether it's the first stage
-        - **post_process** : when using pipeline parallel, indicate whether it's the last stage
+        config (TransformerConfig): The transformer configuration includes init_method, parallel_config, etc.
+        encoder_attn_mask_type (int): Encoder attention mask type.
+        num_tokentypes (int): If > 0, using tokentypes embedding.
+        add_encoder (bool): If True, use encoder.
+        use_decoder (bool): If True, use decoder.
+        decoder_attn_mask_type (int): Decoder attention mask type.
+        add_pooler (bool): If True, use pooler.
+        pre_process (bool): When using pipeline parallel, indicate whether it's the first stage.
+        post_process (bool): When using pipeline parallel, indicate whether it's the last stage.
+
+    Returns:
+        - **language_model** (TransformerLanguageModel) - Transformer Model.
+        - **language_model_key** (str) - Model key.
+
+    Supported Platforms:
+        ``Ascend``
+
+    Examples:
+        .. note::
+            Before running the following examples, you need to configure the communication environment variables.
+            For Ascend devices, it is recommended to use the msrun startup method
+            without any third-party or configuration file dependencies.
+            Please see the `msrun start up
+            <https://www.mindspore.cn/docs/en/master/model_train/parallel/msrun_launcher.html>`_
+            for more details.
+
+        >>> import os
+        >>> import numpy as np
+        >>> import mindspore as ms
+        >>> import mindspore.common.dtype as mstype
+        >>> from mindspore import Tensor
+        >>> from mindspore.communication.management import init
+        >>> from mindformers.experimental.parallel_core.pynative.config import ModelParallelConfig, TransformerConfig
+        >>> from mindformers.experimental.parallel_core.pynative.parallel_state import initialize_model_parallel
+        >>> from mindformers.experimental.parallel_core.pynative.language_model import get_language_model
+        >>> init()
+        >>> initialize_model_parallel()
+        >>> parallel_config = ModelParallelConfig(tensor_model_parallel_size=tensor_parallel)
+        >>> config = TransformerConfig(seq_length=16,
+        >>>                            vocab_size=1,
+        >>>                            num_layers=1,
+        >>>                            num_attention_heads=8,
+        >>>                            num_query_groups=4,
+        >>>                            hidden_size=256,
+        >>>                            ffn_hidden_size=256,
+        >>>                            parallel_config=parallel_config)
+        >>> language_model, _ = get_language_model(config, encoder_attn_mask_type=None)
     """
     language_model = TransformerLanguageModel(
         config=config,

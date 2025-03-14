@@ -83,9 +83,6 @@ class LlmBoostConfig(PretrainedConfig):
             Llm boost backend. Default: ``BuildIn`` .
         boost_model_name (str, optional):
             Llm boost model name. Default: ``None`` .
-        need_nz (bool, optional):
-            Whether it is necessary to convert the format to NZ when calculating matrix multiplication.
-            Default: ``False`` .
         communication_backend (str, optional):
             communication_backend, ``hccl`` or ``lccl``. Default: ``hccl`` .
     Returns:
@@ -130,7 +127,7 @@ class LlmBoostConfig(PretrainedConfig):
         top_p: float = 1.0,
         do_sample: bool = True,
         quant_config: dict = None,
-        communication_backend: str = "hccl",
+        communication_backend: str = "",
         **kwargs
     ):
         super(LlmBoostConfig, self).__init__(**kwargs)

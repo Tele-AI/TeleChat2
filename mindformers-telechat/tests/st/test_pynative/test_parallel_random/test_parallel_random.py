@@ -15,12 +15,8 @@
 """Test ParallelRandom"""
 import os
 import pytest
-#os.environ['ASCEND_RT_VISIBLE_DEVICES']="0,1,2,3"
 
 
-@pytest.mark.level0
-@pytest.mark.platform_arm_ascend910b_training
-@pytest.mark.env_single
 class TestParallelRandom:
     """A test class for testing Random."""
 

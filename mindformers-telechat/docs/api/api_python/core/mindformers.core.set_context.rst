@@ -11,5 +11,5 @@ mindformers.core.set_context
         设置属性时，必须输入属性名称。目前只有run_mode参数属于MindFormers context，Kwargs参数会被传到MindSpore的set_context接口中。
 
     参数：
-        - **run_mode** (str) - 运行模式，必须在列表['train', 'finetune', 'eval', 'predict']中。
+        - **run_mode** (str, 可选) - 运行模式，可以是['train', 'finetune', 'eval', 'predict']其中之一。默认值： ``None`` 。
         - **kwargs** - MindSpore的context参数。

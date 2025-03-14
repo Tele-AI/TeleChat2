@@ -1,0 +1,35 @@
+{
+  "name": "model_name",
+  "pre_defined_layer": {
+    "headLayerName_AtBeginRepresentedByZero": 0,
+    "tailLayerName_AtEndRepresentedByMinusOne": -1
+  },
+  "auto_partition_layer": {
+    "NumberOfLayers": 4
+  },
+  "layers_description": [
+    {
+      "name": "headLayerName",
+      "type": "HEAD",
+      "time": 0,
+      "nb_layer": 1,
+      "memory_parameter": 0
+    },
+    {
+      "name": "bodyLayerName",
+      "type": "BODY",
+      "time": 0,
+      "nb_layer": 1,
+      "memory_parameter": 0,
+      "memory_activation": 0,
+      "memory_recompute": 0
+    },
+    {
+      "name": "tailLayerName",
+      "type": "TAIL",
+      "time": 0,
+      "nb_layer": 1,
+      "memory_parameter": 0
+    }
+  ]
+}

@@ -11,7 +11,6 @@ Auto类
     mindformers.AutoConfig
     mindformers.AutoModel
     mindformers.AutoModelForCausalLM
-    mindformers.AutoModelForZeroShotImageClassification
     mindformers.AutoProcessor
     mindformers.AutoTokenizer
 

@@ -50,30 +50,26 @@ def get_expert_mask(token_type_ids):
 class TestCogVLM2VideoPredict:
     """A test class for testing model prediction."""
 
-    # @pytest.mark.level0
-    # @pytest.mark.platform_arm_ascend910b_training
-    # @pytest.mark.env_onecard
+    @pytest.mark.level0
+    @pytest.mark.platform_arm_ascend910b_training
+    @pytest.mark.env_onecard
     def test_base_model(self):
         """
         Feature: Video model predict
         Description: Test base model prediction.
         Expectation: AssertionError
         """
-        os.environ['USE_ROPE_SELF_DEFINE'] = 'True'
         os.environ['ASCEND_HOME_PATH'] = "/usr/local/Ascend/latest"
         model_config = get_config()
         model = get_model(model_config)
         input_ids = np.random.randint(0, 128, size=(1, 1024), dtype=np.int32)
-        input_ids = np.pad(input_ids, ((0, 0), (0, 1024)), 'constant', constant_values=128002)
         images = Tensor(np.random.random(size=(1, 3, 224, 224)), dtype=mstype.float32)
         video_context_pos = Tensor(np.array([[[0, i + 3] for i in range(66)]], dtype=np.int32))
-        position_ids = Tensor(np.arange(2048, dtype=np.int32)).expand_dims(axis=0)
-        valid_position = np.array([[1]], dtype=np.int32)
+        position_ids = np.expand_dims(np.arange(2048, dtype=np.int32), axis=0)
         _ = model.generate(input_ids=input_ids,
                            images=images,
                            video_context_pos=video_context_pos,
-                           position_ids=position_ids,
-                           valid_position=valid_position)
+                           position_ids=position_ids)
 
 
 class TestCogVLM2ImagePredict:
@@ -88,7 +84,6 @@ class TestCogVLM2ImagePredict:
         Description: Test image model prediction.
         Expectation: AssertionError
         """
-        os.environ['USE_ROPE_SELF_DEFINE'] = 'True'
         model_config = get_image_config()
         model = get_image_model(model_config)
         input_ids = np.random.randint(0, 128, size=(1, 4096), dtype=np.int32)

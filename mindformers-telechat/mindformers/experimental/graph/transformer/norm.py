@@ -20,7 +20,17 @@ import mindspore.common.dtype as mstype
 from mindspore import nn, Parameter
 from mindspore.common.initializer import initializer
 
+from mindformers.experimental.graph.transformer.transformer_config import TransformerConfig
+
 __all__ = ["get_norm"]
+
+
+def get_strategy(config):
+    """Retrieves the parallel strategy"""
+    dp = 1 if config.data_parallel is None else config.data_parallel
+    tp = 1 if config.tensor_parallel is None else config.tensor_parallel
+    cp = 1 if config.context_parallel is None else config.context_parallel
+    return (dp, tp, cp)
 
 
 class LayerNorm(nn.Cell):
@@ -75,10 +85,13 @@ class LayerNorm(nn.Cell):
         output = self.cast(output, original_type)
         return output
 
-    def shard(self, strategy):
+    def shard(self, config: TransformerConfig, in_strategy=None):
         """shard method"""
-        if not strategy:
-            raise TypeError('The strategy length must bigger than 0! Strategy {} not supported'.format(strategy))
+        dp, _, cp = get_strategy(config)
+        if in_strategy:
+            strategy = in_strategy
+        else:
+            strategy = (dp, cp, 1)
 
         self.mean.shard((strategy,))
         self.sub.shard((strategy, strategy[:-1] + (1,)))
@@ -89,6 +102,9 @@ class LayerNorm(nn.Cell):
         self.real_div.shard((strategy, strategy[:-1] + (1,)))
         self.mul.shard((strategy, (strategy[-1],)))
         self.add2.shard((strategy, (strategy[-1],)))
+
+    def sharding_propagation(self, strategy):
+        pass
 
 
 class FusedLayerNorm(nn.Cell):
@@ -130,16 +146,22 @@ class FusedLayerNorm(nn.Cell):
         output = self.cast(output, original_type)
         return output
 
-    def shard(self, strategy):
+    def shard(self, config: TransformerConfig, in_strategy=None):
         """shard method"""
-        if not strategy:
-            raise TypeError('The strategy length must bigger than 0! Strategy {} not supported'.format(strategy))
+        dp, _, cp = get_strategy(config)
+        if in_strategy:
+            strategy = in_strategy
+        else:
+            strategy = (dp, cp, 1)
 
         if strategy[-1] != 1:
             raise TypeError(
                 'The last dim in FusedlayerNorm can not equal to 1! Strategy {} not supported!'.format(strategy))
 
         self.layer_norm.shard((strategy, (strategy[-1],), (strategy[-1],)))
+
+    def sharding_propagation(self, strategy):
+        pass
 
 
 class RMSNorm(nn.Cell):
@@ -188,10 +210,13 @@ class RMSNorm(nn.Cell):
         output = self.cast(output, original_type)
         return output
 
-    def shard(self, strategy):
+    def shard(self, config: TransformerConfig, in_strategy=None):
         """shard method"""
-        if not strategy:
-            raise TypeError('The strategy length must bigger than 0! Strategy {} not supported'.format(strategy))
+        dp, _, cp = get_strategy(config)
+        if in_strategy:
+            strategy = in_strategy
+        else:
+            strategy = (dp, cp, 1)
 
         self.square.shard((strategy,))
         self.mean.shard((strategy,))
@@ -199,6 +224,9 @@ class RMSNorm(nn.Cell):
         self.rsqrt.shard((strategy[:-1] + (1,),))
         self.mul.shard((strategy, strategy[:-1] + (1,)))
         self.mul2.shard((strategy, (strategy[-1],)))
+
+    def sharding_propagation(self, strategy):
+        pass
 
 
 class FusedRMSNorm(nn.Cell):
@@ -237,16 +265,22 @@ class FusedRMSNorm(nn.Cell):
         output = self.cast(output, original_type)
         return output
 
-    def shard(self, strategy):
+    def shard(self, config: TransformerConfig, in_strategy=None):
         """shard method"""
-        if not strategy:
-            raise TypeError('The strategy length must bigger than 0! Strategy {} not supported'.format(strategy))
+        dp, _, cp = get_strategy(config)
+        if in_strategy:
+            strategy = in_strategy
+        else:
+            strategy = (dp, cp, 1)
 
         if strategy[-1] != 1 and ms.get_context('mode') == ms.GRAPH_MODE:
             raise TypeError(
                 'The last dim in FusedlayerNorm can not equal to 1! Strategy {} not supported!'.format(strategy))
 
         self.norm.shard((strategy, (strategy[-1],)))
+
+    def sharding_propagation(self, strategy):
+        pass
 
 
 def get_norm(config):

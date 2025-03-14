@@ -14,7 +14,9 @@
 # ============================================================================
 """Zero Shot Image Classification Dataset."""
 from typing import Optional, Union, Callable
+
 from mindformers.version_control import get_dataset_map
+from mindformers.utils import deprecated
 from .dataloader import build_dataset_loader
 from .transforms import build_transforms
 from .base_dataset import BaseDataset
@@ -23,6 +25,7 @@ from ..tools.register import MindFormerRegister, MindFormerModuleType
 from ..models.build_tokenizer import build_tokenizer
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.DATASET)
 class ZeroShotImageClassificationDataset(BaseDataset):
     r"""

@@ -19,7 +19,6 @@ from mindformers.models.bert import BertForPreTraining, BertForQuestionAnswering
     BertForTokenClassification, BertForMultipleChoice
 from mindformers.models.blip2 import Blip2Qformer, Blip2ItmEvaluator, \
     Blip2Classifier, Blip2ImageToTextGeneration, Blip2Llm
-from mindformers.models.bloom import BloomLMHeadModel
 from mindformers.models.clip import CLIPModel
 from mindformers.models.glm import GLMForPreTraining, GLMChatModel
 from mindformers.models.glm2 import ChatGLM2ForConditionalGeneration
@@ -103,15 +102,6 @@ class TestBlip2Config(unittest.TestCase):
         config = AutoConfig.from_pretrained("configs/blip2/run_blip2_stage2_vit_g_baichuan_7b.yaml")
         self.clear_checkpoint_name_or_path(config)
         model = Blip2Llm(config)
-
-
-class TestBloomConfig(unittest.TestCase):
-    """test bloom config"""
-    def test_init_model_for_text_generation_from_yaml(self):
-        """test init model with config"""
-        config = AutoConfig.from_pretrained("configs/bloom/run_bloom_560m.yaml")
-        config.checkpoint_name_or_path = ''
-        model = BloomLMHeadModel(config)
 
 
 class TestClipConfig(unittest.TestCase):

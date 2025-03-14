@@ -8,7 +8,7 @@ mindformers.pipeline.MultiModalToTextPipeline
     参数：
         - **model** (Union[PretrainedModel, Model]) - 执行任务的模型。必须是继承自 `PretrainedModel` 类的模型实例。
         - **processor** (BaseXModalToTextProcessor, 可选) - 模型的图片处理器。默认值： ``None`` 。
-    
+
     返回：
         一个 `MultiModalToTextPipeline` 实例。
 

@@ -92,13 +92,13 @@ MindFormers软硬件配套关系以及安装参考[环境安装指南](../../REA
 
 #### 数据集下载
 
-MindFormers提供**Wikitext2**作为[预训练](#预训练)数据集和PPL评测数据集，**alpaca**作为[微调](#微调)数据集。**SQuAD1.1**为阅读理解评测数据集。
+MindFormers提供**Wikitext2**作为[预训练](#预训练)数据集和PPL评测数据集，**alpaca**作为[微调](#微调)数据集，**SQuAD1.1**为阅读理解评测数据集。
 
-| 数据集名称     |                    适用模型                     |          适用阶段           |                                                         下载链接                                                          |
-|:----------|:-------------------------------------------:|:-----------------------:|:---------------------------------------------------------------------------------------------------------------------:|
-| Wikitext2 | llama2-7b <br/> llama2-13b <br/> llama2-70b | Pretrain <br/> Evaluate | [Link](https://ascend-repo-modelzoo.obs.cn-east-2.myhuaweicloud.com/MindFormers/dataset/wikitext-2/wikitext-2-v1.zip) |
-| alpaca    | llama2-7b <br/> llama2-13b <br/> llama2-70b |        Finetune         |                    [Link](https://github.com/tatsu-lab/stanford_alpaca/blob/main/alpaca_data.json)                    |
-| SQuAD 1.1 | llama2-7b <br/> llama2-13b <br/> llama2-70b |        Evaluate         |                                     [Link](https://data.deepai.org/squad1.1.zip)                                      |
+| 数据集名称     |                    适用模型                     |          适用阶段           |                                        下载链接                                        |
+|:----------|:-------------------------------------------:|:-----------------------:|:----------------------------------------------------------------------------------:|
+| Wikitext2 | llama2-7b <br/> llama2-13b <br/> llama2-70b | Pretrain <br/> Evaluate | [Link](https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip)   |
+| alpaca    | llama2-7b <br/> llama2-13b <br/> llama2-70b |        Finetune         |  [Link](https://github.com/tatsu-lab/stanford_alpaca/blob/main/alpaca_data.json)   |
+| SQuAD 1.1 | llama2-7b <br/> llama2-13b <br/> llama2-70b |        Evaluate         |                    [Link](https://data.deepai.org/squad1.1.zip)                    |
 
 数据预处理中所用的`tokenizer.model`可以参考[模型权重下载](#模型权重下载)进行下载。
 
@@ -107,7 +107,7 @@ MindFormers提供**Wikitext2**作为[预训练](#预训练)数据集和PPL评测
   使用`mindformers/tools/dataset_preprocess/llama/llama_preprocess.py`对下载后的数据进行预处理，并生成Mindrecord数据。
 
   ```shell
-  python llama_preprocess.py \
+  python mindformers/tools/dataset_preprocess/llama/llama_preprocess.py \
     --dataset_type wiki \
     --input_glob /{path}/wiki.train.tokens \
     --model_file /{path}/tokenizer.model \
@@ -130,14 +130,14 @@ MindFormers提供**Wikitext2**作为[预训练](#预训练)数据集和PPL评测
   使用`mindformers/tools/dataset_preprocess/llama/llama_preprocess.py`对下载后的数据进行预处理，并生成Mindrecord数据。
 
   ```shell
-  python llama_preprocess.py \
+   python mindformers/tools/dataset_preprocess/llama/llama_preprocess.py \
     --dataset_type wiki \
     --input_glob  /{path}/wiki.valid.tokens \
     --model_file /{path}/tokenizer.model \
     --seq_length 4095 \
     --output_file /{path}/wiki4096.mindrecord
 
-  # 参数说明
+    # 参数说明
   dataset_type: 预处理数据类型
   input_glob:   输入下载后wiki.valid.tokens的文件路径
   model_file:   模型tokenizer.model文件路径
@@ -150,7 +150,7 @@ MindFormers提供**Wikitext2**作为[预训练](#预训练)数据集和PPL评测
   1. 执行`mindformers/tools/dataset_preprocess/llama/alpaca_converter.py`，使用fastchat工具添加prompts模板，将原始数据集转换为多轮对话格式。
 
      ```shell
-     python alpaca_converter.py \
+     python mindformers/tools/dataset_preprocess/llama/alpaca_converter.py \
        --data_path /{path}/alpaca_data.json \
        --output_path /{path}/alpaca-data-conversation.json
 
@@ -163,7 +163,7 @@ MindFormers提供**Wikitext2**作为[预训练](#预训练)数据集和PPL评测
 
      ```shell
      # 此工具依赖fschat工具包解析prompt模板, 请提前安装fschat >= 0.2.13 python = 3.9
-     python llama_preprocess.py \
+     python mindformers/tools/dataset_preprocess/llama/llama_preprocess.py \
        --dataset_type qa \
        --input_glob /{path}/alpaca-data-conversation.json \
        --model_file /{path}/tokenizer.model \
@@ -180,10 +180,10 @@ MindFormers提供**Wikitext2**作为[预训练](#预训练)数据集和PPL评测
 
 - **SQuAD 1.1 数据预处理**
 
-  执行`tools/dataset_preprocess/llama/squad_data_process.py`生成Mindrecord数据
+  执行`mindformers/tools/dataset_preprocess/llama/squad_data_process.py`生成Mindrecord数据
 
   ```shell
-  python squad_data_process.py \
+  python mindformers/tools/dataset_preprocess/llama/squad_data_process.py \
     --input_file /{path}/squad/dev-v1.1.json \
     --output_file /{path}/squad2048.mindrecord \
     --mode eval \
@@ -207,7 +207,7 @@ MindFormers提供已经转换完成的预训练权重、词表文件用于预训
 
 #### 模型权重转换
 
-执行`mindformers/convert_weight.py`转换脚本，将HuggingFace的权重转换为完整的ckpt权重。
+执行`convert_weight.py`转换脚本，将HuggingFace的权重转换为完整的ckpt权重。
 
 ```shell
 python convert_weight.py --model llama --input_path TORCH_CKPT_DIR --output_path {path}/MS_CKPT_NAME
@@ -509,7 +509,7 @@ processor:
 
    阅读理解任务评测使用**SQuAD 1.1**数据集，可通过[数据集下载](#数据集下载)得到，并进行相应的预处理。**SQuAD 1.1**中包含针对500+文章的10万+问答对，是一个阅读理解数据集，由维基百科文章上提出的问题组成，其中每个问题的答案都是相应文章中的一段文本。
 
-2. 修改模型配置文件`configs/llama2/pretrain_llama2_7b.yaml`
+2. 修改模型配置文件`configs/llama2/predict_llama2_7b.yaml`
 
    ```yaml
    # eval dataset

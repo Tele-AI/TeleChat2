@@ -154,6 +154,83 @@ IMAGE_BASE_CONFIG = {
 }
 
 
+PARA_CONFIG = {
+    'batch_size': 4,
+    'num_queries': 66,
+    'block_size': 16,
+    'is_dynamic': True,
+    'use_flash_attention': False,
+    'parallel_config': {
+        'data_parallel': 2,
+        'model_parallel': 1,
+        'pipeline_stage': 2,
+        'micro_batch_num': 2,
+        'vocab_emb_dp': False  # if set True, cause error
+    },
+    'llm_model': {
+        'arch': {'type': 'CogVLM2VideoLM'},
+        'model_config': {'batch_size': 4,
+                         'bos_token_id': 128000,
+                         'compute_dtype': 'float16',
+                         'do_sample': False,
+                         'embedding_init_type': 'float16',
+                         'eos_token_id': 128001,
+                         'extend_method': 'None',
+                         'fine_grain_interleave': 1,
+                         'hidden_size': 4096,
+                         'ignore_token_id': -100,
+                         'intermediate_size': 14336,
+                         'layernorm_compute_type': 'float32',
+                         'max_decode_length': 2048,
+                         'n_kv_heads': 8,
+                         'num_heads': 32,
+                         'num_layers': 4,
+                         'offset': 0,
+                         'pad_token_id': 128002,
+                         'param_init_type': 'float16',
+                         'repetition_penalty': 1,
+                         'rms_norm_eps': 1e-05,
+                         'rotary_dtype': 'float32',
+                         'scaling_factor': 1.0,
+                         'seq_length': 2048,
+                         'softmax_compute_type': 'float32',
+                         'theta': 500000,
+                         'top_k': 3,
+                         'top_p': 1,
+                         'type': 'LlamaConfig',
+                         'use_flash_attention': True,
+                         'vocab_size': 128256}},
+    'num_blocks': 512,
+    'type': 'CogVLM2Config',
+    'use_past': True,
+    'vision_model': {
+        'arch': {'type': 'EVAModel'},
+        'model_config': {'class_token': True,
+                         'compute_dtype': 'float16',
+                         'hidden_size': 1792,
+                         'image_size': 224,
+                         'intermediate_size': 15360,
+                         'layer_norm_eps': '1e-6',
+                         'layer_norm_type': 'float32',
+                         'num_attention_heads': 16,
+                         'num_hidden_layers': 4,
+                         'param_init_type': 'float16',
+                         'patch_size': 14,
+                         'post_norm': True,
+                         'rotary_emb_type': 'float32',
+                         'type': 'EVA02Config',
+                         'use_abs_pos_emb': True,
+                         'use_attn_norm': False,
+                         'use_post_norm': True,
+                         'use_qkv_fused': True,
+                         'use_qkv_simple': True,
+                         'use_rot_pos_emb': False,
+                         'use_scale_mlp': False,
+                         'use_swiglu': False,
+                         'with_cls_token': False}}
+}
+
+
 def get_config():
     """get instanced model config."""
     model_config = MindFormerConfig(**BASE_CONFIG)
@@ -163,6 +240,11 @@ def get_config():
 def get_image_config():
     """get instanced model config."""
     model_config = MindFormerConfig(**IMAGE_BASE_CONFIG)
+    return CogVLM2Config(**model_config)
+
+def get_para_config():
+    """get instanced model config."""
+    model_config = MindFormerConfig(**PARA_CONFIG)
     return CogVLM2Config(**model_config)
 
 

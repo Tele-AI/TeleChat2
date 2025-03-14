@@ -20,18 +20,29 @@ from mindformers.tools.logger import logger
 
 class BaseDataLoader:
     """Base Dataloader"""
+
+    support_load_func = ['load_dataset', 'load_from_disk']
+
     @classmethod
-    def load_dataset(cls, path: str, **kwargs):
+    def load_dataset(cls, path: str, load_func: str = 'load_dataset', **kwargs):
         """load dataset"""
         import datasets
+        from datasets import Dataset
         try:
-            logger.info(f"USE_OM : {os.environ['USE_OM']}")
+            logger.info(f"USE_OM: {os.environ.get('USE_OM', False)}")
             # pylint: disable=W0611
             import openmind_datasets
             logger.info("connect openmind")
 
-        except ModuleNotFoundError:
+        except (ModuleNotFoundError, KeyError):
             logger.info("connect huggingFace")
 
-        dataset = datasets.load_dataset(path, **kwargs)
+        if load_func == 'load_dataset':
+            dataset = datasets.load_dataset(path, **kwargs)
+        elif load_func == 'load_from_disk':
+            dataset = Dataset.load_from_disk(path)
+        else:
+            raise ValueError(
+                f"Unsupported load_func {load_func}, please set load_func in {cls.support_load_func}.")
+
         return dataset

@@ -20,7 +20,7 @@ import pytest
 class TestTransformerLanguageModel:
     """A test class for testing TransformerLanguageModel"""
 
-    @pytest.mark.level0
+    @pytest.mark.level1
     @pytest.mark.platform_arm_ascend910b_training
     @pytest.mark.env_onecard
     def test_trans_language_model_single(self):

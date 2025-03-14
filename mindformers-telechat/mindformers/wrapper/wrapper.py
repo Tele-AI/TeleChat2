@@ -14,9 +14,11 @@
 # ============================================================================
 """Self-Define Wrapper."""
 import hashlib
+import os
+import shutil
 from copy import deepcopy
 
-from mindspore import nn, Parameter, ParallelMode
+from mindspore import nn, Parameter, ParallelMode, get_auto_parallel_context
 from mindspore.common import RowTensor
 from mindspore.common.tensor import Tensor
 from mindspore.communication.management import (create_group, get_rank, get_group_size)
@@ -24,6 +26,8 @@ from mindspore.nn.wrap.cell_wrapper import _MicroBatch
 from mindspore.ops import composite as C
 from mindspore.ops import functional as F
 from mindspore.ops import operations as P
+from mindspore.ops._grad_experimental.grad_comm_ops import get_squared_device_local_norm_param
+
 from mindspore.parallel._auto_parallel_context import auto_parallel_context
 from mindspore.parallel._utils import _get_enable_parallel_optimizer
 import mindspore.common.dtype as mstype
@@ -31,6 +35,7 @@ import mindspore.common.dtype as mstype
 from mindformers.core.clip_grad import ClipGradNorm
 from mindformers.core.optim import FusedCastAdamWeightDecay
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
+from mindformers.tools.utils import get_real_rank
 from mindformers.version_control import get_identity
 
 __all__ = ['MFTrainOneStepCell', 'MFPipelineWithLossScaleCell', 'PipelineCellWithTwoOutput',
@@ -50,6 +55,7 @@ def tensor_grad_scale_row_tensor(scale, grad):
     return RowTensor(grad.indices,
                      grad.values * F.cast(reciprocal(scale), F.dtype(grad.values)),
                      grad.dense_shape)
+
 
 get_square_sum = C.MultitypeFuncGraph("get_square_sum")
 get_size = C.MultitypeFuncGraph("get_size")
@@ -90,7 +96,7 @@ class LocalNorm(nn.Cell):
 # pylint: disable=W1401
 @MindFormerRegister.register(MindFormerModuleType.WRAPPER)
 class MFTrainOneStepCell(nn.TrainOneStepWithLossScaleCell):
-    """TrainOneStep For MindFormer.
+    r"""TrainOneStep For MindFormer.
     Network training with loss scaling, grad clip, gradient accumulation, exponential moving average and so on.
 
     This is a training step with loss scaling. It takes a network, an optimizer and a scale update Cell(or a Tensor) as
@@ -101,16 +107,19 @@ class MFTrainOneStepCell(nn.TrainOneStepWithLossScaleCell):
     Args:
         network (Cell): The training network. The network only supports single output.
         optimizer (Cell): Optimizer for updating the network parameters.
-        use_clip_grad (bool, optional): Whether to use the gradient clipping function. Default: ``False`` .
-        max_grad_norm (float, optional): Maximum gradient value. Default: ``1.0`` .
-        scale_sense (Union[Tensor, Cell], optional): If this value is a Cell, it will be called by `MFTrainOneStepCell`
-            to update loss scale. If this value is a Tensor, the loss scale can be modified by `set_sense_scale`,
-            the shape should be :math:`()` or :math:`(1,)`.
-        local_norm (bool, optional): Whether to calculate the local norm. Default: ``False`` .
-        kwargs (Any): Additional parameters.
+        use_clip_grad (bool, optional): Whether to use the gradient clipping function. Default: ``False``.
+        max_grad_norm (float, optional): Maximum gradient value. Default: ``1.0``.
+        scale_sense (Union[int, float, Tensor, Cell], optional): The scaling number to be filled as the input of
+            backpropagation. If this value is a Cell, it will be called by `MFTrainOneStepCell` to update loss scale.
+            If this value is a Tensor, the loss scale can be modified by `set_sense_scale`,
+            the shape should be :math:`()` or :math:`(1,)`. Default: ``1.0``.
+        local_norm (bool, optional): Whether to calculate the local norm. Default: ``False``.
+        calculate_per_token_loss (bool, optional): Whether to calculate the loss of each token.
+            Default: `False`.
+        **kwargs (Any): Additional parameters.
 
     Inputs:
-        - **(*inputs)** (Tuple(Tensor)) - Tuple of input tensors with shape :math:`(N, \ldots)`.
+        - **\*inputs** (Tuple(Tensor)) - Tuple of input tensors with shape :math:`(N, \ldots)`.
 
     Outputs:
         Tuple of 5 or 7 Tensor, the loss, overflow flag, current loss scale value, learning rate,
@@ -159,6 +168,7 @@ class MFTrainOneStepCell(nn.TrainOneStepWithLossScaleCell):
                  max_grad_norm=1.0,
                  scale_sense=1.0,
                  local_norm=False,
+                 calculate_per_token_loss=False,
                  **kwargs):
         if isinstance(scale_sense, (int, float)):
             scale_sense = Tensor(scale_sense)
@@ -174,18 +184,53 @@ class MFTrainOneStepCell(nn.TrainOneStepWithLossScaleCell):
         self.localnorm = LocalNorm()
         self.concat = P.Concat()
         self.local_norm = local_norm
+        self.calculate_per_token_loss = calculate_per_token_loss
+        self.zero_t = Tensor([0], dtype=mstype.float32)
+        self.grad_scale_factor = Tensor([1], dtype=mstype.float32)
+        self.dump_device_local_norm = get_auto_parallel_context("dump_device_local_norm")
+        self.if_dump = bool(get_auto_parallel_context("dump_local_norm_path"))
+        if self.if_dump:
+            self.dump = P.TensorDump()
+            self.dump_path = os.path.join(get_auto_parallel_context("dump_local_norm_path"), f"rank_{get_real_rank()}")
+            if os.path.exists(self.dump_path):
+                shutil.rmtree(self.dump_path)
+            os.makedirs(self.dump_path, exist_ok=True)
+            self.device_local_norm_filename = os.path.join(self.dump_path, "device_local_norm")
+            self.finish_step_filename = os.path.join(self.dump_path, "finish_step")
+        if self.dump_device_local_norm:
+            self.squared_device_local_norm = get_squared_device_local_norm_param()
 
     def construct(self, *inputs):
         """forward and backward."""
         weights = self.weights
-        loss = self.network(*inputs)
         scaling_sens = self.scale_sense
+        if self.calculate_per_token_loss:
+            numerator, denominator = self.network(*inputs)
+            loss = numerator / denominator
+
+            if self.dump_device_local_norm:
+                _ = F.assign(self.squared_device_local_norm, Tensor(0.0, mstype.float32))
+                scaling_sens = F.depend(self.scale_sense, _)
+
+            scaling_sens_filled = C.ones_like(numerator) * F.cast(scaling_sens, F.dtype(numerator))
+            scaling_sens_filled2 = self.zero_t * F.cast(scaling_sens, F.dtype(denominator))
+            grads = self.grad(self.network, weights)(*inputs,
+                                                     (self.cast(scaling_sens_filled, mstype.float32),
+                                                      self.cast(scaling_sens_filled2, mstype.float32)))
+            grad_scale_factor = denominator
+        else:
+            loss = self.network(*inputs)
+
+            if self.dump_device_local_norm:
+                _ = F.assign(self.squared_device_local_norm, Tensor(0.0, mstype.float32))
+                scaling_sens = F.depend(self.scale_sense, _)
+
+            scaling_sens_filled = C.ones_like(loss) * F.cast(scaling_sens, F.dtype(loss))
+            grads = self.grad(self.network, weights)(*inputs, scaling_sens_filled)
+            grad_scale_factor = self.grad_scale_factor
 
         status, scaling_sens = self.start_overflow_check(loss, scaling_sens)
-
-        scaling_sens_filled = C.ones_like(loss) * F.cast(scaling_sens, F.dtype(loss))
-        grads = self.grad(self.network, weights)(*inputs, scaling_sens_filled)
-        grads = self.hyper_map(F.partial(_grad_scale, scaling_sens), grads)
+        grads = self.hyper_map(F.partial(_grad_scale, scaling_sens * grad_scale_factor), grads)
 
         if self.local_norm:
             local_norm, size = self.localnorm(grads)
@@ -209,15 +254,40 @@ class MFTrainOneStepCell(nn.TrainOneStepWithLossScaleCell):
             else:
                 learning_rate = self.learning_rate(self.optimizer.global_step).reshape(())
 
+        if self.use_graceful_exit:
+            grads = self.graceful_exit.exit_by_request(grads, self.init_param, self.exit_param)
+
         # if there is no overflow, do optimize
         if not overflow:
             if self.use_clip_grad and self.use_grad_norm:
                 loss = F.depend(loss, self.optimizer(grads, global_norm))
             else:
                 loss = F.depend(loss, self.optimizer(grads))
+
+        if self.if_dump:
+            zero = Tensor(0.0, mstype.float32)
+            if self.dump_device_local_norm:
+                zero = F.depend(zero, self.dump(self.device_local_norm_filename,
+                                                F.sqrt(self.squared_device_local_norm)))
+            filename = self.finish_step_filename
+            self.dump(filename, zero)
         if self.local_norm:
             return loss, overflow, scaling_sens, learning_rate, global_norm, local_norm, size
         return loss, overflow, scaling_sens, learning_rate, global_norm
+
+
+class DataOrderWrapperCell(nn.Cell):
+    """For passing parameters in lexicographical order."""
+
+    def __init__(self, construct_args_key, network):
+        super(DataOrderWrapperCell, self).__init__(auto_prefix=False)
+        self.construct_args_key = construct_args_key
+        self.network = network
+
+    def construct(self, *inputs):
+        """The construct processes of inputs in lexicographical order."""
+        key_inputs = {key: val for key, val in zip(self.construct_args_key, inputs)}
+        return self.network(**key_inputs)
 
 
 grad_scale = C.MultitypeFuncGraph("grad_scale")
@@ -232,7 +302,7 @@ def tensor_grad_scale_pipeline(scale, grad_scale_factor, grad, accu_grad):
     grad_val = F.cast(F.equal(accu_grad, accu_grad), F.dtype(accu_grad))
     zeros = F.mul(grad_val, 0)
     new_grad = F.depend(new_grad, F.assign(accu_grad, zeros))
-    new_grad = new_grad * reciprocal(grad_scale_factor)
+    new_grad = new_grad * F.cast(reciprocal(grad_scale_factor), F.dtype(new_grad))
     return new_grad
 
 
@@ -243,7 +313,7 @@ def tensor_shard_grad_scale_pipeline(scale, grad_scale_factor, grad, accu_grad):
     grad_val = F.cast(F.equal(accu_grad, accu_grad), F.dtype(accu_grad))
     zeros = F.mul(grad_val, 0)
     new_grad = F.depend(new_grad, F.assign(accu_grad, zeros))
-    new_grad = new_grad * reciprocal(grad_scale_factor)
+    new_grad = new_grad * F.cast(reciprocal(grad_scale_factor), F.dtype(new_grad))
     return new_grad
 
 
@@ -263,7 +333,7 @@ class GradAccumulationCellWithTwoOutput(nn.Cell):
     """
 
     def __init__(self, network, micro_size):
-        super(GradAccumulationCellWithTwoOutput, self).__init__(auto_prefix=False)
+        super().__init__(auto_prefix=False)
         self.network = network
         self.micro_inputs = nn.CellList()
         self.micro_size = micro_size
@@ -338,7 +408,7 @@ class PipelineCellWithTwoOutput(nn.Cell):
             ``Ascend`` ``GPU``
     """
     def __init__(self, network, micro_size):
-        super(PipelineCellWithTwoOutput, self).__init__(auto_prefix=False)
+        super().__init__(auto_prefix=False)
         self.network = network
         self.micro_inputs = nn.CellList()
         self.micro_size = micro_size
@@ -391,21 +461,22 @@ class PipelineCellWithTwoOutput(nn.Cell):
 # pylint: disable=W1401
 @MindFormerRegister.register(MindFormerModuleType.WRAPPER)
 class MFPipelineWithLossScaleCell(nn.TrainOneStepWithLossScaleCell):
-    """
+    r"""
     Append a train-one-step cell with loss scale of pipeline parallel for MindFormers.
 
     Args:
         network (Cell): The training network. Note that loss function should have been added.
         optimizer (Optimizer): Optimizer for updating the weights.
-        use_clip_grad (bool, optional): Whether to use gradient clipping. Default: ``True`` .
-        max_grad_norm (float, optional): Maximum gradient constraint value. Default: ``1.0`` .
-        scale_sense (Union[Tensor, Cell], optional): Cell to do the loss scale. Default: ``1.0`` .
-        micro_batch_num (int, optional): Micro batch number of pipeline parallel. Default: ``1`` .
-        local_norm (bool, optional): Whether to calculate the local norm. Default: ``False`` .
-        kwargs (Any): Additional parameters.
+        use_clip_grad (bool, optional): Whether to use gradient clipping. Default: ``True``.
+        max_grad_norm (float, optional): Maximum gradient constraint value. Default: ``1.0``.
+        scale_sense (Union[Tensor, Cell], optional): Cell to do the loss scale. Default: ``1.0``.
+        micro_batch_num (int, optional): Micro batch number of pipeline parallel. Default: ``1``.
+        local_norm (bool, optional): Whether to calculate the local norm. Default: ``False``.
+        calculate_per_token_loss (bool, optional): Whether to calculate the loss of each token. Default: ``False``.
+        **kwargs (Any): Additional parameters.
 
     Inputs:
-        - **(\*inputs)** (Tuple(Tensor)) - Tuple of input tensors with shape :math:`(N, \ldots)`.
+        - **\*inputs** (Tuple(Tensor)) - Tuple of input tensors with shape :math:`(N, \ldots)`.
 
     Outputs:
         Tuple of 5 or 7 Tensor, the loss, overflow flag, current loss scale value, learning rate,
@@ -473,7 +544,6 @@ class MFPipelineWithLossScaleCell(nn.TrainOneStepWithLossScaleCell):
         self.localnorm = LocalNorm()
         self.concat = P.Concat()
         self.local_norm = local_norm
-        self.zero_t = Tensor([0], dtype=mstype.float32)
         # create allreduce for synchronize denominator
         pipeline_group_list, pipeline_group_name = _get_pipeline_group()
         hashed = hashlib.md5(pipeline_group_name.encode()).hexdigest()[:48]
@@ -483,11 +553,27 @@ class MFPipelineWithLossScaleCell(nn.TrainOneStepWithLossScaleCell):
         self.calculate_per_token_loss = calculate_per_token_loss
         self.grad_scale_factor = Tensor([1], dtype=mstype.float32)
         self.zero_t = Tensor([0], dtype=mstype.float32)
+        self.dump_device_local_norm = get_auto_parallel_context("dump_device_local_norm")
+        self.if_dump = bool(get_auto_parallel_context("dump_local_norm_path"))
+        if self.if_dump:
+            self.dump = P.TensorDump()
+            self.dump_path = os.path.join(get_auto_parallel_context("dump_local_norm_path"), f"rank_{get_real_rank()}")
+            if os.path.exists(self.dump_path):
+                shutil.rmtree(self.dump_path)
+            self.device_local_norm_filename = os.path.join(self.dump_path, "device_local_norm")
+            self.finish_step_filename = os.path.join(self.dump_path, "finish_step")
+        if self.dump_device_local_norm:
+            self.squared_device_local_norm = get_squared_device_local_norm_param()
 
     @C.add_flags(has_effect=True)
     def construct(self, *inputs):
         """The construct processes of pipeline wrapper cell."""
         scaling_sens = self.scale_sense
+
+        if self.dump_device_local_norm:
+            _ = F.assign(self.squared_device_local_norm, Tensor(0.0, mstype.float32))
+            scaling_sens = F.depend(self.scale_sense, _)
+
         if self.calculate_per_token_loss:
             numerator, denominator = self.network(*inputs)
             denominator = self.allreduce2(denominator)
@@ -536,8 +622,19 @@ class MFPipelineWithLossScaleCell(nn.TrainOneStepWithLossScaleCell):
         cond = F.depend(cond, grads)
         overflow = self.process_loss_scale(cond)
 
+        if self.use_graceful_exit:
+            grads = self.graceful_exit.exit_by_request(grads, self.init_param, self.exit_param)
+
         if not overflow:
             loss = F.depend(loss, self.optimizer(grads))
+
+        if self.if_dump:
+            zero = Tensor(0.0, mstype.float32)
+            if self.dump_device_local_norm:
+                zero = F.depend(zero, self.dump(self.device_local_norm_filename,
+                                                F.sqrt(self.squared_device_local_norm)))
+            filename = self.finish_step_filename
+            self.dump(filename, zero)
 
         if self.local_norm:
             return loss, overflow, scaling_sens.value(), learning_rate, global_norm, local_norm, size

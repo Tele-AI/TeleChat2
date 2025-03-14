@@ -32,7 +32,7 @@ GLM
     :toctree: models
     :nosignatures:
 
-    mindformers.models.glm2.ChatGLM2ForConditionalGeneration
-    mindformers.models.glm2.ChatGLM2Config
-    mindformers.models.glm2.ChatGLM3Tokenizer
-    mindformers.models.glm2.ChatGLM4Tokenizer
+    mindformers.models.ChatGLM2ForConditionalGeneration
+    mindformers.models.ChatGLM2Config
+    mindformers.models.ChatGLM3Tokenizer
+    mindformers.models.ChatGLM4Tokenizer

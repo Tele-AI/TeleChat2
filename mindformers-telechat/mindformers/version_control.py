@@ -14,6 +14,9 @@
 # ============================================================================
 """MindSpore Version Control"""
 import os
+import inspect
+from functools import wraps
+
 import mindspore as ms
 from mindspore import nn, mint
 import mindspore.ops.operations as P
@@ -52,6 +55,11 @@ def is_910b():
     return device in ['910b', 'ascend910b']
 
 
+def need_nz():
+    device = get_ascend_soc_version()
+    return device in ['310p', 'ascend310p', '910a', 'ascend910']
+
+
 def get_predict_lazy_inline(func):
     """Predict lazy inline decorator."""
 
@@ -79,9 +87,18 @@ def check_lazy_inline_version():
 def get_lazy_inline(func):
     """Lazy inline decorator."""
 
+    @wraps(func)
     def decorator(*args, **kwargs):
+        sig = inspect.signature(func)
+        bound_args = sig.bind(*args, **kwargs)
+        bound_args.apply_defaults()
+
+        disable_lazy_inline = bound_args.kwargs.get('disable_lazy_inline', False)
+        model_config = kwargs.get('config')
+        if model_config and hasattr(model_config, 'disable_lazy_inline'):
+            disable_lazy_inline = model_config.disable_lazy_inline
         stand_alone = ms.get_auto_parallel_context("parallel_mode") == 'stand_alone'
-        pipline_parallel = ms.get_auto_parallel_context("pipeline_stages") > 1
+        pipeline_parallel = ms.get_auto_parallel_context("pipeline_stages") > 1
 
         if os.getenv("ENABLE_LAZY_INLINE", "1") == "0":
             logger.info("The Lazy Inline compilation acceleration feature is turned off, due to the "
@@ -99,7 +116,7 @@ def get_lazy_inline(func):
             func(*args, **kwargs)
             return
 
-        if not pipline_parallel and os.getenv("ENABLE_LAZY_INLINE_NO_PIPELINE", "0") == "0":
+        if not pipeline_parallel and os.getenv("ENABLE_LAZY_INLINE_NO_PIPELINE", "0") == "0":
             logger.info("The Lazy Inline compilation acceleration feature "
                         "only works in pipeline parallel mode (pipeline_stage > 1). "
                         "Current pipeline stage=1, the feature is disabled by default. "
@@ -108,7 +125,14 @@ def get_lazy_inline(func):
             func(*args, **kwargs)
             return
 
+        if disable_lazy_inline:
+            logger.info("The Lazy Inline compilation acceleration feature has been called, "
+                        "and the feature is disabled by default.")
+            func(*args, **kwargs)
+            return
+
         from mindspore.common import lazy_inline
+        logger.info("The Lazy Inline compilation acceleration feature is turned on.")
         lazy_inline(func)(*args, **kwargs)
 
     return decorator
@@ -228,7 +252,7 @@ def check_valid_big_kernel():
     version_valid = is_version_ge(ms.__version__, "2.2.10")
     # below ms 2.2.10 is not support
     if not version_valid:
-        logger.warning("Current MindSpore do not support big kernel SiLU and RMSNorm, "
+        logger.warning("Current MindSpore do not support fusion operator SiLU and RMSNorm, "
                        "please upgrade to 2.2.10 or later version.")
         result = False
     else:
@@ -247,7 +271,7 @@ def is_version_python(cur_ver, tar_ver):
     version_split_char = '.'
     if version_split_char not in tar_ver or version_split_char not in cur_ver:
         raise ValueError("The version string will contain the `.`."
-                         "For example, cur_ver: 3.7.10， tar_ver: 3.9.0")
+                         "For example, cur_ver: 3.7.10, tar_ver: 3.9.0")
     for x, y in zip(cur_ver.split(version_split_char), tar_ver.split(version_split_char)):
         if not x.isdigit() or not y.isdigit():
             continue
@@ -269,12 +293,21 @@ def use_mint_op():
     return is_version_ge(version_info[0], '2.3.0') and ms.__version__ != '2.3.0rc1'
 
 
-def check_valid_gmm_op():
+def check_valid_gmm_op(gmm_version=None):
     """check mindspore version is valid for groupedmatmul"""
-    version_valid = is_version_ge(ms.__version__, "2.3.0")
+    '''
+    version_map = {"GroupedMatmul": "2.3.0",
+                   "GroupedMatmulV4": "2.6.0"}
+    version_info = ms.__version__.split('rc')
+    version_valid = is_version_ge(version_info[0], version_map.get(gmm_version))
+    if version_valid is None:
+        raise ValueError(f"gmm_version should be in {list(version_map.keys())}, but get {gmm_version}")
     if not version_valid:
-        logger.warning(f"Current MindSpore do not support GroupedMatmul, "
+        logger.warning(f"Current MindSpore do not support {gmm_version}, "
                        f"please upgrade to {version_valid} or later version.")
+        return False
+    '''
+    if gmm_version == "GroupedMatmulV4":
         return False
     return True
 
@@ -284,7 +317,7 @@ def check_valid_moefinalizerouting_op():
     version_valid = is_version_ge(ms.__version__, "2.3.0")
     if not version_valid:
         logger.warning(f"Current MindSpore do not support MoeFinalizeRouting, "
-                       f"please upgrade to {version_valid} or later version.")
+                       f"please upgrade to 2.3.0 or later version.")
         return False
     return True
 
@@ -294,8 +327,8 @@ def check_valid_mindspore_gs():
     import mindspore_gs
     version_valid = is_version_ge(mindspore_gs.__version__, "0.6.0")
     if not version_valid:
-        logger.warning(f"Current MindSpore Gloden-Stick version does not match"
-                       f"the MindFormers version, please upgrade to {version_valid} or later version.")
+        logger.warning(f"Current MindSpore Golden-Stick version does not match"
+                       f"the MindFormers version, please upgrade to 0.6.0 or later version.")
         return False
     return True
 
@@ -309,3 +342,87 @@ def get_scatter():
     if is_version_ge(ms.__version__, "2.4.0"):
         return mint.scatter
     return Scatter()
+
+
+def check_cpu_affinity_valid():
+    """check mindspore version is valid for runtime cpu affinity"""
+    version_valid = is_version_ge(ms.__version__, "2.5.0")
+    if not version_valid:
+        logger.warning("The mindspore runtime set cpu affinity feature is not supported "
+                       "when MindSpore version is earlier than 2.5.0, The current MindSpore version is %s, "
+                       "please install MindSpore 2.5.0 or later.", ms.__version__)
+        return False
+    return True
+
+
+def check_delay_init_valid():
+    """check mindspore version is valid for delay init"""
+    version_valid = is_version_ge(ms.__version__, "2.4.1")
+    if not version_valid:
+        logger.warning(f"Current MindSpore version does not support parameter delay initialization. "
+                       f"Please upgrade to 2.4.1 or later version.")
+        return False
+    return True
+
+
+def synchronize():
+    """choose valid synchronize function according to mindspore version"""
+    version_valid = is_version_ge(ms.__version__, "2.5.0")
+    # below ms 2.5.0 is not support
+    if version_valid:
+        ms.runtime.synchronize()
+    else:
+        ms.hal.synchronize()
+
+
+def check_stress_detect_valid():
+    """check mindspore version is valid for stress detect"""
+    version_valid = is_version_ge(ms.__version__, "2.4.10")
+    if not version_valid:
+        logger.warning(f"Current MindSpore version does not support stress detect "
+                       f", please upgrade to 2.4.10 or later version.")
+        return False
+    return True
+
+
+def check_tft_valid():
+    """check mindspore version is valid for tft"""
+    version_valid = is_version_ge(ms.__version__, "2.5.0")
+    if not version_valid:
+        logger.warning("Current MindSpore version does not support tft, please upgrade to 2.5.0 or later version.")
+        return False
+    env_enable = os.getenv("MS_ENABLE_TFT", "")
+    required_flags = ["TTP:1", "UCE:1", "ARF:1"]
+    return any(flag in env_enable for flag in required_flags)
+
+
+def check_arf_status(cb_params):
+    """check arf flag when using ARF, make sure that the number of operators executed by all nodes is consistent"""
+    if check_tft_valid() and ("ARF:1" in os.getenv("MS_ENABLE_TFT", "")):
+        return cb_params.is_arf
+    return False
+
+
+def check_swiglu_valid():
+    """check mindspore version is valid for swiglu"""
+    version_valid = is_version_ge(ms.__version__, "2.5.0")
+    if not version_valid:
+        logger.warning("Current MindSpore version does not support primitive Swiglu, please upgrade to 2.5.0 or later "
+                       "version.")
+        return False
+    return True
+
+
+def check_rotary_position_embedding_valid():
+    """check mindspore version is valid for swiglu"""
+    version_valid = is_version_ge(ms.__version__, "2.5.0")
+    if not version_valid:
+        logger.warning("Current MindSpore version does not support primitive RotaryPositionEmbedding, please upgrade "
+                       "to 2.5.0 or later version.")
+        return False
+    return True
+
+
+def check_seqpp_fa_opt_support():
+    """check mindspore version if sparse adaptive adjustment of fa with seqpipie"""
+    return is_version_ge(ms.__version__, "2.6.0")

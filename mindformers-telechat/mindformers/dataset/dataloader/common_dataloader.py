@@ -33,32 +33,39 @@ class CommonDataLoader(BaseDataLoader):
 
     # pylint: disable=W0102
     def __new__(cls,
-                num_shards: Optional[int] = None,
-                shuffle: bool = True,
-                handler: Optional[dict] = None,
                 shard_id: Optional[int] = None,
+                num_shards: Optional[int] = None,
+                column_names: list = ["input_ids", "labels"],
+                shuffle: bool = False,
                 path: Optional[str] = None,
-                input_columns: list = ["input_ids", "labels"],
+                load_func: str = 'load_dataset',
+                handler: Optional[list] = None,
+                packing: str = None,
+                adaptor_config: dict = None,
                 **kwargs):
         if path is None or path.strip() == "":
-            raise ValueError(f"dataset_path is empty.")
+            raise ValueError(f"path should not be empty.")
 
         if "split" not in kwargs:
             kwargs["split"] = "train"
 
         kwargs = cls._filter_params(kwargs=kwargs)
         ms_adaptor_execution()
-        dataset = cls.load_dataset(path=path, **kwargs)
+        dataset = cls.load_dataset(path=path, load_func=load_func, **kwargs)
 
         if handler:  # data preprocess
-            data_handler = build_data_handler(handler)
-            dataset = data_handler.handle(dataset)
+            if not isinstance(handler, list):
+                raise ValueError(f"handler in config should be set as 'list', but got {type(handler)}.")
+            for per_handler in handler:
+                data_handler = build_data_handler(per_handler, packing=packing)
+                dataset = data_handler.handle(dataset)
 
-        dataset = dataset.to_ms_dataset(columns=input_columns,
+        dataset = dataset.to_ms_dataset(columns=column_names,
                                         num_shards=num_shards,
                                         shard_id=shard_id,
-                                        shuffle=shuffle
-                                        )
+                                        shuffle=shuffle,
+                                        packing=packing,
+                                        adaptor_config=adaptor_config)
 
         return dataset
 

@@ -15,6 +15,8 @@
 """came optimizer"""
 from __future__ import absolute_import
 
+from functools import wraps
+
 from mindspore import context
 from mindspore.common import dtype as mstype
 from mindspore.log import logging
@@ -35,8 +37,6 @@ from mindspore.nn.optim.optimizer import Optimizer
 from mindspore.nn.optim.optimizer import opt_init_args_register
 
 from mindformers.tools.register import MindFormerRegister, MindFormerModuleType
-
-__all__ = ['Came']
 
 
 def _rms(update_tensor):
@@ -179,6 +179,17 @@ def trans_to_tensor(param, is_tuple=False, fp32=True):
     return Tensor(param, data_type)
 
 
+def custom_decorator(external_decorator):
+    """Custom decorator to add wraps to wrapper to keep the metadata of function."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            decorated_func = external_decorator(func)
+            return decorated_func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
 @MindFormerRegister.register(MindFormerModuleType.OPTIMIZER)
 class Came(Optimizer):
     r"""
@@ -190,32 +201,33 @@ class Came(Optimizer):
     Args:
         params (Union[list[Parameter], list[dict]]): When the `params` is a list of `Parameter` which will be updated,
             the element in `params` must be class `Parameter`.
-        learning_rate (Union[float, Tensor]): A value or a graph for the learning rate.
+        learning_rate (Union[float, Tensor], optional): A value or a graph for the learning rate.
             When the learning_rate is a Tensor in a 1D dimension.
-            If the type of `learning_rate` is int, it will be converted to float. Default: None.
-        eps (Union[list, tuple]): The regularization constans for square gradient, parameter scale and
-            instability_matrix respectively. default: (1e-30, 1e-3, 1e-16)
-        clip_threshold (float): The threshold of root mean square of final gradient update. default: 1.0
-        decay_rate (float): The coefficient used to compute running averages of square gradient.
-            Should be in range [0.0, 1.0]. default: 0.8.
-        beta1 (float): The coefficient to computing running averages of gradient. Should be in range [0.0, 1.0].
-               Default: 0.9.
-        beta3 (float): The coefficient to computing running averages of gradient. Should be in range [0.0, 1.0].
-               Default: 0.99.
-        weight_decay (float): Weight decay (L2 penalty). It must be equal to or greater than 0.
-            Should be in range [0.0, 1.0]. default: 0.0.
-        scale_parameter (bool): If True, learning rate is scaled by root mean square of parameter. default: True
-        relative_step (bool): If True, time-dependent learning rate is computed instead of external learning rate.
-            default: True
-        warmup_init (bool): The time-dependent learning rate computation depends on whether warm-up
-            initialization is being used. default: False
-        compression (bool): If True, the data type of the running averages exponent will be compression to float16.
-            default: False
-        loss_scale (int): An integer point value for the loss scale. Should be greater than 0. In general, use the
-            default value. Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update` in
-            `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            If the type of `learning_rate` is int, it will be converted to float. Default: ``None``.
+        eps (Union[list, tuple], optional): The regularization constans for square gradient, parameter scale and
+            instability_matrix respectively. Default: ``(1e-30, 1e-3, 1e-16)``.
+        clip_threshold (float, optional): The threshold of root mean square of final gradient update. default: ``1.0``.
+        decay_rate (float, optional): The coefficient used to compute running averages of square gradient.
+            Should be in range [0.0, 1.0]. Default: ``0.8``.
+        beta1 (float, optional): The coefficient to computing running averages of gradient.
+            Should be in range [0.0, 1.0]. Default: ``0.9``.
+        beta3 (float, optional): The coefficient to computing running averages of gradient.
+            Should be in range [0.0, 1.0]. Default: ``0.99``.
+        weight_decay (float, optional): Weight decay (L2 penalty). It must be equal to or greater than 0.
+            Should be in range [0.0, 1.0]. default: ``0.0``.
+        scale_parameter (bool, optional): If True, learning rate is scaled by root mean square of parameter.
+            Default: ``True``.
+        relative_step (bool, optional): If True, time-dependent learning rate is computed instead of external
+            learning rate. Default: ``True``.
+        warmup_init (bool, optional): The time-dependent learning rate computation depends on whether warm-up
+            initialization is being used. Default: ``False``.
+        compression (bool, optional): If True, the data type of the running averages exponent will be compression to
+            float16. Default: ``False``.
+        loss_scale (int, optional): An integer point value for the loss scale. Should be greater than 0. In general,
+            use the default value. Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update`
+            in `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
             `FixedLossScaleManager`. Refer to class :class:`mindspore.amp.FixedLossScaleManager` for more details.
-            Default: 1.
+            Default: ``1``.
 
     Inputs:
         - **gradients** (tuple[Tensor]) - The gradients of `params`, the shape is the same as `params`.
@@ -258,7 +270,7 @@ class Came(Optimizer):
     """
     _support_parallel_optimizer = True
 
-    @opt_init_args_register
+    @custom_decorator(opt_init_args_register)
     def __init__(self,
                  params,
                  learning_rate=None,

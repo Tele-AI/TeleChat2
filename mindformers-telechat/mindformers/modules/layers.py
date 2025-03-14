@@ -25,8 +25,10 @@ import math
 import numpy as np
 
 from mindspore import nn
+from mindspore import mint
+from mindspore import ops
 from mindspore.common.parameter import Parameter
-from mindspore.common.initializer import initializer, Tensor
+from mindspore.common.initializer import initializer, Tensor, Normal
 import mindspore.common.dtype as mstype
 from mindspore._extends import cell_attr_register
 from mindspore.nn.cell import Cell
@@ -40,10 +42,11 @@ try:
     from mindspore._checkparam import Validator
 except ImportError:
     import mindspore._checkparam as Validator
-from mindspore.parallel._utils import _get_parallel_mode
+from mindspore.parallel._utils import _get_parallel_mode, _is_sharding_propagation
 from mindspore.context import ParallelMode
 
 from mindformers.tools.logger import logger
+from mindformers.tools.utils import is_pynative
 from mindformers.modules.activation import get_activation
 from mindformers.modules.transformer.op_parallel_config import default_dpmp_config, OpParallelConfig, MoEParallelConfig
 from mindformers.version_control import check_valid_gmm_op
@@ -378,6 +381,7 @@ class Linear(Cell):
     Args:
         in_channels (int): The number of channels in the input space.
         out_channels (int): The number of channels in the output space.
+        init_method_std (float): The sigma value when using normal type to initialize Linear. Default: ``0.01`` .
         weight_init (Union[Tensor, str, Initializer, numbers.Number]): The trainable weight_init parameter. The dtype
             is same as `x`. The values of str refer to the function `initializer`. Default: 'normal'.
         bias_init (Union[Tensor, str, Initializer, numbers.Number]): The trainable bias_init parameter. The dtype is
@@ -426,6 +430,7 @@ class Linear(Cell):
     def __init__(self,
                  in_channels,
                  out_channels,
+                 init_method_std=0.01,
                  weight_init='normal',
                  bias_init='zeros',
                  has_bias=True,
@@ -436,8 +441,7 @@ class Linear(Cell):
                  expert_group_size=None,
                  use_gmm=False,
                  param_init_type=mstype.float32,
-                 compute_dtype=mstype.float16,
-                 skip_redistribution=False):
+                 compute_dtype=mstype.float16):
         super(Linear, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -445,6 +449,8 @@ class Linear(Cell):
             raise TypeError(f"For Linear cell, the activation should str type or nn.Cell type, but got {activation}.")
 
         transpose_b = False if use_gmm else transpose_b
+        if weight_init == "normal":
+            weight_init = Normal(sigma=init_method_std, mean=0)
         weight_shape = [out_channels, in_channels] if transpose_b else [in_channels, out_channels]
         if isinstance(weight_init, Tensor) and (weight_init.ndim != 2 or weight_init.shape[0] != weight_shape[0] or
                                                 weight_init.shape[1] != weight_shape[1]):
@@ -459,7 +465,7 @@ class Linear(Cell):
             self.expert_flag = True
             self.weight = Parameter(initializer(weight_init, [self.expert_num] + weight_shape, param_init_type),
                                     name="weight")
-            if self.use_gmm and check_valid_gmm_op():
+            if self.use_gmm and check_valid_gmm_op(gmm_version='GroupedMatmul'):
                 from mindspore.ops.auto_generate import GroupedMatmul
                 # split_item only supports 0 and 3 now, 0 means the size of tensorlist not equal to 1,
                 # 3 means the size of tensorlist is 1.
@@ -495,11 +501,10 @@ class Linear(Cell):
         else:
             self.activation = get_activation(activation) if isinstance(activation, str) else activation
         self.activation_flag = self.activation is not None
+        self.param_init_type = param_init_type
         self.dtype = compute_dtype
         self.cast = P.Cast()
         self.reshape = P.Reshape()
-        if skip_redistribution:
-            self.reshape.add_prim_attr("skip_redistribution", True)
         self.shape = P.Shape()
 
     def construct(self, x, group_list=None):
@@ -527,7 +532,8 @@ class Linear(Cell):
         output = self.reshape(x, out_shape)
         return output
 
-    def shard(self, strategy_matmul, strategy_bias=None, strategy_activation=None, out_strategy_matmul=None):
+    def shard(self, strategy_matmul, strategy_bias=None, strategy_activation=None, out_strategy_matmul=None,
+              enable_nd_tp=False):
         r"""
         Set the shard for the linear. the strategy size should be equal to the inputs.
 
@@ -541,7 +547,18 @@ class Linear(Cell):
             strategy_activation (tuple): The strategy for the strategy_activation. Should be the same shape as
             the inputs.
             out_strategy_matmul (tuple): The out strategy for the matmul. Should be the same shape as the inputs.
+            enable_nd_tp (bool): Whether enable high dimension tensor parallel for matmul. Default: False.
         """
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.matmul.shard(in_strategy=strategy_matmul, out_strategy=out_strategy_matmul)
+            if self.has_bias:
+                self.bias_add.shard(strategy_bias)
+            return self
+
+        if enable_nd_tp:
+            if out_strategy_matmul:
+                raise ValueError("When the enable nd_tp = True, the out_strategy_matmul must be None.")
+        self.matmul.add_prim_attr("enable_nd_tp", enable_nd_tp)
         self.matmul.shard(in_strategy=strategy_matmul, out_strategy=out_strategy_matmul)
         if self.has_bias:
             self.bias_add.shard(strategy_bias)
@@ -1002,7 +1019,7 @@ def build_alibi_tensor_v2(seq_len, num_heads, return_tensors='ms', dtype=mstype.
 
 def _check_llama3_scaling_factor(scaling_factor, max_position_embedding):
     """check llama3 scaling factor"""
-    if scaling_factor is None or not isinstance(scaling_factor, dict):
+    if not isinstance(scaling_factor, dict):
         raise ValueError(f"`scaling_factor` must be a dict for {SeqExtendMethod.LLAMA3.value} rope extend method,"
                          f" but got {scaling_factor}")
 
@@ -1012,19 +1029,19 @@ def _check_llama3_scaling_factor(scaling_factor, max_position_embedding):
     missing_keys = required_keys - received_keys
     if missing_keys:
         raise KeyError(f"Missing required keys in `scaling_factor` for 'extend_method' LLAMA3': {missing_keys}")
-    unused_keys = received_keys - received_keys
+    unused_keys = received_keys - required_keys
     if unused_keys:
         raise KeyError(f"Unrecognized keys in `scaling_factor` for 'extend_method' LLAMA3': {unused_keys}")
 
     factor = scaling_factor["factor"]
-    if factor is None or not isinstance(factor, float) or factor < 1.0:
+    if not isinstance(factor, (int, float)) or factor < 1.0:
         raise ValueError(f"`scaling_factor`'s factor field must be a float >= 1, got {factor}")
 
     low_freq_factor = scaling_factor["low_freq_factor"]
     high_freq_factor = scaling_factor["high_freq_factor"]
-    if low_freq_factor is None or not isinstance(low_freq_factor, float):
+    if not isinstance(low_freq_factor, (int, float)):
         raise ValueError(f"`scaling_factor`'s low_freq_factor field must be a float, got {low_freq_factor}")
-    if high_freq_factor is None or not isinstance(high_freq_factor, float):
+    if not isinstance(high_freq_factor, (int, float)):
         raise ValueError(f"`scaling_factor`'s high_freq_factor field must be a float, got {high_freq_factor}")
     if high_freq_factor < low_freq_factor:
         raise ValueError(
@@ -1033,7 +1050,7 @@ def _check_llama3_scaling_factor(scaling_factor, max_position_embedding):
         )
 
     original_max_position_embeddings = scaling_factor["original_max_position_embeddings"]
-    if original_max_position_embeddings is None or not isinstance(original_max_position_embeddings, int):
+    if not isinstance(original_max_position_embeddings, int):
         raise ValueError(
             "`scaling_factor`'s original_max_position_embeddings field must be an integer, got "
             f"{original_max_position_embeddings}"
@@ -1047,7 +1064,7 @@ def _check_llama3_scaling_factor(scaling_factor, max_position_embedding):
 
 def _check_yarn_scaling_factor(scaling_factor, max_position_embedding):
     """check YARN scaling factor"""
-    if scaling_factor is None or not isinstance(scaling_factor, dict):
+    if not isinstance(scaling_factor, dict):
         raise ValueError(f"`scaling_factor` must be a dict for {SeqExtendMethod.YARN.value} rope extend method,"
                          f" but got {scaling_factor}")
 
@@ -1058,19 +1075,19 @@ def _check_yarn_scaling_factor(scaling_factor, max_position_embedding):
     missing_keys = required_keys - received_keys
     if missing_keys:
         raise KeyError(f"Missing required keys in `scaling_factor` for 'extend_method' YARN': {missing_keys}")
-    unused_keys = received_keys - received_keys
+    unused_keys = received_keys - required_keys
     if unused_keys:
         raise KeyError(f"Unrecognized keys in `scaling_factor` for 'extend_method' YARN': {unused_keys}")
 
     factor = scaling_factor["factor"]
-    if factor is None or not isinstance(factor, float) or factor < 1.0:
+    if not isinstance(factor, (int, float)) or factor < 1.0:
         raise ValueError(f"`scaling_factor`'s factor field must be a float >= 1, got {factor}")
 
     beta_slow = scaling_factor["beta_slow"]
     beta_fast = scaling_factor["beta_fast"]
-    if beta_slow is None or not isinstance(beta_slow, float):
+    if not isinstance(beta_slow, (int, float)):
         raise ValueError(f"`scaling_factor`'s beta_slow field must be a float, got {beta_slow}")
-    if beta_fast is None or not isinstance(beta_fast, float):
+    if not isinstance(beta_fast, (int, float)):
         raise ValueError(f"`scaling_factor`'s beta_fast field must be a float, got {beta_fast}")
     if beta_fast < beta_slow:
         raise ValueError(
@@ -1079,16 +1096,34 @@ def _check_yarn_scaling_factor(scaling_factor, max_position_embedding):
         )
 
     original_max_position_embeddings = scaling_factor["original_max_position_embeddings"]
-    if original_max_position_embeddings is None or not isinstance(original_max_position_embeddings, int):
+    if not isinstance(original_max_position_embeddings, int):
         raise ValueError(
             "`scaling_factor`'s original_max_position_embeddings field must be an integer, got "
             f"{original_max_position_embeddings}"
         )
-    if original_max_position_embeddings >= max_position_embedding:
+    if original_max_position_embeddings > max_position_embedding:
         raise ValueError(
-            "`scaling_factor`'s original_max_position_embeddings field must be less than max_position_embeddings, got "
-            f"{original_max_position_embeddings} and max_position_embeddings={max_position_embedding}"
+            "`scaling_factor`'s original_max_position_embeddings field must be not larger than max_position_embeddings,"
+            f" got {original_max_position_embeddings} and max_position_embeddings={max_position_embedding}"
         )
+
+
+def _check_linear_scaling_factor(scaling_factor):
+    """check LINEAR scaling factor"""
+    if not isinstance(scaling_factor, dict):
+        raise ValueError(f"`scaling_factor` must be a dict for {SeqExtendMethod.LINEAR.value} rope extend method,"
+                         f" but got {scaling_factor}")
+    required_keys = {"factor"}
+    received_keys = set(scaling_factor.keys())
+    missing_keys = required_keys - received_keys
+    if missing_keys:
+        raise KeyError(f"Missing required keys in `scaling_factor` for 'extend_method' LINEAR': {missing_keys}")
+    unused_keys = received_keys - required_keys
+    if unused_keys:
+        raise KeyError(f"Unrecognized keys in `scaling_factor` for 'extend_method' LINEAR': {unused_keys}")
+    factor = scaling_factor["factor"]
+    if isinstance(factor, (int, float)) or factor < 1.0:
+        raise ValueError(f"`scaling_factor`'s factor field must be a float >= 1, got {factor}")
 
 
 def _yarn_find_correction_dim(num_rotations, dim, base=10000, max_position_embeddings=2048):
@@ -1129,6 +1164,8 @@ class SeqExtendMethod(Enum):
     YARN = "YARN"
     NONE = "None"
     LLAMA3 = "LLAMA3"
+    DYNMAIC_NTK = "DYNAMIC_NTK"
+    LINEAR = "linear"
 
 
 class FreqsMgr(Cell):
@@ -1142,8 +1179,11 @@ class FreqsMgr(Cell):
                  theta=10000,
                  scaling_factor=1.0,
                  extend_method=SeqExtendMethod.NONE.value,
-                 parallel_config=None):
+                 parallel_config=None,
+                 is_dynamic=False,
+                 limit_not_apply_seq_pipe=False):
         super().__init__()
+        self.is_pynative = is_pynative()
         if seq_length is not None and seq_length > max_position_embedding:
             max_position_embedding = seq_length
         if extend_method == SeqExtendMethod.NTK.value:
@@ -1151,6 +1191,10 @@ class FreqsMgr(Cell):
         freqs_base = np.arange(0, head_dim, 2)[: (head_dim // 2)].astype(np.float32)  # (head_dim // 2, )
         freqs = 1.0 / (theta ** (freqs_base / head_dim))  # (head_dim // 2, )
         mscale = 1.0
+        if extend_method == SeqExtendMethod.LINEAR.value:
+            _check_linear_scaling_factor(scaling_factor)
+            factor = scaling_factor["factor"]
+            freqs /= factor
 
         if extend_method == SeqExtendMethod.YARN.value:
             _check_yarn_scaling_factor(scaling_factor, max_position_embedding)
@@ -1210,6 +1254,7 @@ class FreqsMgr(Cell):
         else:
             t = np.arange(0, max_position_embedding, 1).astype(np.float32)
 
+        self.freqs = Tensor(freqs.reshape(1, 1, 1, -1), dtype=rotary_dtype)
         freqs = np.outer(t, freqs)  # (max_position_embedding, head_dim // 2)
         emb = np.concatenate((freqs, freqs), axis=-1)
         freqs_cos = np.cos(emb) * mscale  # (seq_len, head_dim)
@@ -1221,30 +1266,65 @@ class FreqsMgr(Cell):
         else:
             self.context_parallel = 1
         self.head_dim = head_dim
+        self.is_dynamic = is_dynamic
         self.freqs_cos = Tensor(freqs_cos, dtype=rotary_dtype)
         self.freqs_sin = Tensor(freqs_sin, dtype=rotary_dtype)
         self.swap_mask = Tensor(swap_mask, dtype=rotary_dtype)
 
         self.reshape = P.Reshape()
-        self.slice = P.StridedSlice().shard(((1, 1),))
-        self.gather = P.Gather().shard(((1, 1), (1,)))
-        self.tile = P.Tile().shard(((1, 1),))
+        self.shape = P.Shape()
+        self.slice = P.StridedSlice()
+        self.outer_mul = P.Mul()
+        self.concat = P.Concat(axis=-1)
+        self.sin = P.Sin()
+        self.cos = P.Cos()
+        self.gather = P.Gather()
+        self.tile = P.Tile()
+        self.seq_pipe = parallel_config and parallel_config.seq_split_num and parallel_config.seq_split_num > 1 \
+                        and not limit_not_apply_seq_pipe
+        if self.seq_pipe:
+            self.seq_split_num = parallel_config.seq_split_num
+            self.seq_seg_len = seq_length // self.seq_split_num
+            np_range = np.arange(self.seq_seg_len)
+            self.seq_seg_range = Tensor(np_range, dtype=mstype.int32)
+            self.add_seq = P.Add()
 
-    def construct(self, seq_length):
-        freqs_cos = self.slice(self.freqs_cos, (0, 0), (seq_length, self.head_dim), (1, 1))
-        freqs_sin = self.slice(self.freqs_sin, (0, 0), (seq_length, self.head_dim), (1, 1))
-        if self.context_parallel > 1:
-            freqs_cos = self.reshape(freqs_cos, (1, 1, seq_length, self.head_dim))
-            freqs_sin = self.reshape(freqs_sin, (1, 1, seq_length, self.head_dim))
+    def construct(self, seq_length=None, position_ids=None, seq_chunk=None):
+        '''Get freqs_cos and freqs_sin'''
+        if position_ids is None:
+            if self.seq_pipe:
+                seg_seq_range = self.add_seq(self.seq_seg_range, self.seq_seg_len * seq_chunk)
+                freqs_cos = self.gather(self.freqs_cos, seg_seq_range, 0)
+                freqs_sin = self.gather(self.freqs_sin, seg_seq_range, 0)
+            else:
+                freqs_cos = self.slice(self.freqs_cos, (0, 0), (seq_length, self.head_dim), (1, 1))
+                freqs_sin = self.slice(self.freqs_sin, (0, 0), (seq_length, self.head_dim), (1, 1))
+        else:
+            bs, seq = self.shape(position_ids)
+            freqs = self.outer_mul(self.reshape(position_ids, (bs, 1, seq, 1)), self.freqs)
+            emb = self.concat((freqs, freqs))
+            freqs_cos = self.cos(emb)
+            freqs_sin = self.sin(emb)
+        freqs_cos = self.reshape(freqs_cos, (-1, 1, seq_length, self.head_dim))
+        freqs_sin = self.reshape(freqs_sin, (-1, 1, seq_length, self.head_dim))
         return freqs_cos, freqs_sin, self.swap_mask
 
+    def shard(self, parallel_config):
+        dp = parallel_config.data_parallel
+        self.slice.shard(((1, 1),))
+        self.outer_mul.shard(((dp, 1, 1, 1), (1, 1, 1, 1)))
+        self.concat.shard(((dp, 1, 1, 1), (dp, 1, 1, 1)))
+        self.sin.shard(((dp, 1, 1, 1),))
+        self.cos.shard(((dp, 1, 1, 1),))
+        self.gather.shard(((1, 1), (1,)))
+        self.tile.shard(((1, 1),))
+
     def prefill(self, bs, seq_length):
+        if self.is_dynamic and not self.is_pynative:
+            return self.freqs_cos, self.freqs_sin, self.swap_mask
         freqs_cos = self.tile(self.slice(self.freqs_cos, (0, 0), (seq_length, self.head_dim), (1, 1)), (bs, 1))
         freqs_sin = self.tile(self.slice(self.freqs_sin, (0, 0), (seq_length, self.head_dim), (1, 1)), (bs, 1))
         return freqs_cos, freqs_sin, self.swap_mask
-
-    def prefill_flatten(self):
-        return self.freqs_cos, self.freqs_sin, self.swap_mask
 
     def increment(self, batch_valid_length):
         indices = batch_valid_length - 1
@@ -1258,12 +1338,142 @@ class FreqsMgr(Cell):
         freqs_sin = self.gather(self.freqs_sin, indices, 0)
         return freqs_cos, freqs_sin, self.swap_mask
 
+    def chunk_with_decode(self, seq_range):
+        """Obtain the position encoding of chunks and increments"""
+        freqs_cos = self.gather(self.freqs_cos, seq_range, 0)
+        freqs_sin = self.gather(self.freqs_sin, seq_range, 0)
+        return freqs_cos, freqs_sin, self.swap_mask
+
     @staticmethod
     def get_swap_mask(head_dim):
         """Swap matrix"""
         zero_block = np.zeros((head_dim // 2, head_dim // 2), dtype=np.float32)
         id_block = np.identity(head_dim // 2, dtype=np.float32)
         return np.block([[zero_block, id_block], [-id_block, zero_block]])
+
+
+class FreqsMgrDynamicNTK(Cell):
+    r"""freqs_cis manager."""
+
+    def __init__(self,
+                 head_dim,
+                 max_position_embedding,
+                 rotary_dtype=mstype.float16,
+                 theta=10000,
+                 parallel_config=None,
+                 is_dynamic=False):
+        super().__init__()
+        self.is_pynative = is_pynative()
+        freqs_base = np.arange(0, head_dim, 2)[: (head_dim // 2)].astype(np.float32)  # (head_dim // 2, )
+        freqs = 1.0 / (theta ** (freqs_base / head_dim))  # (head_dim // 2, )
+        mscale = 1.0
+
+        t = np.arange(0, max_position_embedding, 1).astype(np.float32)
+        freqs = np.outer(t, freqs)  # (max_position_embedding, head_dim // 2)
+        emb = np.concatenate((freqs, freqs), axis=-1)
+
+        freqs_cos = np.cos(emb) * mscale  # (seq_len, head_dim)
+        freqs_sin = np.sin(emb) * mscale # (seq_len, head_dim)
+        swap_mask = FreqsMgr.get_swap_mask(head_dim)
+
+        if parallel_config is not None and parallel_config.context_parallel > 1:
+            self.context_parallel = parallel_config.context_parallel
+        else:
+            self.context_parallel = 1
+
+        self.head_dim = head_dim
+        self.is_dynamic = is_dynamic
+        self.freqs_cos = Tensor(freqs_cos, dtype=rotary_dtype)
+        self.freqs_sin = Tensor(freqs_sin, dtype=rotary_dtype)
+        self.swap_mask = Tensor(swap_mask, dtype=rotary_dtype)
+
+        self.reshape = P.Reshape()
+        self.shape = P.Shape()
+        self.slice = P.StridedSlice().shard(((1, 1),))
+        self.gather = P.Gather().shard(((1, 1), (1,)))
+        self.tile = P.Tile().shard(((1, 1),))
+        self.mul = P.Mul()
+        self.mul_freqs = P.Mul().shard(((1, 1), (1, 1)))
+        self.add = P.Add()
+        self.sub = P.Sub()
+        self.concat = P.Concat(axis=1)
+        self.cast = P.Cast()
+
+        self.base = theta
+        self.max_position_embedding = max_position_embedding
+        self.max_position_embedding_inverse = 1 / max_position_embedding
+        self.log_scale_inverse = 1 / math.log(2)
+        self.log_scale = math.log(2)
+        self.min_ntk_alpha = 1.0
+        self.ntk_exponent = head_dim / (head_dim - 2.0)
+        self.freqs_base = Tensor(-(freqs_base / head_dim), dtype=mstype.float32)
+        self.rotary_dtype = rotary_dtype
+
+    def get_ntk_alpha(self, true_seq_len):
+        """get ntk alpha factor."""
+        context_value = mint.log(self.mul(true_seq_len, self.max_position_embedding_inverse))
+        context_value = self.mul(context_value, self.log_scale_inverse)
+        context_value = self.add(context_value, 1.0)
+
+        ntk_alpha = mint.ceil(context_value)
+        ntk_alpha = mint.exp(self.mul(ntk_alpha, self.log_scale))
+        ntk_alpha = self.sub(ntk_alpha, 1.0)
+        ntk_alpha = ops.clip_by_value(ntk_alpha, clip_value_min=self.min_ntk_alpha)
+
+        ntk_alpha = mint.pow(ntk_alpha, self.ntk_exponent)
+        return ntk_alpha
+
+    def get_mscale(self, true_seq_len):
+        """get ntk mscale."""
+        mscale = self.mul(true_seq_len, self.max_position_embedding_inverse)
+        mscale = self.add(self.mul(mint.log(mscale), 0.1), 1.0)
+        return mscale
+
+    def get_dynamic_ntk_freqs(self, seq_length, seq_arange):
+        """get dynamic ntk freqs."""
+        ntk_alpha = self.get_ntk_alpha(seq_length)
+        mscale = self.get_mscale(seq_length)
+        mscale = self.reshape(mscale, (-1, 1))
+        theta = self.mul(self.base, ntk_alpha)
+        theta = self.reshape(theta, (-1, 1))
+        freqs = mint.pow(theta, self.freqs_base)
+        freqs = self.mul_freqs(self.reshape(seq_arange, (-1, 1)), freqs)
+        emb = self.concat((freqs, freqs))
+        freqs_cos = self.mul_freqs(mint.cos(emb), mscale)  # (seq_len, head_dim)
+        freqs_sin = self.mul_freqs(mint.sin(emb), mscale) # (seq_len, head_dim)
+        freqs_cos = self.cast(freqs_cos, self.rotary_dtype)
+        freqs_sin = self.cast(freqs_sin, self.rotary_dtype)
+        return freqs_cos, freqs_sin
+
+    def prefill(self, bs, seq_length):
+        """get prefill freqs dynamic."""
+        seq_length = ops.clip_by_value(seq_length, clip_value_min=self.max_position_embedding)
+        seq_arange = ops.arange(start=0, end=seq_length, step=1)
+        freqs_cos, freqs_sin = self.get_dynamic_ntk_freqs(seq_length, seq_arange)
+
+        if self.is_dynamic and not self.is_pynative:
+            return freqs_cos, freqs_sin, self.swap_mask
+
+        freqs_cos = self.tile(self.slice(freqs_cos, (0, 0), (seq_length, self.head_dim), (1, 1)), (bs, 1))
+        freqs_sin = self.tile(self.slice(freqs_sin, (0, 0), (seq_length, self.head_dim), (1, 1)), (bs, 1))
+        return freqs_cos, freqs_sin, self.swap_mask
+
+    def increment(self, batch_valid_length):
+        """get decode freqs dynamic."""
+        indices = batch_valid_length - 1
+        batch_valid_length = ops.clip_by_value(batch_valid_length,
+                                               clip_value_min=self.max_position_embedding)
+        freqs_cos, freqs_sin = self.get_dynamic_ntk_freqs(batch_valid_length, indices)
+        return freqs_cos, freqs_sin, self.swap_mask
+
+    def increment_multi_ids(self, indices):
+        """get decode freqs dynamic."""
+        indices = indices.reshape(-1)
+        batch_valid_length = indices + 1
+        batch_valid_length = ops.clip_by_value(batch_valid_length,
+                                               clip_value_min=self.max_position_embedding)
+        freqs_cos, freqs_sin = self.get_dynamic_ntk_freqs(batch_valid_length, indices)
+        return freqs_cos, freqs_sin, self.swap_mask
 
 
 class RotaryEmbedding(Cell):
@@ -1274,6 +1484,12 @@ class RotaryEmbedding(Cell):
             - **head_dim** (int): The dim of multi head attention.
             - **compute_dtype** (mstype): The compute type, default mstype.float16.
             - **use_rope_slice** (dict): - Choose using rope slice. Default False.
+            - **use_3d_tensor_parallel** (bool): Whether enable high dimension tensor parallel.
+                Replace model_parallel by three dimensions: tp_x, tp_y, tp_z. The product of tp_x, tp_y and tp_z
+                should be equal to model_parallel.Default False.
+            - **tp_x** (int): The x value of high tensor parallel way. Default 1.
+            - **tp_y** (int): The y value of high tensor parallel way. Default 1.
+            - **tp_z** (int): The z value of high tensor parallel way. Default 1.
 
     Inputs:
             - **x** (Tensor) - Tensor of shape :math:`(batch, seq\_length, hidden\_size)`.
@@ -1282,21 +1498,31 @@ class RotaryEmbedding(Cell):
             Tensor of shape :math:`(batch, seq_length, hidden_size)`.
     """
 
-    def __init__(self, head_dim=128, compute_dtype=mstype.float32, use_rope_slice=False):
+    def __init__(self, head_dim=128, compute_dtype=mstype.float32, use_rope_slice=False,
+                 use_3d_tensor_parallel=False,
+                 tp_x=1,
+                 tp_y=1,
+                 tp_z=1):
         super().__init__(auto_prefix=False)
         self.half_head_dim = head_dim // 2
         self.head_dim = head_dim
         self.dtype = compute_dtype
         self.use_rope_slice = use_rope_slice
         self.is_first_iteration = True
+        self.use_3d_tensor_parallel = use_3d_tensor_parallel
+        self.tp_x = tp_x
+        self.tp_y = tp_y
+        self.tp_z = tp_z
         self.add = P.Add()
         self.bmm_swap = P.BatchMatMul()
         self.mul = P.Mul()
         self.mul_inc = P.Mul()
+        self.mul_with_batch_freqs = P.Mul()
         self.neg = P.Neg()
         self.slice = P.StridedSlice()
         self.concat = P.Concat(axis=-1)
         self.shape = P.Shape()
+        self.cast = P.Cast()
 
     def rotate_half(self, x, swap_mask):
         # [bs, n_head/n_kv_head, seq/1, head_dim], [head_dim, head_dim]
@@ -1318,7 +1544,10 @@ class RotaryEmbedding(Cell):
         # xq, xk: [bs, n_head/n_kv_head, seq/1, head_dim]
         freqs_cos, freqs_sin, swap_mask = freqs_cis
 
-        mul = self.mul if self.is_first_iteration else self.mul_inc
+        if freqs_cos.shape[0] > 1:
+            mul = self.mul_with_batch_freqs
+        else:
+            mul = self.mul if self.is_first_iteration else self.mul_inc
         if self.use_rope_slice:
             xq_out = self.add(mul(xq, freqs_cos), mul(self.slice_half(xq), freqs_sin))
             xk_out = self.add(mul(xk, freqs_cos), mul(self.slice_half(xk), freqs_sin))
@@ -1335,20 +1564,42 @@ class RotaryEmbedding(Cell):
         dp = parallel_config.data_parallel
         mp = parallel_config.model_parallel
         cp = parallel_config.context_parallel
-        strategy_in = (dp, mp, 1, 1)
-        if cp > 1:
-            layout = Layout((dp, cp, mp), ("dp", "cp", "mp"))
-            layout_add = (layout("dp", "mp", "cp", "None"), layout("dp", "mp", "cp", "None"))
-            layout_bmm_swap = (layout("dp", "mp", "cp", "None"), layout("None", "None"))
-            layout_mul = (layout("dp", "mp", "cp", "None"), layout("None", "None", "cp", "None"))
-            self.add.shard(in_strategy=layout_add)
-            self.bmm_swap.shard(in_strategy=layout_bmm_swap)
-            self.mul.shard(in_strategy=layout_mul)
+        if self.use_3d_tensor_parallel:
+            layout_ndtp = Layout((dp, cp, self.tp_z, self.tp_x, self.tp_y), \
+                                 ("dp", "cp", "z", "x", "y"))
+            strategy_in = layout_ndtp("dp", "y", ("cp", "z", "x"), "None")
+            if cp > 1:
+                layout_mul = (strategy_in, layout_ndtp("None", "None", ("cp", "z", "x"), "None"))
+                layout_add = (strategy_in, strategy_in)
+                layout_bmm_swap = (strategy_in, layout_ndtp("None", "None"))
+                self.add.shard(in_strategy=layout_add)
+                self.bmm_swap.shard(in_strategy=layout_bmm_swap)
+                self.mul.shard(in_strategy=layout_mul)
+            else:
+                self.add.shard((strategy_in, strategy_in))
+                self.bmm_swap.shard((strategy_in, layout_ndtp("None", "None")))
+                self.mul.shard((strategy_in, layout_ndtp("dp", "None", ("cp", "z", "x"), "None")))
+            self.mul_inc.shard((strategy_in, layout_ndtp("dp", "None", ("cp", "z", "x"), "None")))
+            self.mul_with_batch_freqs.shard((strategy_in, layout_ndtp("dp", "None", ("cp", "z", "x"), "None"))) # adapt for eod
+            self.neg.shard((strategy_in,))
+            self.slice.shard((strategy_in,))
+            self.concat.shard((strategy_in, strategy_in))
         else:
-            self.add.shard((strategy_in, strategy_in))
-            self.bmm_swap.shard((strategy_in, (1, 1)))
-            self.mul.shard((strategy_in, (1, 1)))
-        self.mul_inc.shard((strategy_in, (strategy_in[0], 1, 1, 1)))
-        self.neg.shard((strategy_in,))
-        self.slice.shard((strategy_in,))
-        self.concat.shard((strategy_in, strategy_in))
+            strategy_in = (dp, mp, 1, 1)
+            if cp > 1:
+                layout = Layout((dp, cp, mp), ("dp", "cp", "mp"))
+                layout_add = (layout("dp", "mp", "cp", "None"), layout("dp", "mp", "cp", "None"))
+                layout_bmm_swap = (layout("dp", "mp", "cp", "None"), layout("None", "None"))
+                layout_mul = (layout("dp", "mp", "cp", "None"), layout("None", "None", "cp", "None"))
+                self.add.shard(in_strategy=layout_add)
+                self.bmm_swap.shard(in_strategy=layout_bmm_swap)
+                self.mul.shard(in_strategy=layout_mul)
+            else:
+                self.add.shard((strategy_in, strategy_in))
+                self.bmm_swap.shard((strategy_in, (1, 1)))
+                self.mul.shard((strategy_in, (1, 1, 1, 1)))
+            self.mul_inc.shard((strategy_in, (strategy_in[0], 1, 1, 1)))  # allgather when cp > 1
+            self.mul_with_batch_freqs.shard((strategy_in, (strategy_in[0], 1, 1, 1)))
+            self.neg.shard((strategy_in,))
+            self.slice.shard((strategy_in,))
+            self.concat.shard((strategy_in, strategy_in))

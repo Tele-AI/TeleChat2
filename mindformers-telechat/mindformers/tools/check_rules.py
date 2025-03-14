@@ -15,9 +15,14 @@
 """Functions to check rules"""
 import os
 import json
+import yaml
+from yaml.nodes import MappingNode
 import mindspore as ms
 from .utils import get_real_group_size
 from .logger import logger
+
+
+YAML_MAX_NESTING_DEPTH = 10
 
 
 def get_parallel_strategy(config):
@@ -121,6 +126,37 @@ def _check_full_batch():
                        f"but get {parallel_mode}, full_batch has been forced to False")
 
 
+def _check_pipeline_interleave(config, pp):
+    """check vpp config"""
+    pipeline_interleave_enabled = getattr(config.parallel.pipeline_config, 'pipeline_interleave', False)
+    if not pipeline_interleave_enabled:
+        return False
+    # Set pp_interleave_num to 0 if there is no pp_interleave_num in model_config
+    # or if pp_interleave_num is set to None.
+    pp_interleave_num = getattr(config.model.model_config, 'pp_interleave_num', 0) or 0
+    return pp_interleave_num * pp > config.model.model_config.num_layers
+
+
+def _check_context_parallel_algo_valid(config, cp, mp):
+    """check cp config"""
+    n_kv_heads = getattr(config.model.model_config, 'n_kv_heads', None)
+    multi_query_num = getattr(config.model.model_config, 'multi_query_group_num', None)
+    num_heads = getattr(config.model.model_config, 'num_heads', None)
+    num_attention_heads = getattr(config.model.model_config, 'num_attention_heads', None)
+    n_q_heads = num_heads or num_attention_heads
+    num_kv_heads = n_kv_heads or multi_query_num
+    if num_kv_heads:
+        n_heads = num_kv_heads
+    else:
+        n_heads = n_q_heads
+    algo_is_ulysses_cp = config.parallel_config.context_parallel_algo.value == "ulysses_cp"
+    if algo_is_ulysses_cp and n_heads is not None:
+        if cp * mp > n_heads:
+            raise ValueError(f"ulysses_cp and mp is shard attention head, it need cp * mp <= attention head, "
+                             f"but got attention head which is {n_heads}, and cp * mp = {cp * mp},"
+                             f"please check num_heads and n_kv_heads.")
+
+
 def _check_parallel(config):
     """check parallel config"""
     parallel_mode = ms.get_auto_parallel_context("parallel_mode")
@@ -157,6 +193,13 @@ def _check_parallel(config):
             raise ValueError(f"context_parallel is only available for flash attention for now, but got "
                              f"use_flash_attention {config.model.model_config.use_flash_attention}, please "
                              f"set use_flash_attention=True")
+
+        if _check_pipeline_interleave(config, pp):
+            raise ValueError(f"num_layers should be greater than `pp * pp_interleave_num`, "
+                             f"but got num_layers : {config.model.model_config.num_layers} "
+                             f"and pp * pp_interleave_num = {pp * config.model.model_config.pp_interleave_num}.")
+        if cp > 1:
+            _check_context_parallel_algo_valid(config, cp, mp)
 
 
 def _check_keyword_gen_dataset(config, mode, **kwargs):
@@ -240,10 +283,11 @@ def _rule_recompute(pp, recompute, key):
 
 
 def _check_recompute(config):
-    pp = config.parallel_config.pipeline_stage
-    _rule_recompute(pp, config.recompute_config.recompute, "recompute")
-    _rule_recompute(pp, config.recompute_config.select_recompute, "select_recompute")
-    _rule_recompute(pp, config.recompute_config.select_comm_recompute, "select_comm_recompute")
+    if config.swap and not config.swap.swap:
+        pp = config.parallel_config.pipeline_stage
+        _rule_recompute(pp, config.recompute_config.recompute, "recompute")
+        _rule_recompute(pp, config.recompute_config.select_recompute, "select_recompute")
+        _rule_recompute(pp, config.recompute_config.select_comm_recompute, "select_comm_recompute")
 
 
 def _check_config_campacity(config):
@@ -263,3 +307,23 @@ def check_rules(config, mode='train', **kwargs):
     _check_env(config)
     _check_recompute(config)
     _check_config_campacity(config)
+
+
+def get_yaml_ast_depth(node, depth=0):
+    """Recursively calculate the maximum nesting depth of yaml ast structures."""
+    if isinstance(node, MappingNode):  # process dict
+        return max((get_yaml_ast_depth(v, depth + 1) for _, v in node.value), default=depth)
+    return depth
+
+
+def check_yaml_depth_before_loading(yaml_str, max_depth=YAML_MAX_NESTING_DEPTH):
+    """Check yaml depth before loading"""
+    try:
+        node = yaml.compose(yaml_str)  # parse yaml to ast
+        if node is None:
+            return  # null file has no question
+        depth = get_yaml_ast_depth(node)
+        if depth > max_depth:
+            raise ValueError(f"YAML nesting depth {depth} exceeds the maximum allowed value of {max_depth}")
+    except yaml.YAMLError as e:
+        raise ValueError(f"YAML parse error: {e}") from e

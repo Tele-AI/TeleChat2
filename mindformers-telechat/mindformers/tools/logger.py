@@ -20,6 +20,7 @@ import os
 import stat
 import sys
 import traceback
+import warnings
 
 from functools import wraps
 from tempfile import TemporaryFile
@@ -589,6 +590,7 @@ class _LogActionOnce:
         self.no_warning = no_warning
 
     def __call__(self, func):
+        @wraps(func)
         def wrapper(*args, **kwargs):
             if not hasattr(self.logger, 'warning'):
                 return func(*args, **kwargs)
@@ -633,3 +635,12 @@ class logger:
     def critical(cls, msg, *args, **kwargs):
         """Log a message with severity 'CRITICAL' on the Mindformers logger."""
         get_logger().critical(msg, *args, **kwargs)
+
+
+def _custom_warning_handler(message, category, filename, lineno, file=None, line=None):
+    """A custom warning handler use MindFormers logger to print the warning logs."""
+    _ = filename, lineno, file, line
+    logger.warning(f"{category.__name__}: {message}")
+
+
+warnings.showwarning = _custom_warning_handler

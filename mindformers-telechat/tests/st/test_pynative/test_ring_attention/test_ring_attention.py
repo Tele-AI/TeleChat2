@@ -17,9 +17,6 @@ import os
 import pytest
 
 
-@pytest.mark.level0
-@pytest.mark.platform_arm_ascend910b_training
-@pytest.mark.env_single
 class TestRingAttention:
     """A test class for testing ring attention."""
     @pytest.mark.run(order=1)

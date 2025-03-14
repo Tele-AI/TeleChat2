@@ -20,7 +20,7 @@ import numpy as np
 
 from mindspore import Tensor, nn, Parameter
 from mindspore import dtype as mstype
-from mindspore import ops
+from mindspore import ops, mint
 from mindspore.ops import operations as P
 from mindspore.context import ParallelMode
 from mindspore.parallel._utils import _get_parallel_mode, _is_sharding_propagation
@@ -31,7 +31,7 @@ from mindformers.modules.transformer.transformer import LowerTriangularMaskWithD
 from mindformers.modules.transformer.op_parallel_config import _check_config
 from mindformers.models.utils import LayerSetting, check_fine_grain_interleave_valid
 from mindformers.tools.register.register import MindFormerModuleType, MindFormerRegister
-from mindformers.tools.utils import get_disable_custom_fa, get_predict_run_mode, get_use_rope_self_define
+from mindformers.tools.utils import get_predict_run_mode
 from mindformers.tools.logger import logger
 
 from ..utils import lazy_inline
@@ -83,23 +83,30 @@ class FreqsMgr(nn.Cell):
         self.concat = P.Concat(axis=-1)
         self.cos = P.Cos()
         self.sin = P.Sin()
+        self.cast = P.Cast()
 
-    def construct(self, position_ids):
+    def construct(self, position_ids, use_past=False):
         """Gather freqs_cos and freqs_sin from input position_ids."""
         # prepare freqs
         freqs = ops.outer(self.t, self.freqs)
         emb = self.concat((freqs, freqs))
         freqs_cos = self.cast(self.cos(emb), self.rotary_dtype)
         freqs_sin = self.cast(self.sin(emb), self.rotary_dtype)
-
         # 1. not use_past, position_ids -> (bs, seq_length)
         # 2. use_past,     position_ids -> (bs, seq_length/1)
         # freqs_cos, freqs_sin          -> (bs, seq_length, head_dim)
         freqs_cos = self.gather(freqs_cos, position_ids, 0)
         freqs_sin = self.gather(freqs_sin, position_ids, 0)
-        # freqs_cos, freqs_sin          -> (bs, 1, seq_length, head_dim)
-        freqs_cos = self.expand_dims(freqs_cos, 1)
-        freqs_sin = self.expand_dims(freqs_sin, 1)
+
+        if not use_past:
+            # freqs_cos, freqs_sin -> (bs, 1, seq_length, head_dim)
+            freqs_cos = self.expand_dims(freqs_cos, 1)
+            freqs_sin = self.expand_dims(freqs_sin, 1)
+        else:
+            # freqs_cos, freqs_sin -> (bs * seq_length, head_dim)
+            freqs_cos = self.reshape(freqs_cos, (-1, self.head_dim))
+            freqs_sin = self.reshape(freqs_sin, (-1, self.head_dim))
+
         return freqs_cos, freqs_sin, self.swap_mask
 
     @staticmethod
@@ -141,14 +148,10 @@ class CogVLM2VideoLMModel(LlamaPreTrainedModel):
         self.cast = P.Cast()
         self.shape = P.Shape()
         self.reshape = P.Reshape()
-        # default open internal kernel boost
-        self.disable_custom_fa = get_disable_custom_fa()
-        logger.info("disable custom flash attention score op:{}".format(self.disable_custom_fa))
         if config.moe_config.expert_num > 1:
             logger.info("MoE config is provided, use MoE FFN")
         else:
             logger.info("MoE config is None, use normal FFN")
-        self.use_rope_self_define = get_use_rope_self_define()
 
         self.freqs_mgr = FreqsMgr(head_dim=self.head_dim,
                                   seq_length=config.seq_length,
@@ -162,7 +165,8 @@ class CogVLM2VideoLMModel(LlamaPreTrainedModel):
                                                           is_dynamic=config.is_dynamic,
                                                           pad_token_id=config.pad_token_id,
                                                           use_flash_attention=config.use_flash_attention,
-                                                          use_attn_mask_compression=config.use_attn_mask_compression)
+                                                          use_attn_mask_compression=config.use_attn_mask_compression,
+                                                          use_past=config.use_past)
         self.tok_embeddings = LlamaEmbedding(vocab_table_size=config.vocab_size,
                                              embedding_size=config.hidden_size,
                                              param_init_type=config.embedding_init_type,
@@ -173,7 +177,9 @@ class CogVLM2VideoLMModel(LlamaPreTrainedModel):
         self.layer_setting = LayerSetting(config.num_layers,
                                           config.offset,
                                           config.parallel_config,
-                                          config.pp_interleave_num)
+                                          config.pp_interleave_num,
+                                          config.start_stage,
+                                          config.stage_num)
         for layer_id in range(config.num_layers):
             layer = self.build_decoderlayer(layer_id, config)
             self.layer_setting(layer, layer_id)
@@ -185,10 +191,14 @@ class CogVLM2VideoLMModel(LlamaPreTrainedModel):
         cp = config.parallel_config.context_parallel
         if cp > 1:
             raise ValueError("CogVLM2 does not support cp > 1.")
+
         if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
-            self.tok_embeddings.pipeline_stage = 0
+            self.tok_embeddings.pipeline_stage = config.start_stage
             if config.parallel_config.pipeline_stage > 1:
-                self.norm_out.pipeline_stage = config.parallel_config.pipeline_stage - 1
+                if config.stage_num == 0:
+                    self.norm_out.pipeline_stage = config.parallel_config.pipeline_stage - 1
+                else:
+                    self.norm_out.pipeline_stage = config.start_stage + config.stage_num - 1
                 self.tok_embeddings.set_comm_fusion(2)
                 self.norm_out.set_comm_fusion(2)
             else:
@@ -205,10 +215,7 @@ class CogVLM2VideoLMModel(LlamaPreTrainedModel):
             self.freqs_mgr.shard()
 
             for layer in self.layers:
-                if self.use_past:
-                    layer.attention.infer_attention.rotary_embedding.mul.shard(((dp, mp, 1, 1), (dp, 1, 1, 1)))
-                    layer.attention.infer_attention.rotary_embedding.mul_inc.shard(((dp, mp, 1, 1), (dp, 1, 1, 1)))
-                else:
+                if not self.use_past:
                     layer.attention.apply_rotary_emb.mul.shard(((dp, mp, 1, 1), (dp, 1, 1, 1)))
                     layer.attention.apply_rotary_emb.mul_inc.shard(((dp, mp, 1, 1), (dp, 1, 1, 1)))
 
@@ -238,7 +245,8 @@ class CogVLM2VideoLMModel(LlamaPreTrainedModel):
                                                fine_grain_interleave=config.fine_grain_interleave,
                                                parallel_config=config.parallel_config)
         else:
-            layer = LLamaDecodeLayer(layer_id,
+            layer = LLamaDecodeLayer(config.seq_length,
+                                     layer_id,
                                      dim=config.hidden_size,
                                      n_heads=config.num_heads,
                                      n_kv_heads=config.n_kv_heads,
@@ -282,15 +290,10 @@ class CogVLM2VideoLMModel(LlamaPreTrainedModel):
             h = self.cast(input_embeds, self.dtype)
 
         bs, seq_len, _ = self.shape(h)
-        freqs_cis = self.freqs_mgr(position_ids)
+        freqs_cis = self.freqs_mgr(position_ids, self.use_past)
         mask = None
         if self.use_past and self.is_first_iteration:
-            if self.use_flash_attention:
-                if self.disable_custom_fa:  # only support fp16
-                    mask = self.casual_mask(masks=input_attention_masks)  # mask: [bs, seq, seq]
-                    mask = self.cast(mask, mstype.float16)
-            else:
-                mask = self.casual_mask(masks=input_attention_masks)  # mask: [bs, seq, seq]
+            mask = self.casual_mask.prefill()
 
             if prefix_keys_values is not None:
                 if mask is None:
@@ -347,7 +350,7 @@ class CogVLM2VideoLM(LlamaPreTrainedModel):
         self.mul = P.Mul()
         self.add = P.Add()
         self.ones = P.Ones()
-        self.gather = P.Gather(1)
+        self.gather = P.Gather()
         self.sub_batch_valid_len = P.Sub()
         self.model = CogVLM2VideoLMModel(config=config)
         self.lm_head = Linear(in_channels=config.hidden_size,
@@ -387,12 +390,13 @@ class CogVLM2VideoLM(LlamaPreTrainedModel):
             else:
                 self.lm_head.shard(strategy_matmul=((dp * cp, 1), (mp, 1)))
             if config.parallel_config.pipeline_stage > 1:
-                self.lm_head.pipeline_stage = config.parallel_config.pipeline_stage - 1
+                if config.stage_num == 0:
+                    self.lm_head.pipeline_stage = config.parallel_config.pipeline_stage - 1
+                else:
+                    self.lm_head.pipeline_stage = config.stage_num + config.start_stage - 1
 
         self.load_checkpoint(config)
         self.predict_run_mode = get_predict_run_mode()
-
-        logger.info(f"Predict kbk mode: {self.predict_run_mode}")
 
     def prepare_inputs_for_predict_layout(self, input_ids, **kwargs):
         """Get model input tuple for transform ckpt."""
@@ -468,6 +472,7 @@ class CogVLM2VideoLM(LlamaPreTrainedModel):
                             input_attention_masks=input_attention_masks, position_ids=position_ids)
         pre_gather = (not self.use_past or self.is_first_iteration) and batch_valid_length is not None
         if pre_gather:
+            batch_valid_length = mint.cumsum(batch_valid_length, 0)
             output = self.gather(output, self.sub_batch_valid_len(batch_valid_length, 1), 1)
         logits = self.lm_head(output)
 

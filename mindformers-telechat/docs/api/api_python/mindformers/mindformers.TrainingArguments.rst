@@ -1,7 +1,7 @@
 mindformers.TrainingArguments
 ==============================
 
-.. py:class:: mindformers.TrainingArguments(output_dir = './output', overwrite_output_dir = False, seed = 42, data_seed = None, only_save_strategy = False, auto_trans_ckpt = False, src_strategy = None, transform_process_num = 1, resume_from_checkpoint = None, resume_training = None, ignore_data_skip = False, data_skip_steps = None, do_train = False, do_eval = False, do_predict = False, check_for_nan_in_loss_and_grad = False, calculate_per_token_loss = False, remote_save_url = None, batch_size = None, num_train_epochs = 3.0, sink_mode = True, sink_size = 2, gradient_accumulation_steps = 1, mode = 0, use_cpu = False, device_id = 0, device_target = 'Ascend', enable_graph_kernel = False, max_call_depth = 10000, max_device_memory = '1024GB', save_graphs = False, save_graphs_path = './graph', use_parallel = False, parallel_mode = 1, gradients_mean = False, loss_repeated_mean = False, enable_alltoall = False, full_batch = True, dataset_strategy = 'full_batch', search_mode = 'sharding_propagation', enable_parallel_optimizer = False, gradient_accumulation_shard = False, parallel_optimizer_threshold = 64, optimizer_weight_shard_size = -1, strategy_ckpt_save_file = './ckpt_strategy.ckpt', data_parallel = 1, model_parallel = 1, expert_parallel = 1, pipeline_stage = 1, micro_batch_num = 1, gradient_aggregation_group = 4, micro_batch_interleave_num = 1, use_seq_parallel = False, vocab_emb_dp = True, expert_num = 1, capacity_factor = 1.05, aux_loss_factor = 0.05, num_experts_chosen = 1, recompute = False, select_recompute = False, parallel_optimizer_comm_recompute = False, mp_comm_recompute = True, recompute_slice_activation = False, optim = 'fp32_adamw', adam_beta1 = 0.9, adam_beta2 = 0.999, adam_epsilon = 1e-08, weight_decay = 0.0, layer_scale = False, layer_decay = 0.65, lr_scheduler_type = 'cosine', learning_rate = 5e-05, lr_end = 1e-06, warmup_lr_init = 0.0, warmup_epochs = None, warmup_ratio = None, warmup_steps = 0, total_steps = -1, lr_scale = False, lr_scale_factor = 256, dataset_task = None, dataset_type = None, train_dataset = None, train_dataset_in_columns = None, train_dataset_out_columns = None, eval_dataset = None, eval_dataset_in_columns = None, eval_dataset_out_columns = None, shuffle = True, dataloader_drop_last = True, repeat = 1, per_device_train_batch_size = 8, per_device_eval_batch_size = 8, dataloader_num_workers = 8, python_multiprocessing = False, numa_enable = False, prefetch_size = 1, wrapper_type = 'MFTrainOneStepCell', scale_sense = 'DynamicLossScaleUpdateCell', loss_scale_value = 65536, loss_scale_factor = 2, loss_scale_window = 1000, use_clip_grad = True, max_grad_norm = 1.0, max_scale_window = 1000, min_scale_window = 20, metric_type = None, logging_strategy = 'steps', logging_steps = 1, save_prefix = 'CKP', save_directory = None, save_strategy = 'steps', save_steps = 500, save_seconds = None, save_total_limit = 5, keep_checkpoint_per_n_minutes = 0, save_on_each_node = True, integrated_save = None, save_network_params = True, save_trainable_params = False, async_save = False, evaluation_strategy = 'no', eval_steps = None, eval_epochs = None, profile = False, profile_start_step = 1, profile_end_step = 10, init_start_profile = False, profile_communication = False, profile_memory = True, auto_tune = False, filepath_prefix = './autotune', autotune_per_step = 10, push_to_hub = False, hub_model_id = None, hub_strategy = 'every_save', hub_token = None, hub_private_repo = False, hub_always_push = False)
+.. py:class:: mindformers.TrainingArguments(output_dir = './output', overwrite_output_dir = False, seed = 42, data_seed = None, only_save_strategy = False, auto_trans_ckpt = False, src_strategy = None, transform_process_num = 1, resume_from_checkpoint = None, resume_training = None, ignore_data_skip = False, data_skip_steps = None, do_train = False, do_eval = False, do_predict = False, check_for_nan_in_loss_and_grad = False, calculate_per_token_loss = False, remote_save_url = None, batch_size = None, num_train_epochs = 3.0, sink_mode = True, sink_size = 2, gradient_accumulation_steps = 1, mode = 0, use_cpu = False, device_id = 0, device_target = 'Ascend', max_call_depth = 10000, max_device_memory = '1024GB', save_graphs = False, save_graphs_path = './graph', use_parallel = False, parallel_mode = 1, gradients_mean = False, loss_repeated_mean = False, enable_alltoall = False, full_batch = True, dataset_strategy = 'full_batch', search_mode = 'sharding_propagation', enable_parallel_optimizer = False, gradient_accumulation_shard = False, parallel_optimizer_threshold = 64, optimizer_weight_shard_size = -1, strategy_ckpt_save_file = './ckpt_strategy.ckpt', data_parallel = 1, model_parallel = 1, expert_parallel = 1, pipeline_stage = 1, micro_batch_num = 1, gradient_aggregation_group = 4, micro_batch_interleave_num = 1, use_seq_parallel = False, vocab_emb_dp = True, expert_num = 1, capacity_factor = 1.05, aux_loss_factor = 0.05, num_experts_chosen = 1, recompute = False, select_recompute = False, parallel_optimizer_comm_recompute = False, mp_comm_recompute = True, recompute_slice_activation = False, optim = 'fp32_adamw', adam_beta1 = 0.9, adam_beta2 = 0.999, adam_epsilon = 1e-08, weight_decay = 0.0, layer_scale = False, layer_decay = 0.65, lr_scheduler_type = 'cosine', learning_rate = 5e-05, lr_end = 1e-06, warmup_lr_init = 0.0, warmup_epochs = None, warmup_ratio = None, warmup_steps = 0, total_steps = -1, lr_scale = False, lr_scale_factor = 256, dataset_task = None, dataset_type = None, train_dataset = None, train_dataset_in_columns = None, train_dataset_out_columns = None, eval_dataset = None, eval_dataset_in_columns = None, eval_dataset_out_columns = None, shuffle = True, dataloader_drop_last = True, repeat = 1, per_device_train_batch_size = 8, per_device_eval_batch_size = 8, dataloader_num_workers = 8, python_multiprocessing = False, numa_enable = False, prefetch_size = 1, wrapper_type = 'MFTrainOneStepCell', scale_sense = 'DynamicLossScaleUpdateCell', loss_scale_value = 65536, loss_scale_factor = 2, loss_scale_window = 1000, use_clip_grad = True, max_grad_norm = 1.0, max_scale_window = 1000, min_scale_window = 20, metric_type = None, logging_strategy = 'steps', logging_steps = 1, save_prefix = 'CKP', save_directory = None, save_strategy = 'steps', save_steps = 500, save_seconds = None, save_total_limit = 5, keep_checkpoint_per_n_minutes = 0, save_on_each_node = True, integrated_save = None, save_network_params = True, save_trainable_params = False, async_save = False, evaluation_strategy = 'no', eval_steps = None, eval_epochs = None, profile = False, profile_start_step = 1, profile_end_step = 10, init_start_profile = False, profile_communication = False, profile_memory = True, auto_tune = False, filepath_prefix = './autotune', autotune_per_step = 10, push_to_hub = False, hub_model_id = None, hub_strategy = 'every_save', hub_token = None, hub_private_repo = False, hub_always_push = False)
 
     TrainingArguments是与MindSpore训练相关的参数集合。
 
@@ -23,7 +23,7 @@ mindformers.TrainingArguments
         - **do_predict** (bool, 可选) - 是否执行预测。默认值： ``False`` 。
         - **check_for_nan_in_loss_and_grad** (bool, 可选) - 是否在训练中检查损失和梯度存在Nan。默认值： ``False`` 。
         - **calculate_per_token_loss** (bool, 可选) - 是否计算每个token的损失。默认值： ``False`` 。
-        - **remote_save_url** (str, 可选) - 在ModeArts上执行训练任务时的OBS输出路径。默认值： ``None`` 。
+        - **remote_save_url** (str, 可选) - 在ModelArts上执行训练任务时的OBS输出路径。默认值： ``None`` 。
         - **batch_size** (int, 可选) - 输入数据的batch size，如果设置了值，则会覆盖 `per_device_train_batch_size` 。默认值： ``None`` 。
         - **num_train_epochs** (float, 可选) - 训练任务的epoch总数。默认值： ``3.0`` 。
         - **sink_mode** (bool, 可选) - 是否直接下沉数据到设备端。默认值： ``True`` 。
@@ -33,7 +33,6 @@ mindformers.TrainingArguments
         - **use_cpu** (bool, 可选) - 是否使用cpu。默认值： ``False`` 。
         - **device_id** (int, 可选) - 默认的设备id。默认值： ``0`` 。
         - **device_target** (str, 可选) - 默认的目标设备，支持'Ascend', 'GPU'和'CPU'。默认值： ``"Ascend"`` 。
-        - **enable_graph_kernel** (bool, 可选) - 是否支持图融合。默认值： ``False`` 。
         - **max_call_depth** (int, 可选) - 最大函数调用深度。默认值： ``10000`` 。
         - **max_device_memory** (str, 可选) - 设备端的最大可用内存。默认值： ``"1024GB"`` 。
         - **save_graphs** (bool, 可选) - 是否保存中间编译的图。默认值： ``False`` 。
@@ -43,7 +42,7 @@ mindformers.TrainingArguments
         - **gradients_mean** (bool, 可选) - 在梯度汇总后，是否使用平均值算子。通常，在半自动并行模式下值为False，在数据并行模式下值为True。默认值： ``False`` 。
         - **loss_repeated_mean** (bool, 可选) - 表示在重复计算时，是否向后执行均值操作符。默认值： ``False`` 。
         - **enable_alltoall** (bool, 可选) - 在通信中，是否允许使用AllToAll通信算子。默认值： ``False`` 。
-        - **full_batch** (bool, 可选) - 如果在自动并行模式下加载了真个批次的数据集，那么 `full_batch` 应该置为True。当前更推荐使用 `dataset_strategy` 。默认值： ``True`` 。
+        - **full_batch** (bool, 可选) - 如果在自动并行模式下加载了整个批次的数据集，那么 `full_batch` 应该置为True。当前更推荐使用 `dataset_strategy` 。默认值： ``True`` 。
         - **dataset_strategy** (Union[str, tuple], 可选) - 数据集切分策略，半自动并行模式下设置为"full_batch"，数据并行模式下设置为"data_parallel"。默认值： ``"full_batch"`` 。
         - **search_mode** (str, 可选) - 策略搜索模式，只有在自动并行模式下生效。默认值： ``"sharding_propagation"`` 。
         - **enable_parallel_optimizer** (bool, 可选) - 是否开启优化器并行。默认值： ``False`` 。
@@ -134,7 +133,7 @@ mindformers.TrainingArguments
         - **profile_start_step** (int, 可选) - 在第几步开启性能分析。默认值： ``1`` 。
         - **profile_end_step** (int, 可选) - 在第几步结束性能分析。默认值： ``10`` 。
         - **init_start_profile** (bool, 可选) - 在性能分析初始化时是否采集数据。默认值： ``False`` 。
-        - **profile_communication** (bool, 可选) - 在多卡训练时，是否开启通信性能数据采集。
+        - **profile_communication** (bool, 可选) - 在多卡训练时，是否开启通信性能数据采集。默认值： ``False`` 。
         - **profile_memory** (bool, 可选) - 是否采集张量内存数据。默认值： ``True`` 。
         - **auto_tune** (bool, 可选) - 是否开启自动数据加速。默认值： ``False`` 。
         - **filepath_prefix** (str, 可选) - 经过优化的全局配置的保存路径和文件前缀。默认值： ``"./autotune"`` 。
@@ -154,7 +153,7 @@ mindformers.TrainingArguments
         把训练参数转换成MindFormers的config类型。
 
         参数：
-            - **task_config** (MindFormerConfig, 可选) - 任务配置信息。
+            - **task_config** (MindFormerConfig, 可选) - 任务配置信息。默认值： ``None`` 。
 
         返回：
             MindFormerConfig类的实例，包含经过处理的任务配置信息。
@@ -213,7 +212,7 @@ mindformers.TrainingArguments
             - **steps** (int, 可选) - 两次日志之间间隔的步数，在 `strategy` 值为 `steps` 时生效。默认值： ``500`` 。
             - **kwargs** (Any) - 其它参数。
 
-    .. py:method:: set_lr_scheduler(name: Union[str, LrSchedulerType] = 'linear', num_epochs: float = 3.0, warmup_lr_init: float = 0.0, warmup_epochs: Optional[int] = None, warmup_ratio: Optional[float] = None, warmup_steps: int = 0, total_steps: int = - 1, **kwargs)
+    .. py:method:: set_lr_scheduler(name: Union[str, LrSchedulerType] = 'linear', num_epochs: float = 3.0, warmup_lr_init: float = 0.0, warmup_epochs: Optional[int] = None, warmup_ratio: Optional[float] = None, warmup_steps: int = 0, total_steps: int = -1, **kwargs)
 
         设置与学习率调度器相关的参数。
 
@@ -248,7 +247,7 @@ mindformers.TrainingArguments
         参数：
             - **strategy** (Union[str, IntervalStrategy], 可选) - 训练过程中保存权重的策略，"no"表示训练中不保存权重，"epoch"表示训练中每个epoch结束后保存权重，"steps"表示训练中每经过 `steps` 步数后保存权重。默认值： ``"steps"`` 。
             - **steps** (int, 可选) - 两次保存权重之间间隔的步数，在 `strategy` 值为 `steps` 时生效。默认值： ``500`` 。
-            - **total_limit** (int, 可选) - checkpoint的总数量，如果超过该数量，会删除 `output_dir` 目录下最老的权重。默认值： ``None`` 。
+            - **total_limit** (int, 可选) - checkpoint的总数量，如果超过该数量，会删除 `output_dir` 目录下时间最早的权重。默认值： ``None`` 。
             - **on_each_node** (bool, 可选) - 在多节点分布式训练时，控制在每个节点上保存权重或者只在主节点上保存。默认值： ``True`` 。
             - **kwargs** (Any) - 其它参数。
 

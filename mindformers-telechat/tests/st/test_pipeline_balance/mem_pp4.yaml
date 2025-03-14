@@ -1,0 +1,21 @@
+# pipeline_config
+pipeline_config:
+  pipeline_num: 4
+  num_layer: 80
+  offset: [[0,1,-1,0],[0,-1,1,0]]
+
+# recompute_config
+recompute_config:
+  recompute: [[1,2,1,1],[1,3,4,1]]
+  select_recompute: [false,false]
+  select_comm_recompute: [false,false]
+
+# head memory and tail memory are necessary.
+# num of body memories = type of recompute + 3 --> the influence of implicit constant memory is not considered 
+# num of body memories = type of recompute + 4 --> the influence of implicit constant memory is considered
+memory_usage:
+  head_memory: 66502
+  tail_memory: 25599
+  body_memories:
+    stage_id: [[1,2],[1,2]]
+    memories: [[52536,35595],[45439,35700]]

@@ -46,11 +46,11 @@ class KeyWordGenDataset(BaseDataset):
     Args:
         dataset_config (dict, optional):
             Config for dataset. When `dataset_config` is an empty dict or is None, all arguments below
-            will build a non-empty `dataset_config`. Otherwise, they will be ignored. Default: None.
-        data_loader (Union[dict, Callable]):
+            will build a non-empty `dataset_config`. Otherwise, they will be ignored. Default: ``None``.
+        data_loader (Union[dict, Callable], optional):
             Config for data loader or a data loader object.
             when `data_loader` is a `dict`, this string "type", "dataset_dir", "dataset_files", "phase", "shuffle",
-            "origin_columns" and "version" are the keys can be parsed.
+            "origin_columns" and "version" are the keys can be parsed. Default: ``None``.
 
             - type: Required. Indicates the type of dataset. The value must be string or class type.
               When the value is "MindDataset", one of `dataset_dir` and `dataset_files` is required,
@@ -71,44 +71,44 @@ class KeyWordGenDataset(BaseDataset):
 
             - version: Optional. Version of the map function. The value can be 1 or 2. Default when missing: 1.
 
-        tokenizer (Union[dict, Callable]):
-            Tokenizer configuration or object.
-        input_columns (list[str]):
-            Column name before the map function.
-        batch_size (int):
-            Size of each batch. Default: 8.
-        drop_remainder (bool):
+        tokenizer (Union[dict, Callable], optional):
+            Tokenizer configuration or object. Default: ``None``.
+        input_columns (list[str], optional):
+            Column name before the map function. Default: ``None``.
+        batch_size (int, optional):
+            Size of each batch. Default: ``8``.
+        drop_remainder (bool, optional):
             Whether to discard the last batch when the number of data items contained
-            in the last batch is smaller than batch_size. Default: True.
-        num_parallel_workers (int):
+            in the last batch is smaller than batch_size. Default: ``True``.
+        num_parallel_workers (int, optional):
             Specifies the number of concurrent processes or threads for map operations
-            to accelerate processing. Default: 8.
-        repeat (int):
-            Number of times this dataset is repeated. Default: 1.
-        ignore_pad_token_for_loss (bool):
-            Whether ignore pad token for loss. Default: True.
-        max_source_length (int):
-            Maximum length of the source sequence.
-        max_target_length (int):
-            Maximum length of the target sequence.
-        phase (int):
-            Phase of a task, which can be 'train' or 'eval'. Ignored when `data_loader` is `dict`. Default: 'train'.
-        version (int):
-            Version of the map function, which can be 1 or 2. Ignored when `data_loader` is `dict`. Default: 1.
-        seed (int):
-            Random seed number. Default: 0.
-        prefetch_size (int):
-            Buffer queue size of each data processing operation in the pipeline. Default: 1.
-        numa_enable (bool):
-            Indicates whether to use the NUMA binding function. Default: False.
-        auto_tune (bool):
-            Indicates whether to enable automatic optimization of data processing parameters. Default: False.
-        autotune_per_step (int):
-            Specifies the interval for adjusting the configuration step of automatic data acceleration. Default: 10.
-        filepath_prefix (str):
-            Path for saving optimized parameter configurations. Default: './autotune'.
-        profile (bool):
-            Whether to enable data collection. Default: False.
+            to accelerate processing. Default: ``8``.
+        repeat (int, optional):
+            Number of times this dataset is repeated. Default: ``1``.
+        ignore_pad_token_for_loss (bool, optional):
+            Whether ignore pad token for loss. Default: ``True``.
+        max_source_length (int, optional):
+            Maximum length of the source sequence. Default: ``None``.
+        max_target_length (int, optional):
+            Maximum length of the target sequence. Default: ``None``.
+        phase (int, optional):
+            Phase of a task, which can be 'train' or 'eval'. Ignored when `data_loader` is `dict`. Default: ``'train'``.
+        version (int, optional):
+            Version of the map function, which can be 1 or 2. Ignored when `data_loader` is `dict`. Default: ``1``.
+        seed (int, optional):
+            Random seed number. Default: ``0``.
+        prefetch_size (int, optional):
+            Buffer queue size of each data processing operation in the pipeline. Default: ``1``.
+        numa_enable (bool, optional):
+            Indicates whether to use the NUMA binding function. Default: ``False``.
+        auto_tune (bool, optional):
+            Indicates whether to enable automatic optimization of data processing parameters. Default: ``False``.
+        autotune_per_step (int, optional):
+            Specifies the interval for adjusting the configuration step of automatic data acceleration. Default: ``10``.
+        filepath_prefix (str, optional):
+            Path for saving optimized parameter configurations. Default: ``'./autotune'``.
+        profile (bool, optional):
+            Whether to enable data collection. Default: ``False``.
 
     Returns:
         Instance of KeyWordGenDataset.

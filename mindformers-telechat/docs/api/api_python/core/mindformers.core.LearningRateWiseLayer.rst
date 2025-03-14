@@ -12,7 +12,7 @@ mindformers.core.LearningRateWiseLayer
     .. math::
         \eta_{t,l} = \eta_{\text{base}} \times \alpha_l
 
-    其中 :math:`\eta_{t,l}` 是时间 :math:`t` 时层 :math:`l` 的学习率， :math:`\eta_{\text{base}}` 是基准学习率， :math:`\alpha_l` 是层 :math:`l` 的缩放因子。
+    其中 :math:`\eta_{t,l}` 是在时间 :math:`t` 时层 :math:`l` 的学习率， :math:`\eta_{\text{base}}` 是基准学习率， :math:`\alpha_l` 是层 :math:`l` 的缩放因子。
 
     随着训练的进行，每层的学习率按照以下余弦退火调度进行调整：
 

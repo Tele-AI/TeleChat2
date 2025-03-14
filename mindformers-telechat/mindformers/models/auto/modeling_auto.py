@@ -28,20 +28,8 @@ from mindformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 MODEL_MAPPING_NAMES = OrderedDict(
     [
         # Base model mapping
-        ("bert", "BertModel"),
-        ("blip2", "Blip2Model"),
-        ("bloom", "BloomModel"),
-        ("clip", "CLIPModel"),
-        ("glm", "GLMModel"),
         ("glm2", "ChatGLM2Model"),
-        ("gpt2", "GPT2Model"),
-        ("llama", "LlamaModel"),
-        ("mae", "ViTMAEModel"),
-        ("pangualpha", "PanguAlphaModel"),
-        ("sam", "SamModel"),
-        ("swin", "SwinModel"),
-        ("t5", "T5Model"),
-        ("vit", "ViTModel"),
+        ("llama", "LlamaModel")
     ]
 )
 
@@ -60,7 +48,6 @@ MODEL_WITH_LM_HEAD_MAPPING_NAMES = OrderedDict(
     [
         # Model with LM heads mapping
         ("bert", "BertForMaskedLM"),
-        ("bloom", "BloomLMHeadModel"),
         ("gpt2", "GPT2LMHeadModel"),
         ("glm", "GLMChatModel"),
         ("glm2", "ChatGLM2ForConditionalGeneration"),
@@ -72,13 +59,8 @@ MODEL_WITH_LM_HEAD_MAPPING_NAMES = OrderedDict(
 MODEL_FOR_CAUSAL_LM_MAPPING_NAMES = OrderedDict(
     [
         # Model with LM heads mapping
-        ("bert", "BertForMaskedLM"),
-        ("bloom", "BloomLMHeadModel"),
-        ("gpt2", "GPT2LMHeadModel"),
-        ("glm", "GLMChatModel"),
         ("glm2", "ChatGLM2ForConditionalGeneration"),
-        ("llama", "LlamaForCausalLM"),
-        ("pangualpha", "PanguAlphaHeadModel"),
+        ("llama", "LlamaForCausalLM")
     ]
 )
 
@@ -225,7 +207,7 @@ class AutoModel(_BaseAutoModelClass):
     _model_mapping = MODEL_MAPPING
 
 
-AutoModel = auto_class_update(AutoModel, checkpoint_for_example="sam_vit_b")
+AutoModel = auto_class_update(AutoModel, checkpoint_for_example="llama2_7b")
 
 
 class AutoModelForPreTraining(_BaseAutoModelClass):
@@ -254,7 +236,7 @@ class AutoModelForCausalLM(_BaseAutoModelClass):
 
 AutoModelForCausalLM = auto_class_update(
     AutoModelForCausalLM,
-    checkpoint_for_example="bert_tiny_uncased",
+    checkpoint_for_example="llama2_7b",
     head_doc="causal language modeling"
 )
 

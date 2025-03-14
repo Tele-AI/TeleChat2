@@ -143,13 +143,20 @@ MODEL_CONFIG = GPT2Config(num_layers=NUM_LAYERS, hidden_size=HIDDEN_SIZE,
                           num_heads=NUM_HEADS, seq_length=SEQ_LENGTH)
 MODEL = GPT2LMHeadModel(MODEL_CONFIG)
 
-MINDFOREMR_CONFIG = Trainer.get_task_config(task="text_generation", model_name="gpt2")
-MINDFOREMR_CONFIG.model.model_config.num_layers = NUM_LAYERS
-MINDFOREMR_CONFIG.model.model_config.hidden_size = HIDDEN_SIZE
-MINDFOREMR_CONFIG.model.model_config.num_heads = NUM_HEADS
-MINDFOREMR_CONFIG.model.model_config.seq_length = SEQ_LENGTH
-MINDFOREMR_CONFIG.model.model_config.checkpoint_name_or_path = ""
-MINDFOREMR_CONFIG.eval_step_interval = EVAL_STEPS
+PREDICT_MODEL_CONFIG = GPT2Config(num_layers=NUM_LAYERS, hidden_size=HIDDEN_SIZE,
+                                  num_heads=NUM_HEADS, seq_length=SEQ_LENGTH, use_past=True)
+PREDICT_MODEL = GPT2LMHeadModel(MODEL_CONFIG)
+
+MINDFORMER_CONFIG = Trainer.get_task_config(task="text_generation", model_name="gpt2")
+MINDFORMER_CONFIG.model.model_config.num_layers = NUM_LAYERS
+MINDFORMER_CONFIG.model.model_config.hidden_size = HIDDEN_SIZE
+MINDFORMER_CONFIG.model.model_config.num_heads = NUM_HEADS
+MINDFORMER_CONFIG.model.model_config.seq_length = SEQ_LENGTH
+MINDFORMER_CONFIG.model.model_config.checkpoint_name_or_path = ""
+MINDFORMER_CONFIG.eval_step_interval = EVAL_STEPS
+
+PREDICT_MINDFORMER_CONFIG = copy.deepcopy(MINDFORMER_CONFIG)
+PREDICT_MINDFORMER_CONFIG.model.model_config.use_past = True
 
 TRAINING_ARGUMENTS = TrainingArguments(do_eval=True,
                                        metric_type="PerplexityMetric",
@@ -210,18 +217,18 @@ class TestTrainerInit:
             (None, "text_generation", "gpt2", "gpt2"),
             (None, "text_generation", MODEL, None),
             (None, "text_generation", MODEL, "gpt2"),
-            (MINDFOREMR_CONFIG, "general", None, None),
-            (MINDFOREMR_CONFIG, "general", "gpt2", None),
-            (MINDFOREMR_CONFIG, "general", None, "gpt2"),
-            (MINDFOREMR_CONFIG, "general", "gpt2", "gpt2"),
-            (MINDFOREMR_CONFIG, "general", MODEL, None),
-            (MINDFOREMR_CONFIG, "general", MODEL, "gpt2"),
-            (MINDFOREMR_CONFIG, "text_generation", None, None),
-            (MINDFOREMR_CONFIG, "text_generation", "gpt2", None),
-            (MINDFOREMR_CONFIG, "text_generation", None, "gpt2"),
-            (MINDFOREMR_CONFIG, "text_generation", "gpt2", "gpt2"),
-            (MINDFOREMR_CONFIG, "text_generation", MODEL, None),
-            (MINDFOREMR_CONFIG, "text_generation", MODEL, "gpt2"),
+            (MINDFORMER_CONFIG, "general", None, None),
+            (MINDFORMER_CONFIG, "general", "gpt2", None),
+            (MINDFORMER_CONFIG, "general", None, "gpt2"),
+            (MINDFORMER_CONFIG, "general", "gpt2", "gpt2"),
+            (MINDFORMER_CONFIG, "general", MODEL, None),
+            (MINDFORMER_CONFIG, "general", MODEL, "gpt2"),
+            (MINDFORMER_CONFIG, "text_generation", None, None),
+            (MINDFORMER_CONFIG, "text_generation", "gpt2", None),
+            (MINDFORMER_CONFIG, "text_generation", None, "gpt2"),
+            (MINDFORMER_CONFIG, "text_generation", "gpt2", "gpt2"),
+            (MINDFORMER_CONFIG, "text_generation", MODEL, None),
+            (MINDFORMER_CONFIG, "text_generation", MODEL, "gpt2"),
             (TRAINING_ARGUMENTS, "general", MODEL, None),
             (TRAINING_ARGUMENTS, "general", MODEL, "gpt2"),
             (TRAINING_ARGUMENTS, "text_generation", "gpt2", None),
@@ -283,11 +290,8 @@ class TestTrainerInit:
         assert callback1 == callback2
 
 
-def run_trainer(args, task, model_name, train_dataset, eval_dataset):
+def run_trainer(args, task, model, model_name, train_dataset, eval_dataset):
     """static method of running trainer."""
-    model_config = GPT2Config(num_layers=NUM_LAYERS, hidden_size=HIDDEN_SIZE,
-                              num_heads=NUM_HEADS, seq_length=SEQ_LENGTH)
-    model = GPT2LMHeadModel(model_config)
     trainer = Trainer(args=args, task=task, model=model, model_name=model_name,
                       train_dataset=train_dataset, eval_dataset=eval_dataset)
     trainer.config.runner_config.epochs = EPOCHS
@@ -296,11 +300,24 @@ def run_trainer(args, task, model_name, train_dataset, eval_dataset):
     trainer.train(do_eval=True)
     trainer.evaluate(eval_dataset=eval_dataset)
 
-    model_config = GPT2Config(num_layers=NUM_LAYERS, hidden_size=HIDDEN_SIZE,
-                              num_heads=NUM_HEADS, seq_length=SEQ_LENGTH, use_past=True)
-    model = GPT2LMHeadModel(model_config)
+
+def run_trainer_predict(args, model, model_name):
+    """static method of running trainer.predict."""
     trainer = Trainer(args=args, task="text_generation", model=model, model_name=model_name)
     trainer.predict(input_data="hello")
+
+
+@pytest.mark.level0
+@pytest.mark.platform_arm_ascend910b_training
+@pytest.mark.env_onecard
+def test_trainer_with_args():
+    """
+    Feature: Trainer
+    Description: Test trainer without args.
+    Expectation: No exception
+    """
+    run_trainer(MINDFORMER_CONFIG, "text_generation", None, "gpt2", TRAIN_DATASET, EVAL_DATASET)
+    run_trainer_predict(PREDICT_MINDFORMER_CONFIG, None, "gpt2")
 
 
 @pytest.mark.level0
@@ -312,7 +329,8 @@ def test_trainer_without_args():
     Description: Test trainer without args.
     Expectation: No exception
     """
-    run_trainer(None, "text_generation", "gpt2", TRAIN_DATASET, EVAL_DATASET)
+    run_trainer(None, "text_generation", MODEL, "gpt2", TRAIN_DATASET, EVAL_DATASET)
+    run_trainer_predict(None, PREDICT_MODEL, "gpt2")
 
 
 @pytest.mark.level0
@@ -324,7 +342,7 @@ def test_trainer_with_generator():
     Description: Test trainer with generator.
     Expectation: No exception
     """
-    run_trainer(MINDFOREMR_CONFIG, "general", None, generator_train, generator_eval)
+    run_trainer(MINDFORMER_CONFIG, "general", MODEL, None, generator_train, generator_eval)
 
 
 @pytest.mark.level0
@@ -336,10 +354,10 @@ def test_trainer_with_check_for_nan_in_loss_and_grad():
     Description: Test trainer with check_for_nan_in_loss_and_grad.
     Expectation: ValueError
     """
-    args = copy.deepcopy(MINDFOREMR_CONFIG)
+    args = copy.deepcopy(MINDFORMER_CONFIG)
     args.check_for_nan_in_loss_and_grad = True
     with pytest.raises(ValueError) as excinfo:
-        run_trainer(args, "general", None, generator_train, generator_eval)
+        run_trainer(args, "general", MODEL, None, generator_train, generator_eval)
         assert "global_norm is [nan], terminate training." in str(excinfo.value)
 
 
@@ -352,7 +370,7 @@ def test_trainer_with_iterable_dataset():
     Description: Test trainer with iterable dataset.
     Expectation: No exception
     """
-    run_trainer(TRAINING_ARGUMENTS, "general", None, IterableTrain(), IterableEval())
+    run_trainer(TRAINING_ARGUMENTS, "general", MODEL, None, IterableTrain(), IterableEval())
 
 
 @pytest.mark.level0
@@ -364,4 +382,4 @@ def test_trainer_with_accessible_dataset():
     Description: Test trainer with accessible dataset.
     Expectation: No exception
     """
-    run_trainer(TRAINING_ARGUMENTS, "text_generation", "gpt2", AccessibleTrain(), AccessibleEval())
+    run_trainer(TRAINING_ARGUMENTS, "text_generation", MODEL, "gpt2", AccessibleTrain(), AccessibleEval())

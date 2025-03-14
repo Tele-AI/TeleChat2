@@ -30,8 +30,8 @@ optimizer:
 # lr sechdule
 lr_schedule:
   type: CosineWithWarmUpLR
-  learning_rate: 1.5e-5
-  lr_end: 1.5e-6
+  learning_rate: 1.5e-4
+  lr_end: 1.5e-5
   warmup_ratio: 0.0
   total_steps: -1 # -1 means it will load the total steps of the dataset
 
@@ -121,7 +121,6 @@ callbacks:
 context:
   mode: 0 #0--Graph Mode; 1--Pynative Mode
   device_target: "Ascend"
-  enable_graph_kernel: False
   max_call_depth: 10000
   max_device_memory: "58GB"
   save_graphs: False
@@ -132,6 +131,7 @@ context:
 model:
   model_config:
     type: TelechatConfig
+    auto_register: telechat_config.TelechatConfig
     batch_size: 1 # add for increase predict
     seq_length: 8192
     hidden_size: 4096
@@ -167,6 +167,7 @@ model:
     do_sample: False
   arch:
     type: TelechatForCausalLM
+    auto_register: telechat.TelechatForCausalLM
 
 processor:
   return_tensors: ms
@@ -176,6 +177,8 @@ processor:
     eos_token: '<_end>'
     pad_token: '<_pad>'
     type: TelechatTokenizer
+    auto_register: telechat_tokenizer.TelechatTokenizer
+
 
 # metric
 metric:

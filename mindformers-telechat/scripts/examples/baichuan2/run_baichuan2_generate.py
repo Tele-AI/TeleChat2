@@ -20,16 +20,16 @@ from mindspore import Model
 from mindspore import Tensor
 from mindspore.common import initializer as init
 
+from baichuan2_7b_model import Baichuan7BV2ForCausalLM
+from baichuan2_13b_model import Baichuan13BV2ForCausalLM
+from baichuan2_tokenizer import Baichuan2Tokenizer
+
 from mindformers import MindFormerConfig, logger
 from mindformers.models import LlamaConfig
 from mindformers.pet import get_pet_model, LoraConfig
 from mindformers.trainer.utils import transform_and_load_checkpoint
 from mindformers.core.context import build_context
 from mindformers.core.parallel_config import build_parallel_config
-
-from research.baichuan2.baichuan2_7b import Baichuan7BV2ForCausalLM
-from research.baichuan2.baichuan2_13b import Baichuan13BV2ForCausalLM
-from research.baichuan2.baichuan2_tokenizer import Baichuan2Tokenizer
 
 MODEL_MAP = {
     "baichuan2_7b": Baichuan7BV2ForCausalLM,
@@ -57,14 +57,8 @@ def main(config_path, use_parallel, load_checkpoint, vocab_file, predict_data):
     # init model
     model_name = config.trainer.model_name
     config.model.model_config.parallel_config = config.parallel_config
-    if config.use_parallel:
-        # baichuan2 13b and 7b not support dynamic inputs in parallel
-        config.model.model_config.is_dynamic = False
-        logger.warning(f"{model_name} not support dynamic inputs in parallel, set is_dynamic=False Default.")
-    else:
-        config.model.model_config.is_dynamic = True
-    config.model.model_config.use_flash_attention = False
-    logger.warning(f"Flash Attention might cause accuracy issues, set use_flash_attention=False Default.")
+    config.model.model_config.is_dynamic = True
+    config.model.model_config.use_flash_attention = True
     model_config = LlamaConfig(**config.model.model_config)
     model_config.checkpoint_name_or_path = None
 

@@ -268,19 +268,19 @@ class ModalContentTransformTemplate:
     achieve the model's expectations.
 
     Args:
-        output_columns (List[str], optional): Specify which columns will be output. Default: ``None`` .
-        tokenizer (Tokenizer, optional): Build a good model tokenizer. Default: ``None`` .
-        mode (str): running mode, predict or train. Default: ``predict`` .
+        output_columns (List[str], optional): Specify which columns will be output. Default: ``None``.
+        tokenizer (Tokenizer, optional): Build a good model tokenizer. Default: ``None``.
+        mode (str, optional): running mode, predict or train. Default: ``predict``.
         vstack_columns (List[str], optional): Specify which columns will be vstack when batching data.
-            Default: ``None`` .
-        modal_content_padding_size (int): Used in training mode for inherited Template subclasses,
+            Default: ``None``.
+        modal_content_padding_size (int, optional): Used in training mode for inherited Template subclasses,
             it usually represents the maximum number of
             supported modal contents (such as images) within a training sample.
             When the number of modal contents in a training sample is less than this value,
-            the modal contents will be expanded to that value.
-        max_length (int): Used in training mode, for inherited Template subclasses,
+            the modal contents will be expanded to that value. Default: ``1``.
+        max_length (int, optional): Used in training mode, for inherited Template subclasses,
             it usually represents the maximum length that a training sample
-            can fill in after the content mask is completed after segmentation.
+            can fill in after the content mask is completed after segmentation. Default: ``2048``.
         kwargs (dict, optional): A variable number of keyword parameters reserved
             for the keyword parameters to be expanded.
 
@@ -411,7 +411,7 @@ class ModalContentTransformTemplate:
     @abc.abstractmethod
     def build_conversation_input_text(self, raw_inputs, result_recorder: DataRecord):
         """
-        Used in predict mode, assemble a conversation based on incoming inputs.
+        Used in predict mode, processing the input textual data into a conversation form.
         Usually inherited and used by quilt class.
 
         Args:
@@ -421,7 +421,7 @@ class ModalContentTransformTemplate:
                 Values are stored by calling the put method of the DataRecord.
 
         Returns:
-            Str type. Assembled dialogue.
+            Str type. A processed text with conversation form.
         """
         if self.mode == "predict":
             return "".join(raw_inputs)

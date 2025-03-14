@@ -18,7 +18,7 @@ runner_config:
   epochs: 1
   batch_size: 2
   sink_mode: True
-  sink_size: 2
+  sink_size: 1
 
 # optimizer
 optimizer:

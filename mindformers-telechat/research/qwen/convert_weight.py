@@ -67,7 +67,7 @@ def convert_attention_bias(name, value, ckpt_weights):
 def convert_pt_to_ms(input_path, output_path, dtype=None, **kwargs):
     """convert huggingface weights files to mindspore."""
     ckpt_dir = os.path.dirname(input_path)
-    model = AutoModelForCausalLM.from_pretrained(ckpt_dir, device_map="cpu", trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(ckpt_dir, device_map="cpu")
 
     ckpt_weights = []
     for k, v in model.state_dict().items():

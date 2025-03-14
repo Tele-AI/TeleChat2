@@ -24,4 +24,3 @@ from .adamw import AdamW
 
 __all__ = []
 __all__.extend(adamw.__all__)
-__all__.extend(came.__all__)

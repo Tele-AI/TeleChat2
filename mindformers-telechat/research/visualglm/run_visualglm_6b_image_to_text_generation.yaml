@@ -1,0 +1,224 @@
+seed: 42
+run_mode: 'predict'
+output_dir: './output' # path to save checkpoint/strategy
+load_checkpoint: ''
+src_strategy_path_or_dir: ''
+# If true, auto transform load_checkpoint to load in distributed model
+auto_trans_ckpt: False
+only_save_strategy: False
+resume_training: False
+
+# context
+context:
+  #0--Graph Mode; 1--Pynative Mode
+  mode: 1
+  device_target: "Ascend"
+  max_call_depth: 10000
+  save_graphs: True
+  save_graphs_path: "./graph"
+  device_id: 0
+
+# aicc
+remote_save_url: "Please input obs url on AICC platform."
+
+# runner
+runner_config:
+  epochs: 10
+  batch_size: &batch_size 1
+  sink_size: 2
+  image_size: 224
+
+# parallel
+use_parallel: False
+parallel:
+  parallel_mode: 0 # 0-dataset, 1-semi, 2-auto, 3-hybrid
+  gradients_mean: True
+  search_mode: "sharding_propagation"
+  enable_parallel_optimizer: False
+  full_batch: False
+parallel_config:
+  data_parallel: 1
+  model_parallel: 1
+  pipeline_stage: 1
+  micro_batch_num: 1
+  vocab_emb_dp: True
+  gradient_aggregation_group: 4
+micro_batch_interleave_num: 1
+
+# recompute
+recompute_config:
+  recompute: False
+  parallel_optimizer_comm_recompute: False
+  mp_comm_recompute: True
+  recompute_slice_activation: False
+
+# autotune
+auto_tune: False
+filepath_prefix: './autotune'
+autotune_per_step: 10
+
+# profile
+profile: False
+profile_start_step: 1
+profile_stop_step: 10
+init_start_profile: False
+profile_communication: False
+profile_memory: True
+
+# Trainer
+trainer:
+  type: ImageToTextGenerationTrainer
+  model_name: "visualglm_6b"
+
+pipeline:
+  type: VisualGLMImageToTextGenerationPipeline
+  model_name: "visualglm_6b"
+
+# eval dataset
+eval_dataset: &eval_dataset
+  data_loader:
+    type: Flickr8kDataLoader
+    dataset_dir: "./checkpoint_download/Flickr8k"
+    stage: "train"
+    column_names: [ "image", "text" ]
+    hypothesis_template: "{}"
+  transforms:
+    - type: ToPIL
+    - type: Resize
+      size: 224
+      interpolation: "linear"
+    - type: CenterCrop
+      size: 224
+    - type: ToTensor
+    - type: Normalize
+      mean: [ 0.48145466, 0.4578275, 0.40821073 ]
+      std: [ 0.26862954, 0.26130258, 0.27577711 ]
+      is_hwc: False
+  num_parallel_workers: 8
+  python_multiprocessing: False
+  drop_remainder: False
+  batch_size: 32
+  repeat: 1
+  numa_enable: False
+  prefetch_size: 30
+  seed: 2022
+
+eval_dataset_task:
+  type: ZeroShotImageClassificationDataset
+  dataset_config: *eval_dataset
+# model
+model:
+  model_config:
+    type: VisualGLMConfig
+    batch_size: *batch_size
+    freeze_vision: True
+    freeze_text: True
+    max_txt_len: 32
+    # visualglm qformer weight
+    checkpoint_name_or_path: "/path/to/visualglm_qformer.ckpt"
+    dtype: "float32"
+    compute_dtype: "float16"
+    layernorm_dtype: "float32"
+    softmax_dtype: "float32"
+
+    qformer_config:
+      type: QFormerConfig
+      num_hidden_layers: 12
+      num_heads: 12
+      layer_norm_eps: 1.e-12
+      encoder_width: 1408
+      query_length: 32
+      dtype: "float32"
+      compute_dtype: "float16"
+      layernorm_dtype: "float32"
+      softmax_dtype: "float32"
+
+    vision_config:
+      type: ViTConfig
+      image_size: 224
+      patch_size: 14
+      num_channels: 3
+      initializer_range: 0.001
+      hidden_size: 1408
+      num_hidden_layers: 39
+      num_attention_heads: 16
+      intermediate_size: 6144
+      qkv_bias: True
+      hidden_act: gelu
+      post_layernorm_residual: false
+      layer_norm_eps: 1.0e-6
+      attention_probs_dropout_prob: 0.0
+      hidden_dropout_prob: 0.0
+      drop_path_rate: 0.0
+      use_mean_pooling: false
+      encoder_stride: 16
+#      layernorm_compute_type: float32
+#      softmax_compute_type: float32
+#      param_init_type: float32
+      # visualglm vit weight
+      checkpoint_name_or_path: "/path/to/visualglm_vit.ckpt"
+
+    text_config:
+      type: GLMConfig
+      vocab_size: 130528
+      hidden_size: 4096
+      num_layers: 28
+      num_heads: 32
+      inner_hidden_size: 16384
+      # 推理时, 输入pad到的长度, model里的最大句长
+      seq_length: 512
+      embedding_dropout_prob: 0.0
+      attention_dropout_rate: 0.0
+      hidden_dropout_rate: 0.0
+      # default "None" means hidden-size/num-attention-heads.
+      hidden_size_per_attention_head:
+      layernorm_order: "post"
+      layernorm_epsilon: 1.0e-5
+      use_final_layernorm: True
+      use_past: True
+      activation_func: 'GELU'
+      position_encoding_2d: True
+      param_init_type: "float32"
+      layernorm_compute_type: "float32"
+      softmax_compute_type: "float32"
+      compute_dtype: "float16"
+      bos_token_id: 130004
+      eos_token_id: 130005
+      mask_token_id: 130000
+      gmask_token_id: 130001
+      pad_token_id: 3
+      # The maximum length of the generated words.
+      max_decode_length: 2048
+      is_enhanced_encoder: True
+      is_sample_acceleration: False
+      checkpoint_name_or_path: "/path/to/glm_6b.ckpt"
+      top_k: 1
+      top_p: 1
+      repetition_penalty: 1
+      do_sample: True
+  arch:
+    type: VisualGLMImageToTextGeneration
+
+# processor
+processor:
+  type: VisualGLMProcessor
+  image_processor:
+    type: VisualGLMImageProcessor
+    image_size: 224  # input image size
+  tokenizer:
+    type: ChatGLMTokenizer
+    max_length: 32
+    vocab_file: "/path/to/ice_text.model"
+
+
+# callbacks
+callbacks:
+  - type: MFLossMonitor
+  - type: CheckpointMonitor
+    prefix: "mindformers"
+    save_checkpoint_steps: 10000
+    integrated_save: True
+    async_save: False
+  - type: ObsMonitor
+eval_callbacks:
+  - type: ObsMonitor

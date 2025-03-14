@@ -25,7 +25,7 @@ class TestPipelineParallel:
     @pytest.mark.level1
     @pytest.mark.skip(reason="Get golden loss from records")
     @pytest.mark.platform_arm_ascend910b_training
-    @pytest.mark.env_single
+    @pytest.mark.env_onecard
     @pytest.mark.run(order=1)
     def test_generate_pipeline_net_golden(self):
         """
@@ -85,7 +85,7 @@ class TestPipelineParallel:
 
     @pytest.mark.level1
     @pytest.mark.platform_arm_ascend910b_training
-    @pytest.mark.env_single
+    @pytest.mark.env_onecard
     @pytest.mark.run(order=3)
     def test_compare_loss(self):
         """

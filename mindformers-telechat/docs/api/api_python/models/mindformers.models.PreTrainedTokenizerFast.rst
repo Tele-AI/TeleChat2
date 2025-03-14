@@ -10,23 +10,25 @@ mindformers.models.PreTrainedTokenizerFast
     此类还在所有分词器之上统一处理了添加的词元，因此我们无需处理各种底层字典结构（BPE、sentencepiece等）的特定词汇增强方法。
 
     参数：
-        - **model_max_length** (int, 可选) - transformer模型输入的最大长度（以词元数量计）。当通过 `from_pretrained()` 加载分词器时，此值将设置为 `max_model_input_sizes` 中存储的关联模型的值。默认值： ``1e-30`` 。
-        - **padding_side** (str, 可选) - 模型应该在哪一侧应用填充。应从 ['right', 'left'] 中选择。默认值从同名类属性中选择。
-        - **truncation_side** (str, 可选) - 模型应该在哪一侧应用截断。应从 ['right', 'left'] 中选择。默认值从同名类属性中选择。
-        - **chat_template** (str, 可选) - 将用于格式化聊天消息列表的Jinja模板字符串。默认值： ``"{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"`` 。
-        - **model_input_names** (List[str], 可选) - 模型前向传递接受的输入列表（如 "token_type_ids" 或 "attention_mask" ）。默认值从同名类属性中选择。默认值： ``None`` 。
-        - **bos_token** (Union[str, tokenizers.AddedToken], 可选) - 表示句子开始的特殊词元。将关联到 ``self.bos_token`` 和 ``self.bos_token_id`` 。默认值： ``None`` 。
-        - **eos_token** (Union[str, tokenizers.AddedToken], 可选) - 表示句子结束的特殊词元。将关联到 ``self.eos_token`` 和 ``self.eos_token_id`` 。默认值： ``None`` 。
-        - **unk_token** (Union[str, tokenizers.AddedToken], 可选) - 表示词汇表外词元的特殊词元。将关联到 ``self.unk_token`` 和 ``self.unk_token_id`` 。默认值： ``None`` 。
-        - **sep_token** (Union[str, tokenizers.AddedToken], 可选) - 在同一输入中分隔两个不同句子的特殊词元（例如BERT使用）。将关联到 ``elf.sep_token`` 和 ``self.sep_token_id`` 。默认值： ``None`` 。
-        - **pad_token** (Union[str, tokenizers.AddedToken], 可选) - 用于使词元数组大小相同，以便批处理的特殊词元。注意机制或损失计算将忽略它。将关联到 ``self.pad_token`` 和 ``self.pad_token_id`` 。默认值： ``None`` 。
-        - **cls_token** (Union[str, tokenizers.AddedToken], 可选) - 表示输入类的特殊词元（例如BERT使用）。将关联到 ``self.cls_token`` 和 ``self.cls_token_id`` 。默认值： ``None`` 。
-        - **mask_token** (Union[str, tokenizers.AddedToken], 可选) - 表示掩码词元的特殊词元（用于掩码语言建模预训练目标，如BERT）。将关联到 ``self.mask_token`` 和 ``self.mask_token_id`` 。默认值： ``None`` 。
-        - **additional_special_tokens** (Union[tuple, list, tokenizers.AddedToken], 可选) - 一组额外的特殊词元。在这里添加它们以确保在设置 ``skip_special_tokens`` 为 ``True`` 时跳过它们。如果它们不是词汇表的一部分，将在词汇表的末尾添加。默认值： ``None`` 。
-        - **clean_up_tokenization_spaces** (bool, 可选) - 是否清理在分词过程中添加的空格。默认值： ``True`` 。
-        - **split_special_tokens** (bool, 可选) - 是否在分词过程中拆分特殊词元。传递将影响分词器的内部状态。默认行为是不拆分特殊词元。这意味着如果 ``<s>`` 是 ``bos_token`` ，则 ``tokenizer.tokenize("<s>") = ['<s>']`` 。否则，如果 ``split_special_tokens = True`` ，则 ``tokenizer.tokenize("<s>")`` 会得到 ``['<','s', '>']`` 。默认值： ``False`` 。
-        - **tokenizer_object** (tokenizers.Tokenizer) - 一个 ``tokenizer.Tokenizer`` 对象，用于实例化。
-        - **tokenizer_file** (str) - 一个本地JSON文件的路径，该文件代表一个之前序列化的 ``tokenizer.Tokenizer`` 对象。
+        - **\*\*kwargs** (Any) - 关键字参数。
+
+          - **model_max_length** (int, 可选) - transformer模型输入的最大长度（以词元数量计）。当通过 `from_pretrained()` 加载分词器时，此值将设置为 `max_model_input_sizes` 中存储的关联模型的值。默认值： ``1e-30`` 。
+          - **padding_side** (str, 可选) - 模型应该在哪一侧应用填充。应从 ['right', 'left'] 中选择。默认值从同名类属性中选择。
+          - **truncation_side** (str, 可选) - 模型应该在哪一侧应用截断。应从 ['right', 'left'] 中选择。默认值从同名类属性中选择。
+          - **chat_template** (str, 可选) - 将用于格式化聊天消息列表的Jinja模板字符串。默认值： ``"{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"`` 。
+          - **model_input_names** (List[str], 可选) - 模型前向传递接受的输入列表（如 "token_type_ids" 或 "attention_mask" ）。默认值从同名类属性中选择。默认值： ``None`` 。
+          - **bos_token** (Union[str, tokenizers.AddedToken], 可选) - 表示句子开始的特殊词元。将关联到 ``self.bos_token`` 和 ``self.bos_token_id`` 。默认值： ``None`` 。
+          - **eos_token** (Union[str, tokenizers.AddedToken], 可选) - 表示句子结束的特殊词元。将关联到 ``self.eos_token`` 和 ``self.eos_token_id`` 。默认值： ``None`` 。
+          - **unk_token** (Union[str, tokenizers.AddedToken], 可选) - 表示词汇表外词元的特殊词元。将关联到 ``self.unk_token`` 和 ``self.unk_token_id`` 。默认值： ``None`` 。
+          - **sep_token** (Union[str, tokenizers.AddedToken], 可选) - 在同一输入中分隔两个不同句子的特殊词元（例如BERT使用）。将关联到 ``elf.sep_token`` 和 ``self.sep_token_id`` 。默认值： ``None`` 。
+          - **pad_token** (Union[str, tokenizers.AddedToken], 可选) - 用于使词元数组大小相同，以便批处理的特殊词元。注意机制或损失计算将忽略它。将关联到 ``self.pad_token`` 和 ``self.pad_token_id`` 。默认值： ``None`` 。
+          - **cls_token** (Union[str, tokenizers.AddedToken], 可选) - 表示输入类的特殊词元（例如BERT使用）。将关联到 ``self.cls_token`` 和 ``self.cls_token_id`` 。默认值： ``None`` 。
+          - **mask_token** (Union[str, tokenizers.AddedToken], 可选) - 表示掩码词元的特殊词元（用于掩码语言建模预训练目标，如BERT）。将关联到 ``self.mask_token`` 和 ``self.mask_token_id`` 。默认值： ``None`` 。
+          - **additional_special_tokens** (Union[tuple, list, tokenizers.AddedToken], 可选) - 一组额外的特殊词元。在这里添加它们以确保在设置 ``skip_special_tokens`` 为 ``True`` 时跳过它们。如果它们不是词汇表的一部分，将在词汇表的末尾添加。默认值： ``None`` 。
+          - **clean_up_tokenization_spaces** (bool, 可选) - 是否清理在分词过程中添加的空格。默认值： ``True`` 。
+          - **split_special_tokens** (bool, 可选) - 是否在分词过程中拆分特殊词元。传递这个参数会影响分词器的内部状态。默认行为是不拆分特殊词元。这意味着如果 ``<s>`` 是 ``bos_token`` ，则 ``tokenizer.tokenize("<s>") = ['<s>']`` 。否则，如果 ``split_special_tokens = True`` ，则 ``tokenizer.tokenize("<s>")`` 会得到 ``['<','s', '>']`` 。默认值： ``False`` 。
+          - **tokenizer_object** (tokenizers.Tokenizer) - 一个 ``tokenizer.Tokenizer`` 对象，用于实例化。
+          - **tokenizer_file** (str) - 一个本地JSON文件的路径，该文件代表一个之前序列化的 ``tokenizer.Tokenizer`` 对象。
 
     返回：
         PreTrainedTokenizerFast类实例。
@@ -70,7 +72,7 @@ mindformers.models.PreTrainedTokenizerFast
 
     .. py:method:: get_added_vocab()
 
-        返回词汇表中作为词元到索引的字典形式的添加的词元。
+        以词元索引字典的形式返回词汇表中已添加的词元。
 
         返回：
             dict，添加的词元。

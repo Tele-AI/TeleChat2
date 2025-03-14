@@ -19,7 +19,7 @@ import copy
 import numpy as np
 
 import mindspore as ms
-from mindspore import Tensor, nn
+from mindspore import Tensor, nn, mint
 from mindspore import dtype as mstype
 from mindspore.ops import operations as P
 from mindspore.context import ParallelMode
@@ -37,11 +37,7 @@ from mindformers.modules.transformer.op_parallel_config import _check_config
 from mindformers.models.utils import LayerSetting, check_fine_grain_interleave_valid
 from mindformers.tools.register.register import MindFormerModuleType, MindFormerRegister
 from mindformers.tools.logger import logger
-from mindformers.tools.utils import (
-    get_disable_custom_fa,
-    get_predict_run_mode,
-    get_use_rope_self_define,
-)
+from mindformers.tools.utils import get_predict_run_mode
 
 from .cogvlm2_llm import FreqsMgr
 from ..llama.llama import LlamaPreTrainedModel
@@ -138,8 +134,8 @@ class VisionExpertAttention(nn.Cell):
                 block_size=self.block_size,
                 num_blocks=self.num_blocks,
                 use_flash_attention=self.use_flash_attention,
+                is_dynamic=False,
                 rotary_cos_format=2,
-                rotary_dtype=rotary_dtype,
                 compute_dtype=compute_dtype,
             )
             self.infer_attention.shard(parallel_config)
@@ -157,6 +153,7 @@ class VisionExpertAttention(nn.Cell):
         self.add = P.Add()
         self.softmax = P.Softmax()
         self.cast_attn = P.Cast()
+        self.cast = P.Cast()
         self.merger_head_transpose = P.Transpose()
 
         self.update = P.TensorScatterUpdate()
@@ -196,9 +193,7 @@ class VisionExpertAttention(nn.Cell):
         self.vision_expert_dense.shard(((dp, mp), (1, mp)))
         self.language_expert_dense.shard(((dp, mp), (1, mp)))
         self.split_qkv.shard(((1, 1, 1),))
-        if self.use_past:
-            self.infer_attention.rotary_embedding.mul.shard(((dp, mp, 1, 1), (dp, 1, 1, 1)))
-        else:
+        if not self.use_past:
             self.apply_rotary_emb.mul.shard(((dp, mp, 1, 1), (dp, 1, 1, 1)))
 
     def construct(
@@ -531,14 +526,10 @@ class LlamaModelForCogVLM2Image(LlamaPreTrainedModel):
         self.cast = P.Cast()
         self.shape = P.Shape()
         self.reshape = P.Reshape()
-        # default open internal kernel boost
-        self.disable_custom_fa = get_disable_custom_fa()
-        logger.info("disable custom flash attention core op:{}".format(self.disable_custom_fa))
         if config.moe_config.expert_num > 1:
             logger.info("MoE config is provided, use MoE FFN")
         else:
             logger.info("MoE config is None, use normal FFN")
-        self.use_rope_self_define = get_use_rope_self_define()
 
         self.freqs_mgr = FreqsMgr(
             head_dim=self.head_dim,
@@ -663,17 +654,12 @@ class LlamaModelForCogVLM2Image(LlamaPreTrainedModel):
                     "input_embeds and input_attention_masks should not be None when tokens is None."
                 )
             h = self.cast(input_embeds, self.dtype)
-        freqs_cis = self.freqs_mgr(position_ids)
 
         bs, seq_len, _ = self.shape(h)
-
+        freqs_cis = self.freqs_mgr(position_ids, self.use_past)
         mask = None
         if self.use_past and self.is_first_iteration:
-            if self.use_flash_attention:
-                if self.disable_custom_fa:  # only support fp16
-                    mask = self.casual_mask(masks=input_attention_masks)  # mask: [bs, seq, seq]
-                    mask = self.cast(mask, mstype.float16)
-            else:
+            if not self.use_flash_attention:
                 mask = self.casual_mask(masks=input_attention_masks)  # mask: [bs, seq, seq]
 
             if prefix_keys_values is not None:
@@ -739,7 +725,7 @@ class LlamaForCausalLMForCogVLM2Image(LlamaPreTrainedModel):
         self.mul = P.Mul()
         self.add = P.Add()
         self.ones = P.Ones()
-        self.gather = P.Gather(1)
+        self.gather = P.Gather()
         self.sub_batch_valid_len = P.Sub()
         self.model = LlamaModelForCogVLM2Image(config=config)
         self.lm_head = Linear(
@@ -872,6 +858,7 @@ class LlamaForCausalLMForCogVLM2Image(LlamaPreTrainedModel):
             not self.use_past or self.is_first_iteration
         ) and batch_valid_length is not None
         if pre_gather:
+            batch_valid_length = mint.cumsum(batch_valid_length, 0)
             output = self.gather(output, self.sub_batch_valid_len(batch_valid_length, 1), 1)
         logits = self.lm_head(output)
 

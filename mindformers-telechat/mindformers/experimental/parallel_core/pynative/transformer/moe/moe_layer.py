@@ -30,7 +30,7 @@ from .token_dispatcher import MoEAlltoAllTokenDispatcher
 
 class MoELayer(Module):
     """
-    expert layer.
+    Expert layer.
 
     Args:
         config (TransformerConfig): Configuration object for the transformer model.
@@ -41,9 +41,9 @@ class MoELayer(Module):
         - **hidden_states** (Tensor) - The input hidden states of the local experts.
 
     Outputs:
-        Tuple of 2 Tensors.
+        Tuple of 2 Tensor.
 
-        - **output** (Tensor) - The output of the local experts
+        - **output* (Tensor) - The output of the local experts
         - **mlp_bias** (Tensor) - Not used now.
 
     Raises:

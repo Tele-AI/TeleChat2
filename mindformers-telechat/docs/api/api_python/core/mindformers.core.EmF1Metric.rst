@@ -32,3 +32,21 @@ mindformers.core.EmF1Metric
     - 最后，使用 F1 分数公式计算最终的 F1 值。
 
     该评估指标能够全面衡量模型的准确性和完整性，为模型的优化和调试提供数据支持。
+
+    .. py:method:: clear()
+
+        清除局部评估结果。
+
+    .. py:method:: eval()
+
+        计算评估结果。
+
+        返回：
+            评估结果字典，包含 Em 和 F1 分数。
+
+    .. py:method:: update(*inputs)
+
+        更新局部评估结果。
+
+        参数：
+            - **\*inputs** (List) - 预测和标签。均为包含 :math:`N` 个字符串的列表。其中 :math:`N` 为批次大小。

@@ -50,6 +50,6 @@ from .tokenization_auto import (
 from .processing_auto import AutoProcessor
 
 __all__ = [
-    'AutoConfig', 'AutoModel', 'AutoModelForCausalLM', 'AutoModelForZeroShotImageClassification', 'AutoProcessor',
+    'AutoConfig', 'AutoModel', 'AutoModelForCausalLM', 'AutoProcessor',
     'AutoTokenizer',
 ]

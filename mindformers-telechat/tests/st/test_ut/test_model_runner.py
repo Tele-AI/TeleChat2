@@ -29,7 +29,8 @@ class TestModel:
     Test Model.
     """
     def forward(self, input_ids, valid_length_each_example, block_tables, slot_mapping, prefill, use_past,
-                position_ids=None, spec_mask=None, q_seq_lens=None, adapter_ids=None):
+                position_ids=None, spec_mask=None, q_seq_lens=None, adapter_ids=None, prefill_head_indices=None,
+                mindie_warm_up=False, key_cache=None, value_cache=None):
         """
         Check the info of inputs
 
@@ -44,6 +45,8 @@ class TestModel:
             spec_mask (np.ndarray): rank is 2 or 3, and data type is float16.
             q_seq_lens (Union[np.ndarray, list]): rank is 1, and data type is int32.
             adapter_ids (list): rank is 1, and data type is string
+            prefill_head_indices (Union[np.ndarray, list]): rank is 1, and data type is int32.
+            mindie_warm_up (bool).
 
         Return:
             res: (Tensor): given that shape is (2, 16000).
@@ -59,6 +62,9 @@ class TestModel:
         assert isinstance(slot_mapping, np.ndarray) and slot_mapping.ndim == 1 and slot_mapping.dtype == np.int32
         assert isinstance(prefill, bool)
         assert isinstance(use_past, bool)
+        assert isinstance(mindie_warm_up, bool)
+        assert isinstance(key_cache, type(None))
+        assert isinstance(value_cache, type(None))
         if position_ids is not None:
             if isinstance(position_ids, np.ndarray):
                 assert position_ids.ndim == 1 and position_ids.dtype == np.int32
@@ -73,6 +79,12 @@ class TestModel:
                 assert isinstance(q_seq_lens[0], int)
         if adapter_ids is not None:
             assert isinstance(adapter_ids, list) and adapter_ids.dtype == np.str
+
+        if prefill_head_indices is not None:
+            if isinstance(prefill_head_indices, np.ndarray):
+                assert prefill_head_indices.ndim == 1 and prefill_head_indices.dtype == np.int32
+            else:
+                assert isinstance(prefill_head_indices[0], int)
         res = np.arange(32000).reshape(2, -1)
         current_index = [1]
         return Tensor.from_numpy(res), current_index
@@ -90,6 +102,8 @@ class TestMindIEModelRunner:
     def __init__(self, model_path, config_path, npu_mem_size, cpu_mem_size, block_size, rank_id=0, world_size=1,
                  npu_device_ids=None, plugin_params=None):
         """Test __init__ api"""
+        self.warmup_step = 2
+        self.is_multi_modal_model = False
         self.model = TestModel()
         assert isinstance(model_path, str)
         assert isinstance(config_path, str)
@@ -126,7 +140,7 @@ def test_model_runner():
     model_runner = ModelRunner(model_path=model_path, npu_mem_size=npu_mem_size, cpu_mem_size=cpu_mem_size,
                                block_size=block_size, rank_id=rank_id, world_size=world_size,
                                npu_device_ids=npu_device_ids)
-
+    model_runner.use_legacy = True
     input_ids = np.arange(32 * 256).reshape(32, 256).astype(np.int32)
     valid_length_each_example = np.arange(32).astype(np.int32)
     block_tables = np.arange(32 * 256).reshape(32, 256).astype(np.int32)

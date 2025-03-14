@@ -18,16 +18,23 @@ import numpy as np
 import mindspore as ms
 from mindspore import nn, Tensor
 from mindspore.ops import operations as P
+from mindspore.ops.auto_generate import Cast, MatMulExt, AddExt, Reshape, Transpose
+from mindspore.ops import functional as F
+from mindspore.context import ParallelMode
+from mindspore.parallel.shard import Layout
 import mindspore.common.dtype as mstype
+from mindspore.parallel._utils import _get_parallel_mode, _is_sharding_propagation
 from mindformers.experimental.graph.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
 from mindformers.experimental.graph.transformer.dropout import Dropout
 from mindformers.experimental.graph.transformer.fused_softmax import FusedScaleMaskSoftmax
 from mindformers.experimental.graph.transformer.rotary_pos_embedding import ApplyRotaryPosEmb
-from mindformers.experimental.graph.transformer.utils import get_attn_mask_func, LayerSetting
+from mindformers.experimental.graph.transformer.utils import get_attn_mask_func
+from mindformers.models.utils import LayerSetting
 from mindformers.experimental.graph.activation import get_activation
 from mindformers.experimental.graph.transformer.norm import get_norm
 from mindformers.experimental.graph.transformer.flash_attention import FlashAttention
 from mindformers.experimental.graph.transformer.transformer_config import TransformerConfig
+from mindformers.tools.logger import logger
 
 __all__ = [
     "ParallelMLP",
@@ -35,7 +42,8 @@ __all__ = [
     "ParallelAttention",
     "ParallelTransformerLayer",
     "ParallelTransformer",
-    "CausalMaskGenerate"
+    "CausalMaskGenerate",
+    "ParallelLMLogits"
 ]
 
 
@@ -80,10 +88,12 @@ class ParallelMLP(nn.Cell):
         if self.mlp_has_gate and self.gated_linear_unit:
             raise ValueError(
                 "For 'ParallelMLP', 'mlp_has_gate' and 'gated_linear_unit' cannot be True at the same time.")
-        self.init_method = config.init_method
+        self.init_method = config.init_method_
         self.activation_type = config.hidden_act
         self.compute_dtype = config.compute_dtype
         self.parallel_config = config
+        cp = 1 if config is None else config.context_parallel
+        self.compute_2d = (config.sequence_parallel and cp == 1)
 
         if self.gated_linear_unit:
             self.mapping_ffn_hidden_size = self.ffn_hidden_size * 2
@@ -127,7 +137,10 @@ class ParallelMLP(nn.Cell):
                                             init_method=self.init_method
                                             )
         self.add = P.Add()
-        self.shard(self.parallel_config)
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.sharding_propagation(self.parallel_config)
+        else:
+            self.shard(self.parallel_config)
 
     def construct(self, hidden_states: Tensor) -> tuple[Tensor, Tensor]:
         """ Construct function of mlp block. """
@@ -149,12 +162,25 @@ class ParallelMLP(nn.Cell):
         return output, output_bias
 
     def shard(self, config: TransformerConfig):
+        """ shard function of mlp block. """
         if self.mlp_has_gate:
             dp = config.data_parallel if config.data_parallel is not None else 1
             cp = config.context_parallel if config.context_parallel is not None else 1
             tp = config.tensor_parallel if config.tensor_parallel is not None else 1
-            mul_in_strategy = ((dp, cp, tp), (dp, cp, tp))
-            self.mul.shard(in_strategy=mul_in_strategy)
+            if self.compute_2d:
+                mul_in_strategy = ((dp, tp), (dp, tp))
+                self.mul.shard(in_strategy=mul_in_strategy)
+                self.add.shard(((dp, tp), (tp,)))
+            else:
+                mul_in_strategy = ((dp, cp, tp), (dp, cp, tp))
+                self.mul.shard(in_strategy=mul_in_strategy)
+                self.add.shard(((dp, cp, tp), (tp,)))
+
+            if config.sequence_parallel and cp == 1:
+                self.projection.matmul.shard(in_strategy=((dp, tp), (1, tp)), out_strategy=((dp * tp, 1),))
+
+    def sharding_propagation(self, config: TransformerConfig):
+        pass
 
 
 class CoreAttention(nn.Cell):
@@ -207,6 +233,8 @@ class CoreAttention(nn.Cell):
                              .format(self.hidden_size, self.num_heads))
 
         self.head_dim = self.hidden_size // self.num_heads
+        cp = 1 if config is None else config.context_parallel
+        self.compute_2d = (config.sequence_parallel and cp == 1)
 
         coeff = None
         norm_factor = math.sqrt(self.head_dim)
@@ -232,7 +260,10 @@ class CoreAttention(nn.Cell):
         self.mul = P.Mul()
         self.cast = P.Cast()
 
-        self.shard(config)
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.sharding_propagation(config)
+        else:
+            self.shard(config)
 
     def construct(self, query_layer, key_layer, value_layer, attention_mask):
         """construct function."""
@@ -260,7 +291,10 @@ class CoreAttention(nn.Cell):
         # [bs, n_head, seq, head_dim]
         x = self.merge_head_transpose(x, (0, 2, 1, 3))
         bs, seq_len, n_head, head_dim = self.shape(x)
-        new_shape = (bs, seq_len, n_head * head_dim)
+        if self.compute_2d:
+            new_shape = (bs * seq_len, n_head * head_dim)
+        else:
+            new_shape = (bs, seq_len, n_head * head_dim)
         x_merge = self.reshape(x, new_shape)
         return x_merge
 
@@ -276,6 +310,15 @@ class CoreAttention(nn.Cell):
         self.mul.shard(((dp, tp, cp, 1), ()))
         self.bmm_qk.shard(((dp, tp, cp, 1), (dp, tp, 1, 1)))
         self.merge_head_transpose.shard(((dp, tp, cp, 1),))
+
+    def sharding_propagation(self, config: TransformerConfig):
+        """sharding parameters"""
+        dp = 1 if config is None else config.data_parallel
+        tp = 1 if config is None else config.tensor_parallel
+        cp = 1 if config is None else config.context_parallel
+
+        self.bmm_qkv.shard(((dp, tp, cp, 1), (dp, tp, 1, 1)))
+        self.bmm_qk.shard(((dp, tp, cp, 1), (dp, tp, 1, 1)))
 
 
 class ParallelAttention(nn.Cell):
@@ -302,12 +345,12 @@ class ParallelAttention(nn.Cell):
     Supported Platforms:
         ``Ascend``
     """
-
     def __init__(self, config: TransformerConfig, layer_number, attention_type='self_attn', attn_mask_type=None):
         super(ParallelAttention, self).__init__()
         if attn_mask_type:
             raise NotImplementedError("For ParallelAttention, 'attn_mask_type' is not supported for now.")
         self.config = config
+        self.init_method = config.init_method_
         self.compute_dtype = self.config.compute_dtype
         self.use_gqa = self.config.group_query_attention
         self.num_heads = self.config.num_attention_heads
@@ -317,65 +360,56 @@ class ParallelAttention(nn.Cell):
         self.parallel_config = self.config
         self.qkv_concat = self.config.qkv_concat
         self.use_attn_mask_compression = self.config.use_attn_mask_compression
-        tp = 1 if self.config is None else self.config.tensor_parallel
-        if self.hidden_size % self.num_heads != 0:
-            raise ValueError("For 'MultiHeadAttention', the class variable 'hidden_size' must be a multiple "
-                             "of 'num_heads', but got the hidden_size is {} and the num_heads is {}."
-                             .format(self.hidden_size, self.num_heads))
-        if self.kv_num_heads % tp != 0:
-            raise ValueError("For 'MultiHeadAttention', the class variable 'kv_num_heads' must be a multiple of "
-                             "'parallel_config.tensor_parallel', but got the kv_num_heads is {} "
-                             "and the parallel_config.tensor_parallel  is {}."
-                             .format(self.kv_num_heads, tp))
-
+        self.use_ring_attention = self.config.use_ring_attention
+        self.dp = 1 if self.config.data_parallel is None else self.config.data_parallel
+        self.tp = 1 if self.config.tensor_parallel is None else self.config.tensor_parallel
+        self.cp = 1 if self.config.context_parallel is None else self.config.context_parallel
         self.head_dim = self.hidden_size // self.num_heads
         self.kv_hidden_size = self.head_dim * self.kv_num_heads
         self.n_rep = self.num_heads // self.kv_num_heads
         self.layer_index = max(1, layer_number)
         self.attn_type = attention_type
         self.norm_factor = math.sqrt(self.head_dim)
+        self.compute_2d = (config.sequence_parallel and self.cp == 1)
+        self.seq_length = config.seq_length
+
+        # Define ulysses context parallel related parameters
+        self.cp_ds = self.config.get_ulysses_cp_num()
+        self.cp_co = self.cp // self.cp_ds
+
+        if self.hidden_size % self.num_heads != 0:
+            raise ValueError("For 'MultiHeadAttention', the class variable 'hidden_size' must be a multiple "
+                             "of 'num_heads', but got the hidden_size is {} and the num_heads is {}."
+                             .format(self.hidden_size, self.num_heads))
+        # Check if num_heads and kv_num_heads are multiples of tp * cp_ds
+        if self.num_heads % (self.tp * self.cp_ds) != 0:
+            raise ValueError("For 'ParallelAttention', the class variable 'num_heads' must be a multiple of "
+                             "'tensor_parallel * ulysses_cp_num', but got num_heads is {}, tensor_parallel is {}, "
+                             "ulysses_cp_num is {}."
+                             .format(self.num_heads, self.tp, self.cp_ds))
+        if self.kv_num_heads % (self.tp * self.cp_ds) != 0 and self.kv_num_heads % self.tp != 0:
+            raise ValueError("For 'ParallelAttention', the class variable 'kv_num_heads' must be a multiple of "
+                             "'tensor_parallel * ulysses_cp_num', but got kv_num_heads is {}, tensor_parallel is {}, "
+                             "ulysses_cp_num is {}."
+                             .format(self.kv_num_heads, self.tp, self.cp_ds))
 
         if self.attn_type == 'self_attn':
-            if self.qkv_concat:
-                self.qkv_proj = ColumnParallelLinear(self.hidden_size, self.hidden_size + 2 * self.kv_hidden_size,
-                                                     config=self.config,
-                                                     bias=self.config.add_qkv_bias or self.config.add_bias_linear,
-                                                     compute_dtype=self.config.compute_dtype,
-                                                     init_method=self.config.init_method
-                                                     )
-                self.reshape_concat = P.Reshape()
-                self.split_qkv = ms.ops.auto_generate.SplitWithSize().add_prim_attr("skip_redistribution", True)
-            else:
-                self.q_proj = ColumnParallelLinear(self.hidden_size, self.hidden_size, config=self.config,
-                                                   bias=self.config.add_qkv_bias or self.config.add_bias_linear,
-                                                   compute_dtype=self.config.compute_dtype,
-                                                   init_method=self.config.init_method
-                                                   )
-                self.k_proj = ColumnParallelLinear(self.hidden_size, self.kv_hidden_size, config=self.config,
-                                                   bias=self.config.add_qkv_bias or self.config.add_bias_linear,
-                                                   compute_dtype=self.config.compute_dtype,
-                                                   init_method=self.config.init_method
-                                                   )
-                self.v_proj = ColumnParallelLinear(self.hidden_size, self.kv_hidden_size, config=self.config,
-                                                   bias=self.config.add_qkv_bias or self.config.add_bias_linear,
-                                                   compute_dtype=self.config.compute_dtype,
-                                                   init_method=self.config.init_method
-                                                   )
+            self._self_attn()
         elif self.attn_type == 'cross_attn':
             self.q_proj, self.kv_proj, self.split_kv = self._cross_attn_init()
         else:
-            raise NotImplementedError(f"attention_type shuold be self_attn or cross_attn, but got {self.attn_type}")
+            raise NotImplementedError(f"attention_type should be self_attn or cross_attn, but got {self.attn_type}")
 
         self.core_attention = CoreAttention(self.layer_index, self.config)
         self.out_proj = RowParallelLinear(self.hidden_size, self.hidden_size, input_is_parallel=False,
                                           config=self.config,
                                           bias=self.config.add_bias_linear,
                                           compute_dtype=self.config.compute_dtype,
-                                          init_method=self.config.init_method
+                                          init_method=self.init_method
                                           )
         if self.use_flash_attention:
-            self.input_layout = "BNSD"
-            self.sparse_mode = 2 if self.use_attn_mask_compression else 0
+            self.input_layout = "BSH" if self.cp > 1 else "BNSD"
+            self.sparse_mode = 2 if self.use_attn_mask_compression and not self.use_ring_attention else 0
             self.flash_attention = FlashAttention(head_num=self.num_heads,
                                                   pre_tokens=2147483647,
                                                   next_tokens=0,
@@ -383,8 +417,15 @@ class ParallelAttention(nn.Cell):
                                                   keep_prob=1.0,
                                                   scale_value=1. / math.sqrt(self.head_dim),
                                                   sparse_mode=self.sparse_mode,
-                                                  use_attention_mask=True)
+                                                  use_attention_mask=True,
+                                                  use_ring_attention=self.use_ring_attention
+                                                  )
+
         self.apply_rotary_pos_emb = ApplyRotaryPosEmb(self.parallel_config)
+        # after rotary
+        # If ulysses context parallel is enabled, initialize related operations
+        if self.cp_ds > 1:
+            self._ulysses_initial()
         self.shape = P.Shape()
         self.cast = P.Cast()
         self.reshape = P.Reshape()
@@ -394,13 +435,62 @@ class ParallelAttention(nn.Cell):
         self.cat = P.Concat(2)
         self.shard(self.config)
 
+    def _self_attn(self):
+        '''use self_attn'''
+        if self.qkv_concat:
+            self.qkv_proj = ColumnParallelLinear(self.hidden_size, self.hidden_size + 2 * self.kv_hidden_size,
+                                                 config=self.config,
+                                                 bias=self.config.add_qkv_bias or self.config.add_bias_linear,
+                                                 compute_dtype=self.config.compute_dtype,
+                                                 init_method=self.init_method
+                                                 )
+            self.reshape_concat = P.Reshape()
+            self.split_qkv = ms.ops.auto_generate.SplitWithSize().add_prim_attr("skip_redistribution", True)
+        else:
+            self.q_proj = ColumnParallelLinear(self.hidden_size, self.hidden_size, config=self.config,
+                                               bias=self.config.add_qkv_bias or self.config.add_bias_linear,
+                                               compute_dtype=self.config.compute_dtype,
+                                               init_method=self.init_method
+                                               )
+            self.k_proj = ColumnParallelLinear(self.hidden_size, self.kv_hidden_size, config=self.config,
+                                               bias=self.config.add_qkv_bias or self.config.add_bias_linear,
+                                               compute_dtype=self.config.compute_dtype,
+                                               init_method=self.init_method
+                                               )
+            self.v_proj = ColumnParallelLinear(self.hidden_size, self.kv_hidden_size, config=self.config,
+                                               bias=self.config.add_qkv_bias or self.config.add_bias_linear,
+                                               compute_dtype=self.config.compute_dtype,
+                                               init_method=self.init_method
+                                               )
+
+    def _ulysses_initial(self):
+        """Initialize ulysses related operations."""
+        self.transpose_back = P.Transpose()
+        self.transpose_ulysses = P.Transpose()
+        self.transpose_a2a = P.Transpose()
+        self.transpose_ulysses_merger_a2a = P.Transpose()
+        self.transpose_ulysses_merger = P.Transpose()
+
+        dp = self.dp
+        tp = self.tp
+        cp = self.cp
+
+        self.out_proj.matmul.shard(in_strategy=((dp * cp, tp), (1, tp)), out_strategy=((dp * cp * tp, 1),))
+        layout = Layout((dp, cp, tp), ("dp", "cp", "tp"))
+        layout_transpose_back = (layout("dp", "tp", "cp", "None"),)
+        self.transpose_back.shard(in_strategy=layout_transpose_back)
+        self.transpose_ulysses.shard(((dp, cp, tp, 1, 1, 1),))
+        self.transpose_a2a.shard(((dp, self.cp_co, self.cp_ds, tp, 1, 1),))
+        self.transpose_ulysses_merger_a2a.shard(((dp, self.cp_co, self.cp_ds, tp, 1, 1),))
+        self.transpose_ulysses_merger.shard(((dp, cp, 1, tp, 1, 1),))
+
     def _cross_attn_init(self):
-        """ cross attention init. """
+        """Cross attention initialization."""
         if self.use_gqa:
             raise NotImplementedError("Grouped query attention not implemented for cross-attention.")
 
         if self.hidden_size != self.kv_hidden_size:
-            raise ValueError("self.hidden_size and self.kv_hidden_size must be equal in cross_attn!!")
+            raise ValueError("self.hidden_size and self.kv_hidden_size must be equal in cross_attn!")
 
         q_proj = ColumnParallelLinear(
             self.hidden_size,
@@ -408,7 +498,7 @@ class ParallelAttention(nn.Cell):
             config=self.config,
             bias=self.config.add_bias_linear,
             compute_dtype=self.config.compute_dtype,
-            init_method=self.config.init_method
+            init_method=self.init_method
         )
         kv_proj = ColumnParallelLinear(
             self.hidden_size,
@@ -416,7 +506,7 @@ class ParallelAttention(nn.Cell):
             config=self.config,
             bias=self.config.add_bias_linear,
             compute_dtype=self.config.compute_dtype,
-            init_method=self.config.init_method
+            init_method=self.init_method
         )
         split_kv = ms.ops.auto_generate.SplitWithSize().add_prim_attr("skip_redistribution", True)
 
@@ -436,7 +526,13 @@ class ParallelAttention(nn.Cell):
             raise NotImplementedError("For ParallelAttention, `inference_params` is not supported for now")
         # hidden_states: [B, S, H]
         ori_dtype = hidden_states.dtype
-        bs, seq_len, _ = hidden_states.shape
+        if self.compute_2d:
+            bs_seq, _ = self.shape(hidden_states)
+            seq_len = self.seq_length
+            bs = bs_seq // seq_len
+        else:
+            bs, seq_len, _ = self.shape(hidden_states)
+
         # apply query, key, value projection
         if self.attn_type == 'self_attn':
             if self.qkv_concat:
@@ -463,7 +559,6 @@ class ParallelAttention(nn.Cell):
         # transpose and reshape
         query = self.transpose(self.reshape(query, (bs, seq_len, self.num_heads, self.head_dim)), (0, 2, 1, 3))
         key = self.transpose(self.reshape(key, (bs, seq_len, self.kv_num_heads, self.head_dim)), (0, 2, 1, 3))
-        value = self.transpose(self.reshape(value, (bs, seq_len, self.kv_num_heads, self.head_dim)), (0, 2, 1, 3))
 
         # apply rotary position embedding
         if rotary_pos_emb is not None:
@@ -476,7 +571,23 @@ class ParallelAttention(nn.Cell):
             query = self.apply_rotary_pos_emb(query, q_pos_emb)
             key = self.apply_rotary_pos_emb(key, k_pos_emb)
 
-        key, value = self._cat_prefix(key, value, prefix_keys_values)
+        # with ulysses context parallel, insert all to all before FA
+        if self.cp > 1 and self.cp_ds > 1:
+            # For query & key, transpose from [B, N, S, D] back to [B, S, N, D]
+            query = self.transpose_back(query, (0, 2, 1, 3))
+            query = self._ulysses_q_a2a(query)
+            key = self.transpose_back(key, (0, 2, 1, 3))
+            key = self._ulysses_kv_a2a(key)
+            # Value is [B, S, N, D], no need to transpose back
+            value = self.reshape(value, (bs, seq_len, self.kv_num_heads, self.head_dim))
+            value = self._ulysses_kv_a2a(value)
+        elif self.cp > 1:
+            # Merge heads for query and key
+            query = self._merge_heads(query)
+            key = self._merge_heads(key)
+        else:
+            value = self.transpose(self.reshape(value, (bs, seq_len, self.kv_num_heads, self.head_dim)), (0, 2, 1, 3))
+            key, value = self._cat_prefix(key, value, prefix_keys_values)
 
         if not self.use_flash_attention:
             key = self._repeat_kv(key, self.n_rep)
@@ -492,9 +603,20 @@ class ParallelAttention(nn.Cell):
                 key = self.cast(key, mstype.float16)
             if value.dtype not in (mstype.float16, mstype.bfloat16):
                 value = self.cast(value, mstype.float16)
+
             output = self.flash_attention(query, key, value, attention_mask)
-            context_layer = self._merge_heads(output)
-            context_layer = self.cast(context_layer, self.compute_dtype)
+
+            # with ulysses context parallel, insert all to all after FA
+            if self.cp > 1 and self.cp_ds > 1:
+                output = self._ulysses_context_layer_a2a(output)
+                context_layer = output
+            elif self.cp > 1:
+                # If context_parallel > 1 but cp_ds <= 1, no need for all_to_all, proceed without merging heads
+                context_layer = output
+            else:
+                # For context_parallel == 1, merge heads and cast dtype
+                context_layer = self._merge_heads(output)
+                context_layer = self.cast(context_layer, self.compute_dtype)
 
         # apply output projection
         output, bias = self.out_proj(context_layer)
@@ -503,9 +625,9 @@ class ParallelAttention(nn.Cell):
         return output, bias
 
     def _cat_prefix(self, key, value, prefix_keys_values):
-        r'''
-        concat prefix_keys_values to key and value
-        prefix_keys_values: shape(2, bs, pre_len, num_heads * kv_channels)
+        '''
+        Concatenate prefix_keys_values to key and value.
+        prefix_keys_values: shape (2, bs, pre_len, num_heads * kv_channels)
         '''
         if prefix_keys_values is not None:
             bs, n_kv_head, _, head_dim = key.shape
@@ -521,20 +643,23 @@ class ParallelAttention(nn.Cell):
 
     def _merge_heads(self, x):
         """
-        convert a 4d input to a 3d output
+        Convert a 4D input tensor to a 3D output tensor.
 
         Inputs:
             x: input tensor
 
         Output:
-            x_merge: the 2d output
+            x_merge: the 3D output tensor
         """
         # [bs, n_head, seq/1, head_dim]
-        x = self.merge_head_transpose(x, (0, 2, 1, 3))  # dp,mp,1,1 -> dp,1,mp,1
+        x = self.merge_head_transpose(x, (0, 2, 1, 3))  # dp,tp,cp,1 -> dp,cp,tp,1
         # [bs, seq/1, n_head, head_dim]
         bs, seq_len, n_head, head_dim = self.shape(x)
         # [bs, seq/1, hidden_dim]
-        new_shape = (bs, seq_len, n_head * head_dim)
+        if self.compute_2d:
+            new_shape = (bs * seq_len, n_head * head_dim)
+        else:
+            new_shape = (bs, seq_len, n_head * head_dim)
         x_merge = self.reshape(x, new_shape)
         return x_merge
 
@@ -547,8 +672,80 @@ class ParallelAttention(nn.Cell):
         x = self.reshape(x, (bs, n_kv_head * rep, seqlen, head_dim))
         return x
 
+    def _ulysses_q_a2a(self, qkv):
+        """
+        Given a qkv tensor with shape (bs, seq_len, n_head, head_dim),
+        insert all-to-all communication in the right place using transpose with specific shard strategy.
+        Refers to <https://arxiv.org/abs/2309.14509>
+
+        Args:
+            qkv (Tensor): qkv after rotary embedding and before attention, with shape (B, S, N, D)
+
+        Returns:
+            Tensor: qkv tensor after all-to-all communication.
+        """
+        #bs, seq_len, head_num, head_size = F.shape(qkv)
+        bs, seq_len, _, _ = F.shape(qkv)
+        new_shape = (bs, seq_len, self.tp, self.cp_ds, -1, self.head_dim)
+        # [bs, seq_len, n_head, head_dim] -> [bs, seq_len, n_head/cp_ds, cp_ds, head_dim]
+        qkv = self.reshape(qkv, new_shape)
+        # [bs, seq_len, n_head/cp_ds, cp_ds, head_dim] -> [bs, seq_len, cp_ds, n_head/cp_ds, head_dim]
+        qkv = self.transpose_ulysses(qkv, (0, 1, 3, 2, 4, 5))
+        # Insert all-to-all communication
+        qkv = self.transpose_a2a(qkv, (0, 1, 2, 3, 4, 5))
+        # Reshape to BSH, set -1 for H to accommodate different kv heads
+        qkv = F.reshape(qkv, (bs, seq_len, -1))
+        return qkv
+
+    def _ulysses_kv_a2a(self, qkv):
+        """
+        Given a qkv tensor with shape (bs, seq_len, n_head, head_dim),
+        insert all-to-all communication in the right place using transpose with specific shard strategy.
+        Refers to <https://arxiv.org/abs/2309.14509>
+
+        Args:
+            qkv (Tensor): qkv after rotary embedding and before attention, with shape (B, S, N, D)
+
+        Returns:
+            Tensor: qkv tensor after all-to-all communication.
+        """
+        #bs, seq_len, head_num, head_size = F.shape(qkv)
+        bs, seq_len, _, _ = F.shape(qkv)
+        new_shape = (bs, seq_len, self.tp, self.cp_ds, -1, self.head_dim)
+        # [bs, seq_len, n_head, head_dim] -> [bs, seq_len, n_head/cp_ds, cp_ds, head_dim]
+        qkv = self.reshape(qkv, new_shape)
+        # [bs, seq_len, n_head/cp_ds, cp_ds, head_dim] -> [bs, seq_len, cp_ds, n_head/cp_ds, head_dim]
+        qkv = self.transpose_ulysses(qkv, (0, 1, 3, 2, 4, 5))
+        # Insert all-to-all communication
+        qkv = self.transpose_a2a(qkv, (0, 1, 2, 3, 4, 5))
+        # Reshape to BSH, set -1 for H to accommodate different kv heads
+        qkv = F.reshape(qkv, (bs, seq_len, -1))
+        return qkv
+
+    def _ulysses_context_layer_a2a(self, context_layer):
+        """
+        Given the context_layer tensor after attention, with shape (bs, seq_len, hidden_size),
+        insert all-to-all communication in the right place using transpose with specific shard strategy.
+        Refers to <https://arxiv.org/abs/2309.14509>
+
+        Args:
+            context_layer (Tensor): context layer after attention, with shape (B, S, H)
+
+        Returns:
+            Tensor: context layer tensor after all-to-all communication.
+        """
+        bs, seq_len, _ = F.shape(context_layer)
+        new_shape = (bs, seq_len, self.cp_ds, self.tp, -1, self.head_dim)
+        context_layer = F.reshape(context_layer, new_shape)
+        # Insert all-to-all communication
+        context_layer = self.transpose_ulysses_merger_a2a(context_layer, (0, 1, 2, 3, 4, 5))
+        context_layer = self.transpose_ulysses_merger(context_layer, (0, 1, 3, 2, 4, 5))
+        # Reshape back to BSH
+        context_layer = F.reshape(context_layer, (bs, seq_len, self.hidden_size))
+        return context_layer
+
     def shard(self, config: TransformerConfig):
-        """sharding parameters"""
+        """Set sharding strategies."""
         dp = 1 if config is None else config.data_parallel
         tp = 1 if config is None else config.tensor_parallel
         cp = 1 if config is None else config.context_parallel
@@ -566,6 +763,9 @@ class ParallelAttention(nn.Cell):
         self.merge_head_transpose.shard(((dp, tp, cp, 1),))
         self.tile_kv.shard(((dp, tp, 1, cp),))
         self.cat.shard(((dp, tp, 1, 1), (dp, tp, 1, 1)))
+
+        if config.sequence_parallel and cp == 1:
+            self.out_proj.matmul.shard(in_strategy=((dp, tp), (1, tp)), out_strategy=((dp * tp, 1),))
 
 
 class ParallelTransformerLayer(nn.Cell):
@@ -615,7 +815,10 @@ class ParallelTransformerLayer(nn.Cell):
         self.mlp = ParallelMLP(config)
         self.hidden_states_droupout = Dropout(drop_prob=self.hidden_dropout_rate)
         self.add_bias = P.Add()
-        self.shard(config)
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.sharding_propagation(config)
+        else:
+            self.shard(config)
 
     def construct(self, hidden_states: Tensor, attention_mask: Tensor, encoder_output=None, enc_dec_attn_mask=None,
                   retriever_input=None, retriever_output=None, retriever_attn_mask=None, inference_params=None,
@@ -670,12 +873,26 @@ class ParallelTransformerLayer(nn.Cell):
         return output
 
     def shard(self, config: TransformerConfig):
+        """ shard function of mlp block. """
         dp = config.data_parallel if config.data_parallel is not None else 1
         cp = config.context_parallel if config.context_parallel is not None else 1
         tp = config.tensor_parallel if config.tensor_parallel is not None else 1
-        self.add.shard(((dp, cp, tp), (dp, cp, tp)))
-        self.hidden_states_droupout.shard((dp, cp, tp))
-        self.add_bias.shard(((dp, cp, tp), (tp,)))
+
+        if config.sequence_parallel and cp == 1:
+            self.input_norm.shard(config, in_strategy=(dp * tp, 1))
+            self.post_attention_norm.shard(config, in_strategy=(dp * tp, 1))
+            self.add.shard(((dp * tp, 1), (dp * tp, 1)))
+            self.hidden_states_droupout.shard((dp * tp, 1))
+            self.add_bias.shard(((dp, 1), (1,)))
+        else:
+            self.input_norm.shard(config)
+            self.post_attention_norm.shard(config)
+            self.add.shard(((dp, cp, 1), (dp, cp, 1)))
+            self.hidden_states_droupout.shard((dp, cp, 1))
+            self.add_bias.shard(((dp, cp, 1), (1,)))
+
+    def sharding_propagation(self, config: TransformerConfig):
+        pass
 
 
 class ParallelTransformer(nn.Cell):
@@ -720,8 +937,6 @@ class ParallelTransformer(nn.Cell):
             raise NotImplementedError("For ParallelTransformer, `model_type` is not supported for now.")
         if layer_type:
             raise NotImplementedError("For ParallelTransformer, `layer_type` is not supported for now.")
-        if self_attn_mask_type:
-            raise NotImplementedError("For ParallelTransformer, `self_attn_mask_type` is not supported for now.")
         if pre_process:
             raise NotImplementedError("For ParallelTransformer, `pre_process=True` is not supported.")
         if post_process:
@@ -731,6 +946,13 @@ class ParallelTransformer(nn.Cell):
 
         self.post_norm = post_norm
         self.num_layers = config.num_layers
+        self.self_attn_mask_type = self_attn_mask_type
+        cp = 1 if config is None else config.context_parallel
+        self.compute_2d = (config.sequence_parallel and cp == 1)
+        if config.sequence_parallel and cp > 1:
+            logger.warning("The context paralley way conflicts with sequence with sequence parallel way."
+                           "The sequence parallel way has no effect and ignored.")
+        self.seq_length_in_cfg = config.seq_length
 
         offset = 0
         self.layers = nn.CellList()
@@ -745,6 +967,10 @@ class ParallelTransformer(nn.Cell):
 
         if self.post_norm:
             self.final_norm = get_norm(config)
+        self.shape = P.Shape()
+        self.reshape_2d = P.Reshape()
+        self.reshape_back = P.Reshape()
+        self.shard(config)
 
     def _get_layer(self, layer_number):
         return self.layers[layer_number]
@@ -752,6 +978,12 @@ class ParallelTransformer(nn.Cell):
     def construct(self, hidden_states: Tensor, attention_mask: Tensor, rotary_pos_emb: Tensor = None,
                   prefix_keys_values=None):
         """ Construct function of transformer. """
+        bs, seq_len, hs = self.shape(hidden_states)
+        if self.compute_2d:
+            hidden_states = self.reshape_2d(hidden_states, (-1, hs))
+            if seq_len != self.seq_length_in_cfg:
+                raise ValueError("config.seq_length is not equal to sequence length of input!")
+
         for index in range(self.num_layers):
             layer = self._get_layer(index)
             prefix_kv = prefix_keys_values[index] if prefix_keys_values is not None else None
@@ -762,7 +994,20 @@ class ParallelTransformer(nn.Cell):
         if self.post_norm:
             hidden_states = self.final_norm(hidden_states)
 
+        if self.compute_2d:
+            hidden_states = self.reshape_back(hidden_states, (bs, seq_len, -1))
+
         return hidden_states
+
+    def shard(self, config: TransformerConfig):
+        """ shard function of mlp block. """
+        dp = config.data_parallel if config.data_parallel is not None else 1
+        cp = config.context_parallel if config.context_parallel is not None else 1
+        if self.post_norm:
+            if self.compute_2d:
+                self.final_norm.shard(config, in_strategy=(dp * cp, 1))
+            else:
+                self.final_norm.shard(config, in_strategy=(dp, cp, 1))
 
 
 class CausalMaskGenerate(nn.Cell):
@@ -818,7 +1063,10 @@ class CausalMaskGenerate(nn.Cell):
         self.mul = P.Mul()
         self.sub = P.Sub()
         self.expand_dim_post = P.ExpandDims()
-        self.shard(config)
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.sharding_propagation(config)
+        else:
+            self.shard(config)
 
     def construct(self, tokens=None, masks=None):
         """Forward process of the CausalMask
@@ -869,3 +1117,87 @@ class CausalMaskGenerate(nn.Cell):
         self.mul.shard(((dp, 1, 1), (1, 1, 1)))
         self.sub.shard(((1,), (dp, 1, 1)))
         self.expand_dim_post.shard(((dp, 1, 1),))
+
+    def sharding_propagation(self, config: TransformerConfig):
+        pass
+
+
+class ParallelLMLogits(nn.Cell):
+    r"""The head of the transformer model: the linear layer that takes the hidden state and produces the logits.
+
+    Args:
+        config (dict): Configuration.
+        bias (bool): Whether to use bias. Default: True.
+        compute_dtype (mstype): The compute type of the input tensor. Default: None.
+
+    Inputs:
+        - **logits** (Tensor) - The input tensor of shape :math:`(B, S, H)`.
+        - **word_embedding_weight** (Tensor) - The weight matrix.
+        - **parallel_output** (bool) - Whether to use parallel output. Default: True.
+        - **bias** (Tensor) - The bias tensor. Default: None.
+
+    Outputs:
+        - **output** (Tensor) - The output tensor of shape :math:`(B, S, V)`.
+
+    Supported Platforms:
+        ``Ascend``
+    """
+
+    def __init__(self,
+                 config: TransformerConfig,
+                 bias: bool = True,
+                 compute_dtype: mstype = None):
+        super(ParallelLMLogits, self).__init__()
+        self.compute_dtype = compute_dtype if compute_dtype else config.compute_dtype
+        self.bias = bias
+
+        self.matmul = MatMulExt()
+        self.reshape = Reshape()
+        self.transpose_b = Transpose()
+        self.cast = Cast()
+        if self.bias:
+            self.add = AddExt()
+        self.shard(config)
+
+    def construct(self,
+                  logits: Tensor,
+                  word_embedding_weight: Tensor,
+                  parallel_output: bool = True,
+                  bias: Tensor = None):
+        """Forward of ParallelLMLogits."""
+        if word_embedding_weight is None:
+            raise ValueError("The input weight can not be None")
+        if not self.bias and bias is not None:
+            raise ValueError("The input bias is not None when init bias is False")
+        if not parallel_output:
+            raise ValueError("The parallel_output can not be False")
+        output_shape = logits.shape[:-1] + (word_embedding_weight.shape[0],)
+        logits = self.reshape(logits, (-1, logits.shape[-1]))
+
+        ori_dtype = logits.dtype
+        logits = self.cast(logits, self.compute_dtype)
+        weight = self.cast(word_embedding_weight, self.compute_dtype)
+
+        weight = self.transpose_b(weight, (1, 0))
+        logits = self.matmul(logits, weight)
+        if self.bias and bias is not None:
+            bias = self.cast(bias, self.compute_dtype)
+            logits = self.add(logits, bias)
+
+        logits = self.cast(logits, ori_dtype)
+        output = self.reshape(logits, output_shape)
+        return output
+
+    def shard(self, config: TransformerConfig) -> None:
+        """Shard the operators in ParallelLMLogits"""
+        dp = getattr(config, 'data_parallel', 1)
+        tp = getattr(config, 'tensor_parallel', 1)
+        cp = getattr(config, 'context_parallel', 1)
+
+        weight_strategy = (1, tp)
+        matmul_in_strategy = ((dp * cp, 1), weight_strategy)
+        self.matmul.shard(in_strategy=matmul_in_strategy)
+
+        if self.bias:
+            add_in_strategy = ((dp * cp, tp), (tp,))
+            self.add.shard(in_strategy=add_in_strategy)

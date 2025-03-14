@@ -45,7 +45,7 @@ research_path = os.path.join('/root', 'mindformers', 'research', 'internlm2')
 if research_path not in sys.path:
     sys.path.append(research_path)
 # pylint: disable=C0413
-from research.internlm2.internlm2 import InternLM2ForCausalLM
+from research.internlm2.internlm2_model import InternLM2ForCausalLM
 from research.internlm2.internlm2_config import InternLM2Config
 
 ms.set_context(mode=0)

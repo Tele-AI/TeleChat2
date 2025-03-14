@@ -22,6 +22,7 @@ from . import training
 from . import transformer
 from . import dist_checkpointing
 from . import optimizer
+from . import profiler
 
 
 __all__ = []
@@ -32,3 +33,4 @@ __all__.extend(training.__all__)
 __all__.extend(transformer.__all__)
 __all__.extend(dist_checkpointing.__all__)
 __all__.extend(optimizer.__all__)
+__all__.extend(profiler.__all__)

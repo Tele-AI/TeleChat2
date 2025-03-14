@@ -78,7 +78,7 @@ def update_permissions(path):
     for dirpath, dirnames, filenames in os.walk(path):
         for dirname in dirnames:
             dir_fullpath = os.path.join(dirpath, dirname)
-            os.chmod(dir_fullpath, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC | stat.S_IRGRP | stat.S_IXGRP)
+            os.chmod(dir_fullpath, stat.S_IREAD | stat.S_IEXEC)
         for filename in filenames:
             file_fullpath = os.path.join(dirpath, filename)
             os.chmod(file_fullpath, stat.S_IREAD)
@@ -133,7 +133,7 @@ if __name__ == '__main__':
 
     setup(
         name='mindformers',
-        version='1.3.0',
+        version='1.4.0.beta1',
         author='The MindSpore Authors',
         author_email='contact@mindspore.cn',
         url='https://www.mindspore.cn',
@@ -161,7 +161,7 @@ if __name__ == '__main__':
         python_requires='>=3.7',
         install_requires=get_install_requires(),
         classifiers=[
-            'Development Status :: 5 - Production/Stable',
+            'Development Status :: 4 - Beta',
             'Environment :: Console',
             'Environment :: Web Environment',
             'Intended Audience :: Science/Research',
@@ -171,6 +171,7 @@ if __name__ == '__main__':
             'Programming Language :: Python :: 3.7',
             'Programming Language :: Python :: 3.8',
             'Programming Language :: Python :: 3.9',
+            'Programming Language :: Python :: 3.10',
             'Topic :: Scientific/Engineering',
             'Topic :: Scientific/Engineering :: Artificial Intelligence',
             'Topic :: Software Development',

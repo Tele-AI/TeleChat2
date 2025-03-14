@@ -24,11 +24,13 @@ from mindformers.models import PreTrainedModel, PreTrainedTokenizerBase
 from mindformers.tools.logger import logger
 from mindformers.tools.register import MindFormerRegister, \
     MindFormerModuleType, MindFormerConfig
+from mindformers.utils import deprecated
 from ..config_args import ConfigArguments
 from ..training_args import TrainingArguments
 from ..base_trainer import BaseTrainer
 
 
+@deprecated(version="1.5.0")
 @MindFormerRegister.register(MindFormerModuleType.TRAINER)
 class TextClassificationTrainer(BaseTrainer):
     """
@@ -44,7 +46,7 @@ class TextClassificationTrainer(BaseTrainer):
     """
 
     def __init__(self, model_name: str = None):
-        super(TextClassificationTrainer, self).__init__("text_classification", model_name)
+        super().__init__("text_classification", model_name)
 
     def train(self,
               config: Optional[Union[dict, MindFormerConfig, ConfigArguments, TrainingArguments]] = None,

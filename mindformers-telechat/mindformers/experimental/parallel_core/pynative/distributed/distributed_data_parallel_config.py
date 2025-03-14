@@ -38,4 +38,8 @@ class DistributedDataParallelConfig:
     # if true, check gradients in buffer are finite after synchronization.
     check_for_nan_in_grad: bool = False
 
+    # if true, enable mem align for param in bucket
     enable_mem_align: bool = True
+
+    # use zero3 with ddp, note that the zero3 params will not be in the ddp bucket
+    use_zero3: bool = False

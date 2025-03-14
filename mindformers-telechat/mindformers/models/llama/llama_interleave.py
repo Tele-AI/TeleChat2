@@ -17,18 +17,23 @@
 from typing import Optional
 import math
 
-from mindspore import nn, __version__
+
+from mindspore import nn, Parameter
 import mindspore.common.dtype as mstype
+from mindspore.common.initializer import initializer
 from mindspore.common.tensor import Tensor
 from mindspore.context import ParallelMode
 from mindspore.ops import operations as P
+from mindspore.ops import functional as F
 from mindspore.parallel._utils import _get_parallel_mode, _is_sharding_propagation
 from mindspore.parallel.shard import Layout
 
+from mindformers.tools.logger import logger
 from mindformers.models.llama.llama_layer import LlamaFeedForward, LlamaRMSNorm
 from mindformers.modules.layers import _check_input_dtype, Linear, RotaryEmbedding
 from mindformers.modules.transformer import TransformerOpParallelConfig
 from mindformers.modules.flash_attention import FlashAttention
+from mindformers.version_control import check_seqpp_fa_opt_support
 
 
 class _MicroBatch(nn.Cell):
@@ -95,6 +100,7 @@ class LLamaAttentionInterleave(nn.Cell):
             - **param_init_type** (dtype.Number): The parameter initialization type of the module. Default mstype.
                 float32. Should be mstype.float32 or mstype.float16.
             - **qkv_has_bias** (bool): Whether Q/K/V in attention has bias or not.
+            - **attn_proj_has_bias** (bool): Whether projection in attention has bias or not.
             - **use_past** (bool): Use the past state to compute, used for incremental prediction.
                 For example, if we have two words and want to generate the ten more words.
                 We just need to compute the two words' state only once, and generate the next word one by one.
@@ -105,6 +111,7 @@ class LLamaAttentionInterleave(nn.Cell):
                 pass the single step's input tensor, and loop it. Default False.
             - **parallel_config** (OpParallelConfig): The parallel configure. Default `default_dpmp_config`,
                 an instance of `OpParallelConfig` with default args.
+            - **init_method_std** (float): The sigma value when using normal type to initialize Linear. Default `0.01`
 
     Inputs:
             - **x** (Tensor) - The input tokens with shape (batch_size, src_seq_length, hidden_size) or
@@ -147,10 +154,13 @@ class LLamaAttentionInterleave(nn.Cell):
                  rotary_dtype=mstype.float32,
                  param_init_type=mstype.float32,
                  qkv_has_bias=False,
+                 attn_proj_has_bias=False,
                  use_flash_attention=False,
                  use_ring_attention=False,
                  use_attn_mask_compression=False,
-                 parallel_config=TransformerOpParallelConfig()):
+                 use_eod_attn_mask_compression=False,
+                 parallel_config=TransformerOpParallelConfig(),
+                 init_method_std=0.01):
         super().__init__()
         self.batch_size = batch_size
         self.seq_length = seq_length
@@ -168,6 +178,7 @@ class LLamaAttentionInterleave(nn.Cell):
         self.use_flash_attention = use_flash_attention
         self.use_ring_attention = use_ring_attention
         self.use_attn_mask_compression = use_attn_mask_compression
+        self.use_eod_attn_mask_compression = use_eod_attn_mask_compression
 
         if self.hidden_size % self.n_head != 0:
             raise ValueError("For 'MultiHeadAttention', the class variable 'hidden_size' must be a multiple "
@@ -200,9 +211,42 @@ class LLamaAttentionInterleave(nn.Cell):
         self.slice_qkv.add_prim_attr("skip_redistribution", True)
 
         self.apply_rotary_emb = RotaryEmbedding(self.head_dim, rotary_dtype)
+
+        self.seq_pipe = parallel_config.seq_split_num > 1
+        self.seq_split_num = parallel_config.seq_split_num
+        self.seq_seg_len = seq_length // self.seq_split_num
+        if self.seq_pipe:
+            if not self.use_flash_attention:
+                raise ValueError("Seq pipe must using flash attention")
+            kv_shape = (batch_size * dp, self.n_kv_head, seq_length, self.head_dim)
+            self.key_cache = Parameter(initializer('zeros', shape=kv_shape, dtype=compute_dtype), name="key_cache",
+                                       requires_grad=False, parallel_optimizer=False)
+            self.value_cache = Parameter(initializer('zeros', shape=kv_shape, dtype=compute_dtype), name="value_cache",
+                                         requires_grad=False, parallel_optimizer=False)
+            kv_grad_shape = (batch_size, self.n_kv_head // mp, seq_length // cp, self.head_dim)
+            self.key_cache_grad = Parameter(initializer('zeros', shape=kv_grad_shape, dtype=compute_dtype),
+                                            name="key_cache_grad", requires_grad=False, parallel_optimizer=False)
+            self.value_cache_grad = Parameter(initializer('zeros', shape=kv_grad_shape, dtype=compute_dtype),
+                                              name="value_cache_grad", requires_grad=False, parallel_optimizer=False)
+            self.select = P.Select().add_prim_attr("self_define_shard", True)
+            layout_v = Layout((dp, mp, cp), ("dp", "mp", "cp"))
+            in_layout_v = (layout_v("dp", "mp", "cp", "None"), layout_v("dp", "mp", "cp", "None"),
+                           layout_v("dp", "mp", "cp", "None"))
+            out_layout_v = (layout_v("dp", "mp", "cp", "None"),)
+            self.select.shard(in_layout_v, out_layout_v)
+            self.add_k = P.Add().shard(((dp, mp, cp, 1), (dp, mp, cp, 1)))
+            self.add_v = P.Add().shard(((dp, mp, cp, 1), (dp, mp, cp, 1)))
+            self.mul_kv = P.Mul().shard(((dp, mp, cp, 1), (dp, mp, cp, 1)))
+            self.assign_kv = P.Assign().shard(((dp, mp, cp, 1), (dp, mp, cp, 1)))
+            self.mul_update = P.Mul().shard(((dp, mp, cp, 1), ()))
+            self.not_equal_ones = P.NotEqual().shard(((dp, mp, cp, 1), ()))
+            self.not_equal_seq = P.NotEqual()
+            self.seq_split_size = Tensor(self.seq_split_num - 1, dtype=mstype.int32)
+
         if self.qkv_concat:
             self.w = Linear(in_channels=self.hidden_size,
                             out_channels=self.hidden_size + self.kv_dim * 2,
+                            init_method_std=init_method_std,
                             has_bias=qkv_has_bias,
                             compute_dtype=compute_dtype,
                             param_init_type=param_init_type)
@@ -210,30 +254,45 @@ class LLamaAttentionInterleave(nn.Cell):
         else:
             self.wq = Linear(self.hidden_size,
                              self.hidden_size,
+                             init_method_std=init_method_std,
                              has_bias=qkv_has_bias,
                              compute_dtype=compute_dtype,
                              param_init_type=param_init_type)
             self.wk = Linear(self.hidden_size,
                              self.kv_dim,
+                             init_method_std=init_method_std,
                              has_bias=qkv_has_bias,
                              compute_dtype=compute_dtype,
                              param_init_type=param_init_type)
             self.wv = Linear(self.hidden_size,
                              self.kv_dim,
+                             init_method_std=init_method_std,
                              has_bias=qkv_has_bias,
                              compute_dtype=compute_dtype,
                              param_init_type=param_init_type)
         self.wo = Linear(in_channels=self.hidden_size,
                          out_channels=self.hidden_size,
-                         has_bias=False,
+                         init_method_std=init_method_std,
+                         has_bias=attn_proj_has_bias,
                          compute_dtype=compute_dtype,
                          param_init_type=param_init_type)
         if self.use_flash_attention:
             self.input_layout = "BSH" if cp > 1 else "BNSD"
-            self.sparse_mode = 2 if self.use_attn_mask_compression and not self.use_ring_attention else 0
+            if self.use_eod_attn_mask_compression:
+                self.sparse_mode = 8
+                if not self.use_ring_attention:
+                    self.input_layout = "TND"
+            elif self.use_attn_mask_compression and not self.use_ring_attention:
+                self.sparse_mode = 2
+            else:
+                self.sparse_mode = 0
+            if self.seq_pipe and not check_seqpp_fa_opt_support():
+                next_tokens = seq_length - self.seq_seg_len
+            else:
+                next_tokens = 0
             self.flash_attention = FlashAttention(head_num=self.n_head,
-                                                  pre_tokens=65536,
-                                                  next_tokens=0,
+                                                  pre_tokens=2147483647,
+                                                  next_tokens=next_tokens,
                                                   keep_prob=1.,
                                                   scale_value=1. / math.sqrt(self.head_dim),
                                                   input_layout=self.input_layout,
@@ -241,7 +300,30 @@ class LLamaAttentionInterleave(nn.Cell):
                                                   use_attention_mask=True,
                                                   use_ring_attention=self.use_ring_attention)
             self.flash_attention.shard(parallel_config)
-        if not (_get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation()):
+        if _get_parallel_mode() in (ParallelMode.AUTO_PARALLEL,) and _is_sharding_propagation():
+            self.transpose.shard(((dp, cp, mp, 1),))
+            if cp > 1:
+                layout = Layout((dp, cp, mp), ("dp", "cp", "mp"))
+                layout_merger_head_transpose = (layout("dp", "mp", "cp", "None"),)
+                self.merger_head_transpose.shard(in_strategy=layout_merger_head_transpose)
+            else:
+                self.merger_head_transpose.shard(((dp, mp, 1, 1),))
+            self.merger_head_transpose.shard(((dp, mp, 1, 1),))
+            self.batch_matmul_q_k.shard(((dp, mp, 1, 1), (dp, mp, 1, 1)))
+            self.batch_matmul.shard(((dp, mp, 1, 1), (dp, mp, 1, 1)))
+            self.slice_qkv.shard(((dp, mp),))
+            self.apply_rotary_emb.shard(parallel_config)
+            if self.qkv_concat:
+                self.w.shard(((dp, 1), (mp, 1)))
+            elif qkv_has_bias:
+                self.wq.shard(((dp * cp, 1), (mp, 1)), ((dp * cp, mp), (mp,)))
+                self.wk.shard(((dp * cp, 1), (mp, 1)), ((dp * cp, mp), (mp,)))
+                self.wv.shard(((dp * cp, 1), (mp, 1)), ((dp * cp, mp), (mp,)))
+            else:
+                self.wq.shard(((dp * cp, 1), (mp, 1)))
+                self.wk.shard(((dp * cp, 1), (mp, 1)))
+                self.wv.shard(((dp * cp, 1), (mp, 1)))
+        else:
             self.transpose.shard(((dp, cp, mp, 1),))
             if cp > 1:
                 layout = Layout((dp, cp, mp), ("dp", "cp", "mp"))
@@ -269,18 +351,18 @@ class LLamaAttentionInterleave(nn.Cell):
                 self.wq.shard(((dp * cp, 1), (mp, 1)))
                 self.wk.shard(((dp * cp, 1), (mp, 1)))
                 self.wv.shard(((dp * cp, 1), (mp, 1)))
-            self.wo.shard(((dp * cp, mp), (1, mp)), out_strategy_matmul=((dp * cp, 1),))
-            if parallel_config.use_seq_parallel and self.is_first_iteration and cp == 1:
-                self.wo.shard(((dp, mp), (1, mp)), out_strategy_matmul=((dp * mp, 1),))
-            if parallel_config.recompute.select_recompute and not self.use_flash_attention:
-                self.apply_rotary_emb.recompute()
-                self.tile_kv.recompute()
-                self.batch_matmul_q_k.recompute()
-                self.mul.recompute()
-                self.add.recompute()
-                self.cast_attn.recompute()
-                self.softmax.softmax.recompute()
-                self.batch_matmul.recompute()
+        self.wo.shard(((dp * cp, mp), (1, mp)), ((dp * cp, 1), (1,)), out_strategy_matmul=((dp * cp, 1),))
+        if parallel_config.use_seq_parallel and self.is_first_iteration and cp == 1:
+            self.wo.shard(((dp, mp), (1, mp)), ((dp * cp, 1), (1,)), out_strategy_matmul=((dp * mp, 1),))
+        if parallel_config.recompute.select_recompute and not self.use_flash_attention:
+            self.apply_rotary_emb.recompute()
+            self.tile_kv.recompute()
+            self.batch_matmul_q_k.recompute()
+            self.mul.recompute()
+            self.add.recompute()
+            self.cast_attn.recompute()
+            self.softmax.softmax.recompute()
+            self.batch_matmul.recompute()
 
     def compute_qkv(self, x):
         """compute the qkv with interleave number"""
@@ -299,14 +381,14 @@ class LLamaAttentionInterleave(nn.Cell):
             value = self.cast(self.wv(x), self.dtype)  # dp, 1 -> dp, mp
         return query, key, value
 
-    def cal_attn(self, query, key, value, mask, freqs_cis):
+    def cal_attn(self, query, key, value, mask, freqs_cis, kv_mask, seq_chunk, actual_seq_len):
         """cal_attn"""
-        query = self.reshape(query, (-1, self.seq_length, self.n_head, self.head_dim))
-        key = self.reshape(key, (-1, self.seq_length, self.n_kv_head, self.head_dim))
+        query = self.reshape(query, (-1, self.seq_seg_len, self.n_head, self.head_dim))
+        key = self.reshape(key, (-1, self.seq_seg_len, self.n_kv_head, self.head_dim))
         if self.context_parallel > 1:
-            value = self.reshape(value, (-1, self.seq_length, self.n_kv_head * self.head_dim))
+            value = self.reshape(value, (-1, self.seq_seg_len, self.n_kv_head * self.head_dim))
         else:
-            value = self.reshape(value, (-1, self.seq_length, self.n_kv_head, self.head_dim))
+            value = self.reshape(value, (-1, self.seq_seg_len, self.n_kv_head, self.head_dim))
             value = self.transpose(value, (0, 2, 1, 3))
 
         # [bs, seq/1, n_head/n_kv_head, head_dim]
@@ -316,7 +398,11 @@ class LLamaAttentionInterleave(nn.Cell):
         # [bs, n_head/n_kv_head, seq/1, head_dim]
         query, key = self.apply_rotary_emb(query, key, freqs_cis) # dp, mp, 1, 1
 
-        if self.context_parallel > 1:
+        if self.input_layout == 'TND':
+            query = self._merge_seq_len(query)
+            key = self._merge_seq_len(key)
+            value = self.reshape(value, (-1, self.n_kv_head, self.head_dim))
+        elif self.context_parallel > 1:
             query = self._merge_heads(query)
             key = self._merge_heads(key)
         else:
@@ -328,16 +414,49 @@ class LLamaAttentionInterleave(nn.Cell):
             value = self.reshape(value, (bs, n_kv_head, seq, head_dim))
 
         # q, k, v: [bs, n_head, seq/1, head_dim], [bs, n_head, seq, head_dim], [bs, n_head, seq, head_dim]
-        if self.use_flash_attention:
-            attention = self.flash_attention(query, key, value, mask)
+        if self.seq_pipe:
+            key = self.tile_kv(key, (1, 1, self.seq_split_num, 1))
+            value = self.tile_kv(value, (1, 1, self.seq_split_num, 1))
+            key = self.mul_kv(key, kv_mask)
+            value = self.mul_kv(value, kv_mask)
+            seq_zero = self.mul_update(kv_mask, 0)
+            ones = self.not_equal_ones(seq_zero, -1)
+            kv_equal = self.mul_update(ones, self.not_equal_seq(seq_chunk, self.seq_split_size))
+            key_update = self.add_k(key, self.key_cache)
+            value_update = self.add_v(value, self.value_cache)
+            update_k = self.select(kv_equal, key_update, seq_zero)
+            update_v = self.select(kv_equal, value_update, seq_zero)
+            update_k = F.stop_gradient(update_k)
+            update_v = F.stop_gradient(update_v)
+            k_update = self.assign_kv(self.key_cache, update_k)
+            v_update = self.assign_kv(self.value_cache, update_v)
+            query = F.depend(query, k_update)
+            query = F.depend(query, v_update)
             if self.context_parallel > 1:
-                attention = self.reshape(attention, (-1, attention.shape[-1]))
+                attention = self.flash_attention(query, key_update, value_update, mask)
             else:
+                attention = self.flash_attention(query, key_update, value_update, mask)
                 attention = self._merge_heads(attention)
         else:
-            key = self._repeat_kv(key, self.n_rep)
-            value = self._repeat_kv(value, self.n_rep)
-            attention = self._attn(query, key, value, mask)
+            if self.use_flash_attention:
+                if self.use_eod_attn_mask_compression:
+                    attention = self.flash_attention(
+                        query, key, value, mask,
+                        actual_seq_qlen=actual_seq_len, actual_seq_kvlen=actual_seq_len
+                    )
+                else:
+                    attention = self.flash_attention(query, key, value, mask)
+                if self.input_layout == 'TND':
+                    _, n_head, head_dim = query.shape
+                    attention = self.reshape(attention, (-1, n_head, head_dim))
+                elif self.context_parallel > 1:
+                    attention = self.reshape(attention, (-1, attention.shape[-1]))
+                else:
+                    attention = self._merge_heads(attention)
+            else:
+                key = self._repeat_kv(key, self.n_rep)
+                value = self._repeat_kv(value, self.n_rep)
+                attention = self._attn(query, key, value, mask)
         return attention
 
     def cal_output_proj(self, attention):
@@ -354,6 +473,24 @@ class LLamaAttentionInterleave(nn.Cell):
         x = self.tile_kv(x, (1, 1, rep, 1))
         x = self.reshape(x, (bs, n_kv_head * rep, seqlen, head_dim))
         return x
+
+    def _merge_seq_len(self, x):
+        """
+        convert a bhsd input to a tnd output
+
+        Inputs:
+            x: input tensor
+
+        Output:
+            x_merge: the tnd output
+        """
+        # [bs, n_head, seq/1, head_dim]
+        x = self.merger_head_transpose(x, (0, 2, 1, 3))  # dp,mp,1,1 -> dp,1,mp,1
+        # [bs, seq/1, n_head, head_dim]
+        bs, seq_len, n_head, head_dim = self.shape(x)
+        new_shape = (bs * seq_len, n_head, head_dim)
+        x_merge = self.reshape(x, new_shape)
+        return x_merge
 
     def _merge_heads(self, x):
         """
@@ -429,6 +566,7 @@ class LLamaDecodeLayerInterleave(nn.Cell):
             param_init_type(dtype.Number): The parameter initialization type of the module.
                 Should be mstype.float32 or mstype.float16. Default mstype.float32.
             qkv_has_bias(bool): Whether Q/K/V in attention has bias or not.
+            attn_proj_has_bias(bool): Whether projection in attention has bias or not.
             use_past(bool): Use the past state to compute, used for incremental prediction. For example, if we have two
                 words and want to generate the ten more words. We just need to compute the two words' state only once,
                 and generate the next word one by one. When use_past is True, there are two steps to run the prediction.
@@ -439,6 +577,8 @@ class LLamaDecodeLayerInterleave(nn.Cell):
             parallel_config(OpParallelConfig, MoEParallelConfig): The parallel configure. When MoE is applied,
                 MoEParallelConfig is effective, otherwise OpParallelConfig is effective. Default `default_dpmp_config`,
                 an instance of `OpParallelConfig` with default args.
+            init_method_std(float): The sigma value when using normal type to initialize Linear. Default 0.01 .
+            residual_dtype (str): The residual compute dtype. Default mstype.float32 .
 
         Inputs:
             - **x** (Tensor) - Float Tensor, shape should be [batch_size, seq_length, hidden_size] or
@@ -482,13 +622,17 @@ class LLamaDecodeLayerInterleave(nn.Cell):
                  softmax_compute_dtype=mstype.float32,
                  rotary_dtype=mstype.float32,
                  param_init_type=mstype.float32,
+                 residual_dtype=mstype.float32,
                  qkv_has_bias=False,
+                 attn_proj_has_bias=False,
                  qkv_concat=False,
                  use_flash_attention=False,
                  use_ring_attention=False,
                  use_attn_mask_compression=False,
+                 use_eod_attn_mask_compression=False,
                  fine_grain_interleave=2,
-                 parallel_config=TransformerOpParallelConfig()):
+                 parallel_config=TransformerOpParallelConfig(),
+                 init_method_std=0.01):
         super().__init__()
         self.seq_length = seq_length
         self.layer_id = layer_id
@@ -497,8 +641,14 @@ class LLamaDecodeLayerInterleave(nn.Cell):
         self.num_layers = num_layers
         self.head_dim = self.hidden_size // self.n_head
         self.n_kv_head = n_heads if n_kv_heads is None else n_kv_heads
+        self.cast = P.Cast()
 
         self.dtype = compute_dtype
+        self.residual_dtype = residual_dtype
+        self.residual_cast_flag = residual_dtype != compute_dtype
+        if self.residual_cast_flag:
+            logger.info(f"residual in interleave cast flag: {self.residual_cast_flag}, "
+                        f"residual dtype: {residual_dtype}")
         self.is_first_iteration = True
         self.interleave_num = fine_grain_interleave
         self.inter_seq_length = self.seq_length // self.interleave_num
@@ -520,17 +670,21 @@ class LLamaDecodeLayerInterleave(nn.Cell):
                                                   rotary_dtype=rotary_dtype,
                                                   param_init_type=param_init_type,
                                                   qkv_has_bias=qkv_has_bias,
+                                                  attn_proj_has_bias=attn_proj_has_bias,
                                                   use_flash_attention=use_flash_attention,
                                                   use_ring_attention=use_ring_attention,
                                                   use_attn_mask_compression=use_attn_mask_compression,
-                                                  parallel_config=parallel_config)
+                                                  use_eod_attn_mask_compression=use_eod_attn_mask_compression,
+                                                  parallel_config=parallel_config,
+                                                  init_method_std=init_method_std)
         self.feed_forward = LlamaFeedForward(dim=self.hidden_size,
                                              intermediate_size=intermediate_size,
                                              hidden_dim=4 * self.hidden_size,
                                              multiple_of=multiple_of,
                                              ffn_dim_multiplier=ffn_dim_multiplier,
                                              compute_dtype=compute_dtype,
-                                             param_init_type=param_init_type)
+                                             param_init_type=param_init_type,
+                                             init_method_std=init_method_std)
 
         dp = parallel_config.data_parallel
         mp = parallel_config.model_parallel
@@ -619,15 +773,26 @@ class LLamaDecodeLayerInterleave(nn.Cell):
         """layer part 2"""
         attention_output = self.attention.cal_output_proj(attention)
         # For post-layernorm the inputs for residual path are output of self-attention and output of layernorm
+        if self.residual_cast_flag:
+            x = self.cast(x, self.residual_dtype)
+            attention_output = self.cast(attention_output, self.residual_dtype)
         x = self.add(x, attention_output)
+        if self.residual_cast_flag:
+            x = self.cast(x, self.dtype)
         output_x = self.ffn_norm(x)
         mlp_logit = self.feed_forward(output_x)
+        if self.residual_cast_flag:
+            x = self.cast(x, self.residual_dtype)
+            mlp_logit = self.cast(mlp_logit, self.residual_dtype)
         output = self.add(x, mlp_logit)
+        if self.residual_cast_flag:
+            output = self.cast(output, self.dtype)
         return output
 
     # pylint: disable=W0613
     def construct(self, x, freqs_cis, mask=None, batch_valid_length=None, block_tables=None,
-                  slot_mapping=None, prefix_keys_values=None, q_seq_lens=None):
+                  slot_mapping=None, prefix_keys_values=None, q_seq_lens=None,
+                  kv_mask=None, seq_chunk=None, actual_seq_len=None):
         """ Forward of transformer block. """
         self._check_input(x, freqs_cis, mask)
         x = self.reshape(x, (-1, x.shape[-1]))
@@ -648,7 +813,7 @@ class LLamaDecodeLayerInterleave(nn.Cell):
             key = self.interleaved_concat_1(key_tuple)
             value = self.interleaved_concat_1(value_tuple)
         # ===========linear-layer1 end=============
-        attention = self.attention.cal_attn(query, key, value, mask, freqs_cis)
+        attention = self.attention.cal_attn(query, key, value, mask, freqs_cis, kv_mask, seq_chunk, actual_seq_len)
         # ============linear-layer2================
         if self.layer_id == self.num_layers - 1:
             output = self.linear_layer2(x, attention)

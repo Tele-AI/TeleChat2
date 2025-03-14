@@ -32,12 +32,13 @@ class ChatGLM4Tokenizer(PreTrainedTokenizer):
     Construct a ChatGLM4 tokenizer. Based on byte-level Byte-Pair-Encoding.
 
     Args:
-        vocab_file(str): The vocabulary file path.
-        clean_up_tokenization_spaces(bool, optional): Whether to delete redundant spaces. Default: ``False`` .
-        encode_special_tokens(bool, optional): Whether to encode the special tokens. Default: ``False`` .
-        eos_token (str, tokenizers.AddedToken): The end of sequence token. Default: `"<|endoftext|>"` .
-        pad_token (str, tokenizers.AddedToken): A special token used to make arrays of tokens the same size for batching
-            purpose. Will then be ignored by attention mechanisms or loss computation. Default: `"<|endoftext|>"` .
+        vocab_file (str): The vocabulary file path.
+        clean_up_tokenization_spaces (bool, optional): Whether to delete redundant spaces. Default: ``False``.
+        encode_special_tokens (bool, optional): Whether to encode the special tokens. Default: ``False``.
+        eos_token (Union[str, tokenizers.AddedToken], optional): The end of sequence token. Default: `"<|endoftext|>"` .
+        pad_token (Union[str, tokenizers.AddedToken], optional): A special token used to make arrays of tokens the same
+            size for batching purpose. Will then be ignored by attention mechanisms or loss computation.
+            Default: `"<|endoftext|>"` .
         **kwargs: Other kwargs that will be passed into the base class of the `Tokenizer`.
 
     Returns:
@@ -184,7 +185,7 @@ class ChatGLM4Tokenizer(PreTrainedTokenizer):
             proto_str = fin.read()
 
         flags_ = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        with os.fdopen(os.open(vocab_file, flags_, 0o750), 'wb', encoding='utf-8') as writer:
+        with os.fdopen(os.open(vocab_file, flags_, 0o750), 'wb') as writer:
             writer.write(proto_str)
 
         return (vocab_file,)
