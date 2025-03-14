@@ -21,10 +21,13 @@
   - [text-generation-webui](##text-generation-webui)
   - [langchain](##langchain)
   - [llama-index](##llama-index)
+- [MOE模型](#MOE模型)
 - [声明、协议、引用](#声明协议引用)
 
 # 最新动态
-- 2024.12.20 开源 **TeleChat2-35B-32K**
+
+- 2025.03.14 开源MoE模型 [TeleChat2-39B-A12B 模型](./MoE/README.md)。
+- 2024.12.20 开源 **TeleChat2-35B-32K**。
 - 2024.11.08 开源 **TeleChat2-3B**、**TeleChat2-7B**、**TeleChat2-35B**，该版本模型均具备 **Function Call** 功能。
 - 2024.10.18 开源TeleChat2-35B模型。
 - 2024.9.20 开源TeleChat2-115B模型，该模型是**首个完全国产算力训练并开源的千亿参数模型**。
@@ -42,11 +45,11 @@
     - 采用RingAttention及其他序列切分方式，实现长文训练性能提升；通过ntk-aware+attention-scaling的方式保证训练长度切换时的平稳过渡，以此来保证模型在不同长度数据下的训练效果。
 - 在微调数据方面，我们进行了指令复杂性提升与多样性扩充，通过数据合成和人工标注生成高质量数据，并使用拒绝采样生成多样的推理路径；通过研究一套基于base模型反向选择偏好对齐数据方案，基于适配数据最大限度提升模型效果。
     - 通用能力较TeleChat系列模型提升超过29%，在逻辑推理、总结摘要、长文写作和数学计算上均有大幅提升。
+- 同时，我们也开源了TeleChat2-MOE模型 [TeleChat2-39B-A12B](./MOE/README.md)。
 
 ### 模型结构
 
-我们采用标准的 `Decoder-only` 结构设计了 **TeleChat2** 模型，使用 [Rotary Embedding](https://arxiv.org/pdf/2104.09864.pdf)
-的位置编码方法、使用 [SwiGLU](https://arxiv.org/pdf/2002.05202.pdf)
+我们采用标准的 `Decoder-only` 结构设计了 **TeleChat2** 模型，使用 [Rotary Embedding](https://arxiv.org/pdf/2104.09864.pdf) 的位置编码方法、使用 [SwiGLU](https://arxiv.org/pdf/2002.05202.pdf)
 激活函数来替代GELU激活函数、使用基于 [RMSNorm](https://arxiv.org/abs/1910.07467) 的 Pre-Normalization进行层标准化操作。我们将**TeleChat2**的词嵌入层和输出lm
 head层参数分开，有助于增强训练稳定性和收敛性。我们选择了GQA以节约attention部分的参数量和计算量、提升训练和推理速度。
 
@@ -226,7 +229,32 @@ TeleChat2 已支持使用LangChain进行高效向量知识库检索问答，具�
 
 TeleChat2 已支持使用LlamaIndex进行高效向量知识库检索问答，具体使用方式参考文档[TeleChat2-LlamaIndex文档](./llama_index/README.md)。
 
+# MoE模型
 
+### MoE模型介绍
+
+TeleChat2-39B-A12B模型采用MoE架构，总16路由专家，激活4个专家，共39B参数量，实际激活参数为12B。
+
+### 技术创新-训练方式
+
+采用课程学习的方式，首先聚焦低难度、高质量教育知识以及多语言数据进行模型训练，以获得较好的模型初始性能；然后引入复杂数据，增大数学、逻辑推理、代码等数据占比，提升模型逻辑推理能力；最后，使用高质量数据进行退火，持续提升模型效果；
+### 技术创新-国产算力优化
+
+在MoE模块将Tensor并行域转换成专家并行域，从而将MoE的AllToAll 通讯约束在节点内，提高通讯效率;把MoE输入切成多个副本依次下发，将dispatch通信/FFN计算/combine通信三个环节连成流水线，实现MoE的计算通信掩盖;基于对内存和计算的开销建模，理论求解内存约束下性能最优的流水线并行的负载配置，实现流水线负载均衡。
+### 效果评测
+
+综合评测数据集上，TeleChat2-39B-A12B模型以12B激活参数量接近TeleChat2-35B模型效果。
+
+| Dataset    | TeleChat2-35B | TeleChat2-39B-A12B | TeleChat2-7B | TeleChat2-3B |
+| ---------- | ------------- | ------------------ | ------------ | ------------ |
+| C-Eval     | 85            | 89                 | 82           | 75           |
+| MMLU       | 82            | 83                 | 79.6         | 72.9         |
+| CMMLU      | 90.18         | 90                 | 84.6         | 73           |
+| GSM8K      | 91            | 83.5               | 86.8         | 64.7         |
+| HumanEval  | 73            | 68                 | 56           | 38           |
+| MBPP       | 75            | 67                 | 62.6         | 47           |
+| AlignBench | 7.88          | 7.56               | 6.96         | 5.74         |
+| IFEval     | 79.63         | 76.48              | 73.1         | 61.29        |
 
 # 声明、协议、引用
 
