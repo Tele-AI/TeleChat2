@@ -20,7 +20,7 @@ git config --global --add safe.direcotry ~/ollama
 ```
 
 ### 替换核心文件
-需要对官方ollama项目增加一个文件夹，替换一个文件即可完成对TeleChat2模型对Ollama的适配
+需要对官方ollama项目增加一个文件，替换一个文件即可完成对TeleChat2模型对Ollama的适配
 
 1. 进入Telechat2项目的ollama路径
 ```bash
@@ -49,11 +49,12 @@ pip3 install dist/gguf-0.10.0-py3-none-any.whl
 go mod tidy
 ```
 
-也准备了go1.23.4离线依赖包，可以直接下载，解压到ollama下vendor文件夹
+项目也准备了go1.23.4离线依赖包，可以直接下载，解压到ollama下vendor文件夹
 [go依赖下载链接](https://pan.baidu.com/s/1ptbWpfv3ka5w6YbkNblauQ)
 ```bash
 unzip -d ~/ollama vendor.zip
 ```
+
 
 编译的时可以根据显卡制定编译的计算能力，选择本机显卡加快项目的编译速度。
 ```bash
@@ -63,7 +64,7 @@ vim make/Makefile.cuda_v12
 ```yaml
 CUDA_ARCHITECTURES?=80;86;89
 ```
-执行make指令开始编译，编译成功后可以看到目录下有ollama的可执行文件，可以将ollama软连接到/usr/bin下面便于使用
+执行make指令开始编译，编译成功后可以看到目录下有ollama的可执行文件，可以将ollama软连接到/usr/bin下面便于使用，可以将ollama软连接到/usr/bin下面便于使用
 ```bash
 make -j 5
 ```
