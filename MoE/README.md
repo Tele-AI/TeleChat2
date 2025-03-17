@@ -50,7 +50,7 @@ import os
 import torch 
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
-PATH = ""
+PATH = "./TeleChat2-39B-A12B" # model download path
 tokenizer = AutoTokenizer.from_pretrained(PATH, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(PATH, trust_remote_code=True, device_map="auto", torch_dtype=torch.float32)
 
