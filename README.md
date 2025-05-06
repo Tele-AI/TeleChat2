@@ -17,7 +17,10 @@
 - [模型微调](#模型微调)
 - [国产化适配](#国产化适配)
 - [更多功能](#更多功能)
-  - [llama-factory](##llama-factory) 
+  - [llama-factory](##llama-factory)
+  - [AWQ](##AWQ)
+  - [GPTQ](##GPTQ)
+  - [Ollama](##Ollama)
   - [text-generation-webui](##text-generation-webui)
   - [langchain](##langchain)
   - [llama-index](##llama-index)
@@ -210,6 +213,18 @@ TeleChat2 现已支持DeepSpeed微调方式，具体使用方式参考文档[Tel
 [LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory) 是一个专注于大语言模型（LLM）开发和优化的开源平台，旨在简化模型训练和部署的过程。该平台提供了多种工具和框架，支持用户根据特定需求自定义和扩展语言模型。通过LLaMA-Factory，研究人员和开发者可以更高效地探索和实现最新的自然语言处理技术，例如LoRA，QLoRA，Pre-Training，Supervised Fine-Tuning，DPO Training等。
 
 TeleChat2 已支持使用LLaMA-Factory进行微调、权重合并、推理、部署，具体使用方式参考文档[TeleChat2-LLaMA-Factory微调文档](./tutorial/telechat_llama_factory.md)。
+
+### AWQ
+
+TeleChat2已支持AWQ量化，能够快速实现int4精度的权重量化，降低推理显存消耗，提高推理性能，具体使用方式参考：[TeleChat2-AutoAWQ文档](./autoAWQ/README.md)。
+
+### GPTQ
+
+TeleChat2已支持GPTQ量化，能够快速实现int4和int8精度的权重量化，降低推理显存消耗，提高推理性能，具体使用方式参考：[TeleChat2-AutoGPTQ文档](./autoGPTQ/README.md)
+
+### Ollama
+
+TeleChat2已支持Ollama推理框架，提供灵活高效的推理部署方案，具体使用方式参考：[TeleChat2-Ollama文档](./ollama/README.md)
 
 ### text-generation-webui
 
